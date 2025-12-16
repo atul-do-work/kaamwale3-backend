@@ -9,9 +9,14 @@ const NotificationHistory = require('../models/NotificationHistory');
 const router = express.Router();
 
 // Initialize Razorpay with test keys
+const keyId = process.env.RAZORPAY_KEY_ID || 'rzp_test_1OfZbdvUlF5zWV';
+const keySecret = process.env.RAZORPAY_KEY_SECRET || 'WhhqhokMn6PvdKJBANGNNnBu';
+
+console.log('✅ Razorpay initialized with Key ID:', keyId.substring(0, 15) + '...');
+
 const razorpay = new Razorpay({
-  key_id: process.env.RAZORPAY_KEY_ID || 'rzp_test_1OfZbdvUlF5zWV',
-  key_secret: process.env.RAZORPAY_KEY_SECRET || 'WhhqhokMn6PvdKJBANGNNnBu'
+  key_id: keyId,
+  key_secret: keySecret
 });
 
 // ✅ Create Payment Order
@@ -22,6 +27,8 @@ router.post('/create-order', authenticateToken, async (req, res) => {
     if (!jobId || !amount || !workerPhone) {
       return res.status(400).json({ success: false, message: 'Missing required fields' });
     }
+
+    console.log('📝 Creating Razorpay order for amount:', amount, 'with key_id:', process.env.RAZORPAY_KEY_ID);
 
     // Create Razorpay order
     const order = await razorpay.orders.create({
@@ -34,6 +41,8 @@ router.post('/create-order', authenticateToken, async (req, res) => {
         workerName
       }
     });
+
+    console.log('✅ Razorpay order created:', order.id);
 
     res.status(200).json({
       success: true,
