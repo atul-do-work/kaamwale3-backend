@@ -1596,8 +1596,8 @@ app.get("/jobs/my-accepted", authenticateToken, async (req, res) => {
     const workerName = req.user.name;
     const workerPhone = req.user.phone;
     
-    // Get all jobs accepted by this worker - explicitly include all fields
-    const jobs = await Job.find({ acceptedBy: workerName }).lean();
+    // Get all jobs accepted by this worker (using phone, not name) - explicitly include all fields
+    const jobs = await Job.find({ acceptedBy: workerPhone }).lean(); // ✅ Use phone
     
     // Log jobs with rating info for debugging
     jobs.forEach((job) => {
@@ -1606,7 +1606,7 @@ app.get("/jobs/my-accepted", authenticateToken, async (req, res) => {
       }
     });
     
-    console.log(`✅ Worker ${workerPhone} retrieved ${jobs.length} accepted jobs`);
+    console.log(`✅ Worker ${workerName} (phone: ${workerPhone}) retrieved ${jobs.length} accepted jobs`);
     res.json(jobs);
   } catch (err) {
     console.error("Failed to load worker's accepted jobs", err);
