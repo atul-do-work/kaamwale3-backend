@@ -99,6 +99,8 @@ router.post('/verify-payment', authenticateToken, async (req, res) => {
     });
     await workerWallet.save();
 
+    console.log(`✅ Worker wallet updated: ${workerPhone} received ₹${amount}`);
+
     // Update job payment status
     const job = await Job.findByIdAndUpdate(
       jobId,
@@ -107,19 +109,39 @@ router.post('/verify-payment', authenticateToken, async (req, res) => {
     );
 
     // Create notification for worker
-    await NotificationHistory.create({
+    const notification = await NotificationHistory.create({
       recipientPhone: workerPhone,
       type: 'payment_received',
       title: 'Payment Received',
       body: `You received ₹${amount} for job: ${job.title}`,
-      read: false,
+      isRead: false,
       timestamp: new Date()
     });
+
+    console.log(`📢 Notification created for ${workerPhone}:`, notification._id);
+
+    // Emit socket event to notify worker in real-time
+    const io = req.app.get('io');
+    if (io) {
+      io.emit('walletUpdated', {
+        phone: workerPhone,
+        balance: workerWallet.balance,
+        message: `Payment received: ₹${amount}`
+      });
+      io.emit('notificationReceived', {
+        recipientPhone: workerPhone,
+        notification
+      });
+      console.log('📡 Socket events emitted for worker:', workerPhone);
+    }
+
+    console.log(`📬 Notification created for ${workerPhone}:`, notification._id);
 
     res.status(200).json({
       success: true,
       message: 'Payment verified and wallet updated',
-      walletBalance: workerWallet.balance
+      walletBalance: workerWallet.balance,
+      notificationId: notification._id
     });
   } catch (error) {
     console.error('Payment verification failed:', error);

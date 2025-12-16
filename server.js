@@ -62,6 +62,9 @@ const io = new Server(server, {
   cors: { origin: "*", methods: ["GET", "POST"] },
 });
 
+// ✅ Attach io to app so routes can access it
+app.set('io', io);
+
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
@@ -244,12 +247,12 @@ async function offerJobToNextWorker(job) {
       
       // ✅ CHECK: Does this worker have an unpaid job?
       const hasUnpaidJob = await Job.findOne({
-        acceptedBy: worker.name,
+        acceptedBy: worker.phone, // ✅ Check by phone, not name
         paymentStatus: { $ne: "Paid" }
       });
       
       if (hasUnpaidJob) {
-        console.log(`⏭️ Worker ${worker.name} has unpaid job, skipping...`);
+        console.log(`⏭️ Worker ${worker.name} (${worker.phone}) has unpaid job, skipping...`);
         continue; // Skip workers with unpaid jobs
       }
       
@@ -1336,18 +1339,19 @@ app.post("/jobs/accept/:id", authenticateToken, async (req, res) => {
   try {
     const jobId = req.params.id;
     const workerName = req.user.name;
+    const workerPhone = req.user.phone; // ✅ Get phone instead
 
-    console.log(`✅ Accept request for job: ${jobId} by worker: ${workerName}`);
+    console.log(`✅ Accept request for job: ${jobId} by worker: ${workerName} (phone: ${workerPhone})`);
 
     // ✅ CHECK: Worker cannot accept multiple simultaneous jobs
     // Find if worker has any unpaid job
     const hasUnpaidJob = await Job.findOne({
-      acceptedBy: workerName,
+      acceptedBy: workerPhone, // ✅ Check by phone
       paymentStatus: { $ne: "Paid" }  // Any job that's not paid yet
     });
 
     if (hasUnpaidJob) {
-      console.log(`❌ Worker ${workerName} already has unpaid job: ${hasUnpaidJob._id}`);
+      console.log(`❌ Worker ${workerName} (${workerPhone}) already has unpaid job: ${hasUnpaidJob._id}`);
       return res.status(400).json({
         success: false,
         message: `You have an unpaid job (${hasUnpaidJob.title}). Complete or decline it first.`
@@ -1377,7 +1381,7 @@ app.post("/jobs/accept/:id", authenticateToken, async (req, res) => {
     // Atomic update: only accept if status is still 'pending'
     const updated = await Job.findOneAndUpdate(
       { _id: jobId, status: "pending" },
-      { $set: { status: "accepted", acceptedBy: workerName, acceptedWorker: acceptedWorkerSnapshot, acceptedAt: new Date() } },
+      { $set: { status: "accepted", acceptedBy: workerPhone, acceptedWorker: acceptedWorkerSnapshot, acceptedAt: new Date() } }, // ✅ Use phone
       { new: true }
     );
 
@@ -1386,7 +1390,7 @@ app.post("/jobs/accept/:id", authenticateToken, async (req, res) => {
       return res.status(400).json({ success: false, message: "Job already accepted or not found" });
     }
 
-    console.log(`✅ Job accepted successfully by ${workerName}`);
+    console.log(`✅ Job accepted successfully by ${workerName} (phone: ${workerPhone})`);
     
     // ✅ Create notification for contractor
     try {
