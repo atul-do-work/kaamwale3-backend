@@ -123,16 +123,40 @@ router.post('/verify-payment', authenticateToken, async (req, res) => {
     // Emit socket event to notify worker in real-time
     const io = req.app.get('io');
     if (io) {
-      io.emit('walletUpdated', {
-        phone: workerPhone,
-        balance: workerWallet.balance,
-        message: `Payment received: ₹${amount}`
+      // Find all sockets for this worker and notify them
+      const sockets = Array.from(io.sockets.sockets.values());
+      let targetSocketFound = false;
+      
+      sockets.forEach((socket) => {
+        // Check both socket.user.phone (from JWT) and socket.data.user.phone
+        const socketWorkerPhone = socket.user?.phone || socket.data?.user?.phone;
+        if (socketWorkerPhone === workerPhone) {
+          socket.emit('walletUpdated', {
+            phone: workerPhone,
+            balance: workerWallet.balance,
+            message: `Payment received: ₹${amount}`
+          });
+          socket.emit('notificationReceived', {
+            recipientPhone: workerPhone,
+            notification
+          });
+          targetSocketFound = true;
+          console.log(`📤 Sent wallet & notification events to socket ${socket.id} for worker ${workerPhone}`);
+        }
       });
-      io.emit('notificationReceived', {
-        recipientPhone: workerPhone,
-        notification
-      });
-      console.log('📡 Socket events emitted for worker:', workerPhone);
+      
+      if (!targetSocketFound) {
+        console.log(`⚠️ No connected socket found for worker ${workerPhone}, using broadcast`);
+        io.emit('walletUpdated', {
+          phone: workerPhone,
+          balance: workerWallet.balance,
+          message: `Payment received: ₹${amount}`
+        });
+        io.emit('notificationReceived', {
+          recipientPhone: workerPhone,
+          notification
+        });
+      }
     }
 
     console.log(`📬 Notification created for ${workerPhone}:`, notification._id);
