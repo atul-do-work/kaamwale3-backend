@@ -30,11 +30,15 @@ router.post('/create-order', authenticateToken, async (req, res) => {
 
     console.log('📝 Creating Razorpay order for amount:', amount, 'with key_id:', process.env.RAZORPAY_KEY_ID);
 
+    // Create short receipt (max 40 chars) - use just last 8 chars of jobId
+    const shortJobId = jobId.substring(jobId.length - 8);
+    const receipt = `job_${shortJobId}`;
+
     // Create Razorpay order
     const order = await razorpay.orders.create({
       amount: Math.round(amount * 100), // Convert to paise
       currency: 'INR',
-      receipt: `job_${jobId}_${Date.now()}`,
+      receipt: receipt,
       notes: {
         jobId,
         workerPhone,
