@@ -71,6 +71,10 @@ app.use("/uploads", express.static(path.join(__dirname, "uploads"))); // ✅ ser
 const walletRoutes = require("./routes/wallet");
 app.use("/wallet", walletRoutes);
 
+// ✅ Mount Razorpay payment routes
+const razorpayRoutes = require("./routes/razorpay");
+app.use("/api/payment", razorpayRoutes);
+
 // ✅ Mount leaderboard routes
 const leaderboardRoutes = require("./routes/leaderboardRoutes");
 app.use("/leaderboard", leaderboardRoutes);
