@@ -788,6 +788,7 @@ app.post("/login", loginLimiter, async (req, res) => {
         console.log(`✅ Updated location for contractor: ${city}, ${state}`);
       } catch (err) {
         console.warn('⚠️ Could not get city leaderboard:', err.message);
+        console.warn('Stack trace:', err.stack);
       }
     }
 

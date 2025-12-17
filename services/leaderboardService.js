@@ -153,29 +153,50 @@ async function calculateCityLeaderboard(city, state) {
     });
 
     if (contractors.length === 0) {
+      console.log(`ℹ️ No contractors found in ${city}, ${state}`);
       return [];
     }
 
-    // Calculate score for each contractor
+    console.log(`📊 Calculating leaderboard for ${contractors.length} contractors in ${city}, ${state}`);
+
+    // Calculate score for each contractor with error handling
     const leaderboardData = await Promise.all(
       contractors.map(async (contractor) => {
-        const stats = await getContractorStats(contractor._id);
-        const score = await calculateContractorScore(contractor._id);
+        try {
+          const stats = await getContractorStats(contractor._id);
+          const score = await calculateContractorScore(contractor._id);
 
-        return {
-          contractorId: contractor._id,
-          phone: contractor.phone,
-          name: contractor.name,
-          score,
-          avgRating: stats?.avgRating || 0,
-          totalJobsPosted: stats?.totalJobsPosted || 0,
-          completedJobs: stats?.completedJobs || 0,
-          daysActive: stats?.daysActive || 0,
-          completionRate: stats?.completionRate || 0,
-          avgResponseTime: stats?.avgResponseTime || 0,
-          profilePhoto: contractor.profilePhoto,
-          tier: getTierByScore(score),
-        };
+          return {
+            contractorId: contractor._id,
+            phone: contractor.phone,
+            name: contractor.name,
+            score,
+            avgRating: stats?.avgRating || 0,
+            totalJobsPosted: stats?.totalJobsPosted || 0,
+            completedJobs: stats?.completedJobs || 0,
+            daysActive: stats?.daysActive || 0,
+            completionRate: stats?.completionRate || 0,
+            avgResponseTime: stats?.avgResponseTime || 0,
+            profilePhoto: contractor.profilePhoto,
+            tier: getTierByScore(score),
+          };
+        } catch (contractorErr) {
+          console.warn(`⚠️ Error calculating score for contractor ${contractor.name}:`, contractorErr.message);
+          return {
+            contractorId: contractor._id,
+            phone: contractor.phone,
+            name: contractor.name,
+            score: 0,
+            avgRating: 0,
+            totalJobsPosted: 0,
+            completedJobs: 0,
+            daysActive: 0,
+            completionRate: 0,
+            avgResponseTime: 0,
+            profilePhoto: contractor.profilePhoto,
+            tier: 'new',
+          };
+        }
       })
     );
 
@@ -185,9 +206,11 @@ async function calculateCityLeaderboard(city, state) {
       item.rank = index + 1;
     });
 
+    console.log(`✅ Leaderboard calculated: ${leaderboardData.length} contractors ranked`);
     return leaderboardData;
   } catch (err) {
-    console.error('Error calculating city leaderboard:', err);
+    console.error('❌ Error calculating city leaderboard:', err.message);
+    console.error(err.stack);
     return [];
   }
 }
