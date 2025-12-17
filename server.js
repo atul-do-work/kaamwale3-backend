@@ -716,76 +716,86 @@ app.post("/login", loginLimiter, async (req, res) => {
         const axios = require('axios');
         const { normalizeLocation } = require('./utils/cityHierarchy');
         
+        console.log(`📍 Fetching location for contractor: lat=${latitude}, lon=${longitude}`);
+        
         const geoResponse = await axios.get(
           `https://nominatim.openstreetmap.org/reverse?format=json&lat=${latitude}&lon=${longitude}`,
           {
             headers: { 'User-Agent': 'KaamwaleApp/1.0' },
             timeout: 5000,
           }
-        );
+        ).catch(err => {
+          console.warn('⚠️ Nominatim API timeout/error, using fallback:', err.message);
+          return null;
+        });
 
-        const geoData = geoResponse.data;
-        let detectedCity = (
-          geoData.address?.city ||
-          geoData.address?.town ||
-          geoData.address?.village ||
-          geoData.address?.county ||
-          'Unknown'
-        );
-        let detectedState = (geoData.address?.state || 'Unknown');
+        if (!geoResponse) {
+          console.log('ℹ️ Using existing location data for contractor');
+          // Use existing location if API fails
+        } else {
+          const geoData = geoResponse.data;
+          let detectedCity = (
+            geoData.address?.city ||
+            geoData.address?.town ||
+            geoData.address?.village ||
+            geoData.address?.county ||
+            'Unknown'
+          );
+          let detectedState = (geoData.address?.state || 'Unknown');
 
-        // ✅ NEW: Normalize to parent city (e.g., Mulshi → Pune)
-        const normalized = normalizeLocation(detectedCity, detectedState);
-        const city = normalized.city;
-        const state = normalized.state;
+          // ✅ NEW: Normalize to parent city (e.g., Mulshi → Pune)
+          const normalized = normalizeLocation(detectedCity, detectedState);
+          const city = normalized.city;
+          const state = normalized.state;
 
-        // Update user's location with normalized city
-        user.city = city;
-        user.state = state;
-        user.latitude = parseFloat(latitude);
-        user.longitude = parseFloat(longitude);
-        user.locationLastUpdated = new Date();
-        await user.save();
+          // Update user's location with normalized city
+          user.city = city;
+          user.state = state;
+          user.latitude = parseFloat(latitude);
+          user.longitude = parseFloat(longitude);
+          user.locationLastUpdated = new Date();
+          await user.save();
 
-        console.log(`📍 Location: ${detectedCity} → ${city}, ${state}${normalized.isMapped ? ' (mapped)' : ''}`);
+          console.log(`📍 Location: ${detectedCity} → ${city}, ${state}${normalized.isMapped ? ' (mapped)' : ''}`);
 
-        // ✅ NEW: Auto-invalidate old cache for this city when new contractor logs in
-        // This ensures fresh leaderboard calculation with latest contractors
-        const CityLeaderboard = require('./models/CityLeaderboard');
-        await CityLeaderboard.deleteOne({ city, state });
-        console.log(`🔄 Cleared old leaderboard cache for ${city}, ${state}`);
+          // ✅ NEW: Auto-invalidate old cache for this city when new contractor logs in
+          // This ensures fresh leaderboard calculation with latest contractors
+          const CityLeaderboard = require('./models/CityLeaderboard');
+          await CityLeaderboard.deleteOne({ city, state });
+          console.log(`🔄 Cleared old leaderboard cache for ${city}, ${state}`);
 
-        // Fetch city leaderboard (will calculate fresh since cache was cleared)
-        const { calculateCityLeaderboard } = require('./services/leaderboardService');
-        const leaderboardData = await calculateCityLeaderboard(city, state);
+          // Fetch city leaderboard (will calculate fresh since cache was cleared)
+          const { calculateCityLeaderboard } = require('./services/leaderboardService');
+          const leaderboardData = await calculateCityLeaderboard(city, state);
 
-        let leaderboard = await CityLeaderboard.findOneAndUpdate(
-          { city, state },
-          {
+          let leaderboard = await CityLeaderboard.findOneAndUpdate(
+            { city, state },
+            {
+              city,
+              state,
+              leaderboard: leaderboardData,
+              totalContractors: leaderboardData.length,
+              calculatedAt: new Date(),
+              expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
+            },
+            { upsert: true, new: true }
+          );
+
+          const currentUserRank = leaderboard.leaderboard.find(
+            (item) => item.contractorId.toString() === user._id.toString()
+          );
+
+          cityLeaderboard = {
             city,
             state,
-            leaderboard: leaderboardData,
-            totalContractors: leaderboardData.length,
-            calculatedAt: new Date(),
-            expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
-          },
-          { upsert: true, new: true }
-        );
+            totalContractors: leaderboard.totalContractors,
+            leaderboard: leaderboard.leaderboard,
+            myRank: currentUserRank?.rank || null,
+            myScore: currentUserRank?.score || 0,
+          };
 
-        const currentUserRank = leaderboard.leaderboard.find(
-          (item) => item.contractorId.toString() === user._id.toString()
-        );
-
-        cityLeaderboard = {
-          city,
-          state,
-          totalContractors: leaderboard.totalContractors,
-          leaderboard: leaderboard.leaderboard,
-          myRank: currentUserRank?.rank || null,
-          myScore: currentUserRank?.score || 0,
-        };
-
-        console.log(`✅ Updated location for contractor: ${city}, ${state}`);
+          console.log(`✅ Updated location for contractor: ${city}, ${state}`);
+        }
       } catch (err) {
         console.warn('⚠️ Could not get city leaderboard:', err.message);
         console.warn('Stack trace:', err.stack);
