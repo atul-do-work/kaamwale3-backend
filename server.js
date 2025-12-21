@@ -1169,10 +1169,10 @@ app.get("/leaderboard", async (req, res) => {
   }
 });
 
-// ✅ DELETE: Remove old premium endpoints by not including them - this simplifies the API
+// ===== OTP & AUTH ROUTES =====
+const { sendOtp, verifyOtp } = require('./utils/sendOtp'); // ✅ Import Twilio service
 
-// ---------------- AUTH - OTP & REFRESH ----------------
-// Request OTP (dev-mode: prints OTP to console). If user doesn't exist, create a record.
+// Request OTP - sends SMS to user's phone via Twilio
 app.post('/auth/request-otp', async (req, res) => {
   try {
     const { phone, name, role } = req.body;
@@ -1183,16 +1183,16 @@ app.post('/auth/request-otp', async (req, res) => {
       user = new User({ phone, name: name || 'Unknown', role: role || 'worker' });
     }
 
-    const otp = Math.floor(100000 + Math.random() * 900000).toString();
-    const expiry = new Date(Date.now() + 1000 * 60 * 5); // 5 minutes
-    user.otpCode = otp;
-    user.otpExpiry = expiry;
     await user.save();
 
-    // In development print OTP to console. Replace with SMS provider in production.
-    console.log(`🔐 OTP for ${phone}: ${otp} (expires ${expiry.toISOString()})`);
-
-    return res.json({ success: true, message: 'OTP generated (dev-mode), check server logs' });
+    // ✅ Send OTP via Twilio (not stored in DB - Twilio manages it)
+    const twilioResult = await sendOtp(phone);
+    
+    if (twilioResult.success) {
+      return res.json({ success: true, message: 'OTP sent to your phone' });
+    } else {
+      return res.status(400).json({ success: false, message: twilioResult.message });
+    }
   } catch (err) {
     console.error('Request OTP error', err);
     return res.status(500).json({ success: false, message: 'Internal server error' });
@@ -1208,14 +1208,14 @@ app.post('/auth/verify-otp', async (req, res) => {
     const user = await User.findOne({ phone });
     if (!user) return res.status(404).json({ success: false, message: 'User not found' });
 
-    if (!user.otpCode || !user.otpExpiry || new Date() > user.otpExpiry || user.otpCode !== otp) {
-      return res.status(400).json({ success: false, message: 'Invalid or expired OTP' });
+    // ✅ Verify OTP via Twilio (not from DB)
+    const verifyResult = await verifyOtp(phone, otp);
+    if (!verifyResult.success) {
+      return res.status(400).json({ success: false, message: verifyResult.message });
     }
 
     user.phoneVerified = true;
     user.phoneVerifiedAt = new Date();
-    user.otpCode = null;
-    user.otpExpiry = null;
 
     // Issue tokens
     const accessToken = jwt.sign({ name: user.name, phone: user.phone, role: user.role }, JWT_SECRET, { expiresIn: '1h' });
