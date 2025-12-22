@@ -11,6 +11,12 @@ function initializeFirebase() {
         clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
       };
 
+      console.log('🔧 Firebase Config Check:');
+      console.log('  - projectId:', serviceAccount.projectId);
+      console.log('  - clientEmail:', serviceAccount.clientEmail);
+      console.log('  - privateKey exists:', !!serviceAccount.privateKey);
+      console.log('  - privateKey length:', serviceAccount.privateKey?.length);
+
       admin.initializeApp({
         credential: admin.credential.cert(serviceAccount),
       });
@@ -32,11 +38,21 @@ function generateOtp() {
 // Send OTP via Firebase Push Notification
 async function sendOtpViaPush(phone, fcmToken) {
   try {
+    console.log(`\n📨 Attempting to send OTP via Firebase Push`);
+    console.log(`  - Phone: ${phone}`);
+    console.log(`  - FCM Token: ${fcmToken?.substring(0, 50)}...`);
+
+    if (!fcmToken) {
+      console.warn('⚠️ FCM Token is empty');
+      return { success: false, message: 'No FCM token provided' };
+    }
+
     if (!initializeFirebase()) {
       return { success: false, message: 'Firebase not configured' };
     }
 
     const otp = generateOtp();
+    console.log(`  - Generated OTP: ${otp}`);
 
     const message = {
       notification: {
@@ -49,6 +65,10 @@ async function sendOtpViaPush(phone, fcmToken) {
       },
       android: {
         priority: 'high',
+        notification: {
+          sound: 'default',
+          channelId: 'default',
+        },
       },
       apns: {
         headers: {
@@ -57,6 +77,7 @@ async function sendOtpViaPush(phone, fcmToken) {
       },
     };
 
+    console.log('  - Sending message to Firebase...');
     const response = await admin.messaging().send({
       ...message,
       token: fcmToken,
@@ -66,6 +87,8 @@ async function sendOtpViaPush(phone, fcmToken) {
     return { success: true, otp: otp };
   } catch (err) {
     console.error('❌ Firebase Push Error:', err.message);
+    console.error('Error code:', err.code);
+    console.error('Error details:', err);
     return { success: false, message: 'Failed to send OTP: ' + err.message };
   }
 }
@@ -84,18 +107,29 @@ function sendOtpViaConsole(phone) {
 
 // Main function - tries Firebase first, falls back to console
 async function sendOtp(phone, fcmToken) {
+  console.log(`\n${'='.repeat(60)}`);
+  console.log(`📱 OTP Request for phone: ${phone}`);
+  console.log(`   FCM Token provided: ${!!fcmToken}`);
+  console.log(`${'='.repeat(60)}`);
+
   // If FCM token is provided, try Firebase
   if (fcmToken) {
     const result = await sendOtpViaPush(phone, fcmToken);
     if (result.success) {
       return { success: true, otp: result.otp, method: 'firebase' };
+    } else {
+      console.warn(`⚠️ Firebase failed, trying fallback...`);
     }
+  } else {
+    console.warn(`⚠️ No FCM token provided for ${phone}`);
   }
 
   // Fallback to console OTP (for testing)
-  console.warn(`⚠️ No FCM token for ${phone}, using console OTP instead`);
+  console.warn(`⚠️ Using console OTP instead`);
   const result = sendOtpViaConsole(phone);
   return { success: result.success, otp: result.otp, method: 'console' };
 }
+
+module.exports = { sendOtp, generateOtp };
 
 module.exports = { sendOtp, generateOtp, sendOtpViaPush, sendOtpViaConsole, initializeFirebase };

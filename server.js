@@ -1182,21 +1182,40 @@ const { sendOtp } = require('./utils/sendOtp'); // ✅ Import Firebase OTP servi
 app.post('/auth/request-otp', async (req, res) => {
   try {
     const { phone, name, role, fcmToken } = req.body;
+    
+    console.log('\n🔐 OTP Request Endpoint Hit');
+    console.log('  - Phone:', phone);
+    console.log('  - Name:', name);
+    console.log('  - Role:', role);
+    console.log('  - FCM Token provided:', !!fcmToken);
+    if (fcmToken) {
+      console.log('  - Token length:', fcmToken.length);
+      console.log('  - Token preview:', fcmToken.substring(0, 50) + '...');
+    }
+
     if (!phone) return res.status(400).json({ success: false, message: 'Phone is required' });
 
     let user = await User.findOne({ phone });
     if (!user) {
+      console.log('  - Creating new user...');
       user = new User({ phone, name: name || 'Unknown', role: role || 'worker' });
+    } else {
+      console.log('  - User found, updating...');
     }
 
     // Store FCM token for push notifications
     if (fcmToken) {
       user.fcmToken = fcmToken;
+      console.log('  - FCM Token stored in user document');
+    } else {
+      console.log('  - ⚠️ No FCM Token to store');
     }
 
     await user.save();
+    console.log('  - User saved to database');
 
     // Generate and send OTP
+    console.log('  - Calling sendOtp()...');
     const otpResult = await sendOtp(phone, fcmToken);
     
     if (otpResult.success) {
@@ -1205,13 +1224,17 @@ app.post('/auth/request-otp', async (req, res) => {
       user.otpExpiry = new Date(Date.now() + 1000 * 60 * 5); // 5 minutes
       await user.save();
 
+      console.log('  - OTP stored in database');
+      console.log('  - Response method:', otpResult.method);
+
       const method = fcmToken ? 'push notification' : 'console (dev-mode)';
-      return res.json({ success: true, message: `OTP sent via ${method}` });
+      return res.json({ success: true, message: `OTP sent via ${method}`, method: otpResult.method });
     } else {
+      console.error('  - ❌ OTP sending failed:', otpResult.message);
       return res.status(400).json({ success: false, message: otpResult.message });
     }
   } catch (err) {
-    console.error('Request OTP error', err);
+    console.error('❌ Request OTP error', err);
     return res.status(500).json({ success: false, message: 'Internal server error' });
   }
 });
