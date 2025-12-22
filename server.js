@@ -1170,12 +1170,12 @@ app.get("/leaderboard", async (req, res) => {
 });
 
 // ===== OTP & AUTH ROUTES =====
-const { sendOtp, verifyOtp } = require('./utils/sendOtp'); // ✅ Import Twilio service
+const { sendOtp } = require('./utils/sendOtp'); // ✅ Import Firebase OTP service
 
-// Request OTP - sends SMS to user's phone via Twilio
+// Request OTP - sends via Firebase Push or Console (for testing)
 app.post('/auth/request-otp', async (req, res) => {
   try {
-    const { phone, name, role } = req.body;
+    const { phone, name, role, fcmToken } = req.body;
     if (!phone) return res.status(400).json({ success: false, message: 'Phone is required' });
 
     let user = await User.findOne({ phone });
@@ -1183,15 +1183,26 @@ app.post('/auth/request-otp', async (req, res) => {
       user = new User({ phone, name: name || 'Unknown', role: role || 'worker' });
     }
 
+    // Store FCM token for push notifications
+    if (fcmToken) {
+      user.fcmToken = fcmToken;
+    }
+
     await user.save();
 
-    // ✅ Send OTP via Twilio (not stored in DB - Twilio manages it)
-    const twilioResult = await sendOtp(phone);
+    // Generate and send OTP
+    const otpResult = await sendOtp(phone, fcmToken);
     
-    if (twilioResult.success) {
-      return res.json({ success: true, message: 'OTP sent to your phone' });
+    if (otpResult.success) {
+      // Store OTP in database for verification
+      user.otpCode = otpResult.otp;
+      user.otpExpiry = new Date(Date.now() + 1000 * 60 * 5); // 5 minutes
+      await user.save();
+
+      const method = fcmToken ? 'push notification' : 'console (dev-mode)';
+      return res.json({ success: true, message: `OTP sent via ${method}` });
     } else {
-      return res.status(400).json({ success: false, message: twilioResult.message });
+      return res.status(400).json({ success: false, message: otpResult.message });
     }
   } catch (err) {
     console.error('Request OTP error', err);
@@ -1208,14 +1219,15 @@ app.post('/auth/verify-otp', async (req, res) => {
     const user = await User.findOne({ phone });
     if (!user) return res.status(404).json({ success: false, message: 'User not found' });
 
-    // ✅ Verify OTP via Twilio (not from DB)
-    const verifyResult = await verifyOtp(phone, otp);
-    if (!verifyResult.success) {
-      return res.status(400).json({ success: false, message: verifyResult.message });
+    // Verify OTP from database (simple comparison)
+    if (!user.otpCode || !user.otpExpiry || new Date() > user.otpExpiry || user.otpCode !== otp) {
+      return res.status(400).json({ success: false, message: 'Invalid or expired OTP' });
     }
 
     user.phoneVerified = true;
     user.phoneVerifiedAt = new Date();
+    user.otpCode = null;
+    user.otpExpiry = null;
 
     // Issue tokens
     const accessToken = jwt.sign({ name: user.name, phone: user.phone, role: user.role }, JWT_SECRET, { expiresIn: '1h' });

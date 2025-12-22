@@ -1,66 +1,101 @@
-// ✅ Twilio Verify API - OTP Delivery Service
-const twilio = require('twilio');
+// ✅ Firebase Cloud Messaging - OTP via Push Notifications
+const admin = require('firebase-admin');
 
-async function sendOtp(phone) {
+// Initialize Firebase Admin SDK
+function initializeFirebase() {
   try {
-    const accountSid = process.env.TWILIO_ACCOUNT_SID;
-    const authToken = process.env.TWILIO_AUTH_TOKEN;
-    const serviceId = process.env.TWILIO_VERIFY_SERVICE_ID;
-    
-    if (!accountSid || !authToken || !serviceId) {
-      console.warn('⚠️ Twilio credentials not configured in .env');
-      return { success: false, message: 'SMS service not configured' };
+    if (admin.apps.length === 0) {
+      const serviceAccount = {
+        projectId: process.env.FIREBASE_PROJECT_ID,
+        privateKey: process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, '\n'),
+        clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
+      };
+
+      admin.initializeApp({
+        credential: admin.credential.cert(serviceAccount),
+      });
+
+      console.log('✅ Firebase initialized successfully');
+    }
+    return true;
+  } catch (err) {
+    console.error('❌ Firebase initialization error:', err.message);
+    return false;
+  }
+}
+
+// Generate OTP
+function generateOtp() {
+  return Math.floor(100000 + Math.random() * 900000).toString();
+}
+
+// Send OTP via Firebase Push Notification
+async function sendOtpViaPush(phone, fcmToken) {
+  try {
+    if (!initializeFirebase()) {
+      return { success: false, message: 'Firebase not configured' };
     }
 
-    const client = twilio(accountSid, authToken);
+    const otp = generateOtp();
 
-    // Format phone number to international format if needed
-    const formattedPhone = phone.startsWith('+') ? phone : `+91${phone}`;
+    const message = {
+      notification: {
+        title: '🔐 Your Kaamwale OTP',
+        body: `Your OTP is: ${otp}`,
+      },
+      data: {
+        otp: otp,
+        type: 'otp_verification',
+      },
+      android: {
+        priority: 'high',
+      },
+      apns: {
+        headers: {
+          'apns-priority': '10',
+        },
+      },
+    };
 
-    // Send OTP via Twilio Verify
-    const verification = await client.verify.v2
-      .services(serviceId)
-      .verifications
-      .create({ to: formattedPhone, channel: 'sms' });
+    const response = await admin.messaging().send({
+      ...message,
+      token: fcmToken,
+    });
 
-    console.log(`✅ OTP sent to ${formattedPhone}. SID: ${verification.sid}`);
-    return { success: true, message: 'OTP sent to your phone' };
+    console.log(`✅ OTP sent via Firebase Push to ${phone}. Message ID: ${response}`);
+    return { success: true, otp: otp };
   } catch (err) {
-    console.error('❌ Twilio Error:', err.message);
+    console.error('❌ Firebase Push Error:', err.message);
     return { success: false, message: 'Failed to send OTP: ' + err.message };
   }
 }
 
-// Verify OTP via Twilio
-async function verifyOtp(phone, otp) {
+// Send OTP via Console Fallback (for testing without FCM token)
+function sendOtpViaConsole(phone) {
   try {
-    const accountSid = process.env.TWILIO_ACCOUNT_SID;
-    const authToken = process.env.TWILIO_AUTH_TOKEN;
-    const serviceId = process.env.TWILIO_VERIFY_SERVICE_ID;
-    
-    if (!accountSid || !authToken || !serviceId) {
-      return { success: false, message: 'SMS service not configured' };
-    }
-
-    const client = twilio(accountSid, authToken);
-    const formattedPhone = phone.startsWith('+') ? phone : `+91${phone}`;
-
-    // Verify OTP via Twilio
-    const verificationCheck = await client.verify.v2
-      .services(serviceId)
-      .verificationChecks
-      .create({ to: formattedPhone, code: otp });
-
-    if (verificationCheck.status === 'approved') {
-      console.log(`✅ OTP verified for ${formattedPhone}`);
-      return { success: true, message: 'OTP verified' };
-    } else {
-      return { success: false, message: 'Invalid OTP' };
-    }
+    const otp = generateOtp();
+    console.log(`\n🔐 OTP for ${phone}: ${otp} (expires in 5 minutes)\n`);
+    return { success: true, otp: otp };
   } catch (err) {
-    console.error('❌ Twilio Verification Error:', err.message);
-    return { success: false, message: 'Failed to verify OTP' };
+    console.error('❌ OTP Generation Error:', err.message);
+    return { success: false, message: 'Failed to generate OTP' };
   }
 }
 
-module.exports = { sendOtp, verifyOtp };
+// Main function - tries Firebase first, falls back to console
+async function sendOtp(phone, fcmToken) {
+  // If FCM token is provided, try Firebase
+  if (fcmToken) {
+    const result = await sendOtpViaPush(phone, fcmToken);
+    if (result.success) {
+      return { success: true, otp: result.otp, method: 'firebase' };
+    }
+  }
+
+  // Fallback to console OTP (for testing)
+  console.warn(`⚠️ No FCM token for ${phone}, using console OTP instead`);
+  const result = sendOtpViaConsole(phone);
+  return { success: result.success, otp: result.otp, method: 'console' };
+}
+
+module.exports = { sendOtp, generateOtp, sendOtpViaPush, sendOtpViaConsole, initializeFirebase };
