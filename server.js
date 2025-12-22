@@ -342,7 +342,7 @@ io.use(async (socket, next) => {
           const existing = await WorkerModel.findOne({ phone: user.phone });
           if (existing) {
             existing.socketId = socket.id;
-            existing.isAvailable = true;
+            // ✅ Don't modify isAvailable - only toggle endpoint controls this
             await existing.save();
             // keep a lightweight map for quick access
             connectedWorkers.set(socket.id, {
@@ -424,7 +424,7 @@ io.on("connection", (socket) => {
 
         const updated = await WorkerModel.findOneAndUpdate(
           { phone },
-          { $set: { name, socketId: socket.id, isAvailable: true, location: loc, profilePhoto } },
+          { $set: { name, socketId: socket.id, location: loc, profilePhoto } },
           { upsert: true, new: true, setDefaultsOnInsert: true }
         );
 
@@ -435,7 +435,7 @@ io.on("connection", (socket) => {
           lon: lon || 0,
           workerType: workerType || (updated.skills && updated.skills[0]),
           socketId: socket.id,
-          isAvailable: true, // ✅ Add isAvailable status
+          isAvailable: updated.isAvailable || false, // ✅ Use worker's current availability status from toggle endpoint
         });
 
         socket.workerName = name;
@@ -699,7 +699,7 @@ app.post("/login", loginLimiter, async (req, res) => {
   try {
     console.log("📱 Login request body:", req.body);
     console.log("📝 Headers:", req.headers);
-    const { phone, password, latitude, longitude } = req.body;
+    const { phone, password, latitude, longitude, fcmToken } = req.body; // ✅ Add fcmToken
     if (!phone || !password) {
       return res.status(400).json({ success: false, message: "Phone and password required" });
     }
@@ -708,6 +708,12 @@ app.post("/login", loginLimiter, async (req, res) => {
 
     const match = await bcrypt.compare(password, user.password);
     if (!match) return res.status(401).json({ success: false, message: "Invalid phone or password" });
+
+    // ✅ NEW: Store updated FCM token on login
+    if (fcmToken) {
+      user.fcmToken = fcmToken;
+      console.log(`📱 FCM Token updated for ${phone}: ${fcmToken.substring(0, 30)}...`);
+    }
 
     // ✅ NEW: Handle location for contractors
     let cityLeaderboard = null;

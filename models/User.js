@@ -26,6 +26,7 @@ const userSchema = new mongoose.Schema({
   phoneVerified: { type: Boolean, default: false },
   phoneVerifiedAt: { type: Date, default: null },
   // Device tokens for push notifications
+  fcmToken: { type: String, default: null }, // ✅ Firebase Cloud Messaging token for OTP
   deviceTokens: { type: [String], default: [] },
   // Geolocation as GeoJSON
   location: {
