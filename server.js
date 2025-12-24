@@ -342,7 +342,12 @@ io.use(async (socket, next) => {
           const existing = await WorkerModel.findOne({ phone: user.phone });
           if (existing) {
             existing.socketId = socket.id;
-            // ✅ Don't modify isAvailable - only toggle endpoint controls this
+            // ✅ IMPORTANT: When worker reconnects, mark them as available
+            // Only set to true if they had it true before OR first time connecting
+            if (!existing.isAvailable) {
+              existing.isAvailable = true;
+              console.log(`🟢 Worker ${user.phone} marked as AVAILABLE (reconnected)`);
+            }
             await existing.save();
             // keep a lightweight map for quick access
             connectedWorkers.set(socket.id, {
@@ -352,6 +357,7 @@ io.use(async (socket, next) => {
               lon: existing.location?.coordinates?.[0] || 0,
               workerType: existing.skills && existing.skills[0],
               socketId: socket.id,
+              isAvailable: existing.isAvailable, // ✅ Now it's true from reconnection
             });
             console.log(`🔁 Re-associated existing worker session for ${user.phone}`);
           }
@@ -401,6 +407,15 @@ io.on("connection", (socket) => {
       const user = socket.user || {};
       const name = user.name || workerData?.name || "unknown";
       const phone = user.phone || workerData?.phone || "";
+
+      // ✅ VALIDATION: Check if coordinates are valid
+      if (lat === undefined || lat === null || lon === undefined || lon === null) {
+        console.warn(`⚠️ Worker ${name} registered with MISSING coordinates! lat=${lat}, lon=${lon}`);
+      }
+      
+      if (Math.abs(lat) > 90 || Math.abs(lon) > 180) {
+        console.error(`❌ INVALID coordinates for ${name}! lat=${lat}, lon=${lon} (out of bounds)`);
+      }
 
       console.log("Worker Registered:", name, "at", { lat, lon });
 

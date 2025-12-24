@@ -13,7 +13,10 @@ exports.findNearbyWorkers = (jobLocation, connectedWorkers) => {
 
   for (const [socketId, worker] of connectedWorkers.entries()) {
     // Skip if worker data is incomplete
-    if (!worker.lat || !worker.lon || !worker.name) continue;
+    if (!worker.lat || !worker.lon || !worker.name) {
+      skippedWorkers.push(`${worker.name || 'unknown'} (incomplete location data)`);
+      continue;
+    }
 
     // ✅ Skip if worker is OFFLINE (isAvailable = false)
     if (worker.isAvailable === false) {
@@ -29,8 +32,12 @@ exports.findNearbyWorkers = (jobLocation, connectedWorkers) => {
       worker.lon
     );
 
+    // ✅ DEBUG: Log all workers and distances
+    console.log(`📍 Worker: ${worker.name} at (${worker.lat}, ${worker.lon}) → Distance: ${distKm.toFixed(2)}km`);
+
     // Only include workers within 5km radius
     if (distKm <= RADIUS_KM) {
+      console.log(`✅ MATCHED: ${worker.name} (${distKm.toFixed(2)}km away)`);
       nearbyWorkers.push({
         socketId,
         name: worker.name,
@@ -40,6 +47,8 @@ exports.findNearbyWorkers = (jobLocation, connectedWorkers) => {
         lon: worker.lon,
         distance: Math.round(distKm * 10) / 10, // Round to 1 decimal
       });
+    } else {
+      console.log(`❌ TOO FAR: ${worker.name} (${distKm.toFixed(2)}km away) - exceeds 5km radius`);
     }
   }
 
