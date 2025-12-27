@@ -24,7 +24,7 @@ const bankAccountSchema = new mongoose.Schema({
   updatedAt: { type: Date, default: Date.now }
 }, { timestamps: true });
 
-// ✅ PRODUCTION-READY: Single pre-save hook with proper async/await and error handling
+// ✅ PRODUCTION-READY: Pre-save hook with proper error handling (no async)
 bankAccountSchema.pre('save', function(next) {
   console.log('💳 BankAccount pre-save hook triggered');
   
@@ -38,9 +38,8 @@ bankAccountSchema.pre('save', function(next) {
     
     // Validate account numbers match
     if (this.accountNumber !== this.accountNumberConfirm) {
-      const err = new Error('Account numbers do not match');
-      console.error('❌ Validation error:', err.message);
-      return next(err);
+      console.error('❌ Account numbers do not match');
+      return next(new Error('Account numbers do not match'));
     }
     
     console.log(`✅ All validations passed for account: ${this.maskedAccount}`);
