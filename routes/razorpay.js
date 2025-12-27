@@ -5,6 +5,8 @@ const { authenticateToken } = require('../utils/auth');
 const Wallet = require('../models/Wallet');
 const Job = require('../models/Jobs');
 const NotificationHistory = require('../models/NotificationHistory');
+const WorkerEarnings = require('../models/WorkerEarnings');
+const ActivityLog = require('../models/ActivityLog');
 
 const router = express.Router();
 
@@ -84,8 +86,41 @@ router.post('/verify-payment', authenticateToken, async (req, res) => {
 
     console.log('✅ Payment verified for order:', orderId);
 
-    // Payment verified ✅
-    // Update worker's wallet
+    // Get job details for earnings calculation
+    const job = await Job.findById(jobId);
+    if (!job) {
+      return res.status(404).json({ success: false, message: 'Job not found' });
+    }
+
+    // Calculate current week for payout tracking
+    const now = new Date();
+    const weekNumber = Math.ceil((now.getDate() + new Date(now.getFullYear(), 0, 1).getDay()) / 7);
+    const weekStart = new Date(now);
+    weekStart.setDate(now.getDate() - now.getDay());
+    const weekEnd = new Date(weekStart);
+    weekEnd.setDate(weekStart.getDate() + 6);
+
+    // 1️⃣ Create WorkerEarnings record (tracks individual job earnings)
+    const workerEarning = new WorkerEarnings({
+      workerPhone: workerPhone,
+      jobId: jobId,
+      amount: amount,
+      status: 'earned',
+      earnedAt: new Date(),
+      payoutWeek: {
+        year: now.getFullYear(),
+        week: weekNumber,
+        startDate: weekStart,
+        endDate: weekEnd
+      },
+      contractorName: job.contractorName,
+      contractorPhone: job.contractorPhone,
+      jobTitle: job.title
+    });
+    await workerEarning.save();
+    console.log(`💰 WorkerEarnings record created:`, workerEarning._id);
+
+    // 2️⃣ Update worker's wallet (for immediate display of available balance)
     let workerWallet = await Wallet.findOne({ phone: workerPhone });
     if (!workerWallet) {
       workerWallet = new Wallet({ phone: workerPhone, balance: 0 });
@@ -95,25 +130,38 @@ router.post('/verify-payment', authenticateToken, async (req, res) => {
     workerWallet.transactions.push({
       type: 'payment',
       amount: amount,
-      date: new Date()
+      date: new Date(),
+      jobId: jobId,
+      description: `Payment for: ${job.title}`
     });
     await workerWallet.save();
-
     console.log(`✅ Worker wallet updated: ${workerPhone} received ₹${amount}`);
 
-    // Update job payment status
-    const job = await Job.findByIdAndUpdate(
+    // 3️⃣ Create ActivityLog record
+    await ActivityLog.create({
+      userPhone: workerPhone,
+      action: 'payment_received',
+      details: {
+        jobId: jobId,
+        amount: amount,
+        jobTitle: job.title
+      },
+      timestamp: new Date()
+    });
+
+    // 4️⃣ Update job payment status
+    const updatedJob = await Job.findByIdAndUpdate(
       jobId,
-      { paymentStatus: 'Paid' },
+      { paymentStatus: 'Paid', paymentTime: new Date() },
       { new: true }
     );
 
-    // Create notification for worker
+    // 5️⃣ Create notification for worker
     const notification = await NotificationHistory.create({
       recipientPhone: workerPhone,
       type: 'payment_received',
       title: 'Payment Received',
-      body: `You received ₹${amount} for job: ${job.title}`,
+      body: `You received ₹${amount} for job: ${updatedJob.title}`,
       isRead: false,
       timestamp: new Date()
     });

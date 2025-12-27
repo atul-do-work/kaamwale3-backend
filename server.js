@@ -82,6 +82,10 @@ app.use("/api/payment", razorpayRoutes);
 const leaderboardRoutes = require("./routes/leaderboardRoutes");
 app.use("/leaderboard", leaderboardRoutes);
 
+// ✅ Mount payout routes for earnings & payouts
+const payoutRoutes = require("./routes/payout");
+app.use("/api/payouts", payoutRoutes);
+
 // ✅ Import and start leaderboard scheduler
 const { startLeaderboardScheduler } = require("./services/leaderboardScheduler");
 
