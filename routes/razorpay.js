@@ -139,14 +139,12 @@ router.post('/verify-payment', authenticateToken, async (req, res) => {
 
     // 3️⃣ Create ActivityLog record
     await ActivityLog.create({
-      userPhone: workerPhone,
+      userId: workerPhone,
+      phone: workerPhone,
       action: 'payment_received',
-      details: {
-        jobId: jobId,
-        amount: amount,
-        jobTitle: job.title
-      },
-      timestamp: new Date()
+      description: `Received ₹${amount} for job: ${job.title}`,
+      jobId: jobId,
+      status: 'success'
     });
 
     // 4️⃣ Update job payment status
