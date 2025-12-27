@@ -24,21 +24,29 @@ const bankAccountSchema = new mongoose.Schema({
   updatedAt: { type: Date, default: Date.now }
 }, { timestamps: true });
 
-// ✅ Mask account number before saving
-bankAccountSchema.pre('save', async function(next) {
+// ✅ PRODUCTION-READY: Single pre-save hook with proper async/await and error handling
+bankAccountSchema.pre('save', function(next) {
+  console.log('💳 BankAccount pre-save hook triggered');
+  
   try {
+    // Mask account number
     if (this.accountNumber) {
       const last4 = this.accountNumber.slice(-4);
       this.maskedAccount = '*'.repeat(this.accountNumber.length - 4) + last4;
+      console.log(`✅ Account masked: ${this.maskedAccount}`);
     }
     
     // Validate account numbers match
     if (this.accountNumber !== this.accountNumberConfirm) {
-      throw new Error('Account numbers do not match');
+      const err = new Error('Account numbers do not match');
+      console.error('❌ Validation error:', err.message);
+      return next(err);
     }
     
+    console.log(`✅ All validations passed for account: ${this.maskedAccount}`);
     next();
   } catch (error) {
+    console.error('❌ Pre-save hook error:', error.message);
     next(error);
   }
 });

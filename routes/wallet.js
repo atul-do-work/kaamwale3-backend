@@ -229,7 +229,12 @@ router.post("/bank-account/add", authenticateToken, async (req, res) => {
     });
   } catch (err) {
     console.error('Bank account add error:', err);
-    res.status(500).json({ success: false, message: "Error adding bank account" });
+    console.error('Error stack:', err.stack);
+    res.status(500).json({ 
+      success: false, 
+      message: err.message || "Error adding bank account",
+      error: process.env.NODE_ENV === 'development' ? err.message : "Server error"
+    });
   }
 });
 
