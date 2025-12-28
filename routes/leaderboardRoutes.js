@@ -11,13 +11,17 @@ const router = express.Router();
 // Reverse geocoding using OpenStreetMap Nominatim API (free, no key needed)
 async function reverseGeocode(latitude, longitude) {
   try {
+    // Add delay to respect Nominatim rate limiting (1 request per second)
+    await new Promise(resolve => setTimeout(resolve, 1000));
+    
     const response = await axios.get(
-      `https://nominatim.openstreetmap.org/reverse?format=json&lat=${latitude}&lon=${longitude}`,
+      `https://nominatim.openstreetmap.org/reverse?format=json&lat=${latitude}&lon=${longitude}&zoom=10&addressdetails=1`,
       {
         headers: {
-          'User-Agent': 'KaamwaleApp/1.0', // Required by Nominatim
+          'User-Agent': 'KaamwaleApp/1.0 (contact@kaamwale.com)',
+          'Accept': 'application/json'
         },
-        timeout: 5000,
+        timeout: 8000,
       }
     );
 

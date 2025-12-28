@@ -743,18 +743,24 @@ app.post("/login", loginLimiter, async (req, res) => {
         
         console.log(`📍 Fetching location for contractor: lat=${latitude}, lon=${longitude}`);
         
+        // Add delay to avoid Nominatim rate limiting
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        
         const geoResponse = await axios.get(
-          `https://nominatim.openstreetmap.org/reverse?format=json&lat=${latitude}&lon=${longitude}`,
+          `https://nominatim.openstreetmap.org/reverse?format=json&lat=${latitude}&lon=${longitude}&zoom=10&addressdetails=1`,
           {
-            headers: { 'User-Agent': 'KaamwaleApp/1.0' },
-            timeout: 5000,
+            headers: { 
+              'User-Agent': 'KaamwaleApp/1.0 (contact@kaamwale.com)',
+              'Accept': 'application/json'
+            },
+            timeout: 8000,
           }
         ).catch(err => {
           console.warn('⚠️ Nominatim API timeout/error, using fallback:', err.message);
           return null;
         });
 
-        if (!geoResponse) {
+        if (!geoResponse || !geoResponse.data) {
           console.log('ℹ️ Using existing location data for contractor');
           // Use existing location if API fails
         } else {
