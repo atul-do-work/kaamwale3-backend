@@ -1,0 +1,1801 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Kaamwale - Admin Dashboard</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #f5f7fa;
+            color: #333;
+        }
+
+        .container {
+            display: flex;
+            min-height: 100vh;
+        }
+
+        /* Sidebar */
+        .sidebar {
+            width: 250px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 20px;
+            position: fixed;
+            height: 100vh;
+            overflow-y: auto;
+        }
+
+        .sidebar-header {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 30px;
+            padding-bottom: 20px;
+            border-bottom: 1px solid rgba(255,255,255,0.2);
+        }
+
+        .sidebar-header h2 {
+            font-size: 20px;
+            font-weight: 700;
+        }
+
+        .sidebar-nav {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .nav-item {
+            padding: 12px 15px;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            text-decoration: none;
+            color: white;
+            font-size: 14px;
+        }
+
+        .nav-item:hover {
+            background: rgba(255,255,255,0.2);
+            transform: translateX(5px);
+        }
+
+        .nav-item.active {
+            background: rgba(255,255,255,0.3);
+            font-weight: 600;
+        }
+
+        .nav-item i {
+            width: 20px;
+            text-align: center;
+        }
+
+        /* Main content */
+        .main-content {
+            margin-left: 250px;
+            flex: 1;
+            padding: 30px;
+        }
+
+        /* Header */
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 30px;
+            background: white;
+            padding: 20px;
+            border-radius: 12px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+
+        .header h1 {
+            font-size: 28px;
+            font-weight: 700;
+            color: #1a1a1a;
+        }
+
+        .user-info {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+        }
+
+        .user-info .btn {
+            padding: 8px 16px;
+            background: #EF4444;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: all 0.3s ease;
+        }
+
+        .user-info .btn:hover {
+            background: #DC2626;
+        }
+
+        /* Stats Grid */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+
+        .stat-card {
+            background: white;
+            padding: 20px;
+            border-radius: 12px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            display: flex;
+            align-items: center;
+            gap: 15px;
+        }
+
+        .stat-icon {
+            width: 50px;
+            height: 50px;
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-size: 24px;
+        }
+
+        .stat-icon.blue { background: #667eea; }
+        .stat-icon.green { background: #10B981; }
+        .stat-icon.orange { background: #F59E0B; }
+        .stat-icon.red { background: #EF4444; }
+
+        .stat-content h3 {
+            font-size: 12px;
+            color: #999;
+            margin-bottom: 5px;
+        }
+
+        .stat-content .number {
+            font-size: 28px;
+            font-weight: 700;
+            color: #1a1a1a;
+        }
+
+        /* Data Table */
+        .data-section {
+            background: white;
+            border-radius: 12px;
+            padding: 20px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            margin-bottom: 30px;
+            display: none;
+        }
+
+        .data-section.active {
+            display: block;
+        }
+
+        .section-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+            padding-bottom: 15px;
+            border-bottom: 2px solid #f0f0f0;
+        }
+
+        .section-header h2 {
+            font-size: 20px;
+            font-weight: 700;
+        }
+
+        .search-box {
+            padding: 10px 15px;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            width: 250px;
+            font-size: 14px;
+        }
+
+        .table-wrapper {
+            overflow-x: auto;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        table th {
+            background: #f8f9fa;
+            padding: 15px;
+            text-align: left;
+            font-weight: 600;
+            color: #666;
+            font-size: 13px;
+            border-bottom: 2px solid #e9ecef;
+        }
+
+        table td {
+            padding: 15px;
+            border-bottom: 1px solid #e9ecef;
+            font-size: 14px;
+        }
+
+        table tr:hover {
+            background: #f8f9fa;
+        }
+
+        .badge {
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: 600;
+            display: inline-block;
+        }
+
+        .badge.pending { background: #FEF3C7; color: #92400E; }
+        .badge.approved { background: #DBEAFE; color: #1E40AF; }
+        .badge.verified { background: #D1FAE5; color: #065F46; }
+        .badge.rejected { background: #FEE2E2; color: #991B1B; }
+        .badge.active { background: #D1FAE5; color: #065F46; }
+        .badge.restricted { background: #FEF3C7; color: #92400E; }
+
+        .action-buttons {
+            display: flex;
+            gap: 8px;
+        }
+
+        .btn-small {
+            padding: 6px 12px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+            font-weight: 600;
+            transition: all 0.3s ease;
+        }
+
+        .btn-approve {
+            background: #10B981;
+            color: white;
+        }
+
+        .btn-approve:hover {
+            background: #059669;
+        }
+
+        .btn-reject {
+            background: #EF4444;
+            color: white;
+        }
+
+        .btn-reject:hover {
+            background: #DC2626;
+        }
+
+        .btn-view {
+            background: #667eea;
+            color: white;
+        }
+
+        .btn-view:hover {
+            background: #5568d3;
+        }
+
+        /* Modal */
+        .modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.5);
+            z-index: 1000;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .modal.show {
+            display: flex;
+        }
+
+        .modal-content {
+            background: white;
+            border-radius: 12px;
+            padding: 30px;
+            max-width: 600px;
+            width: 90%;
+            max-height: 80vh;
+            overflow-y: auto;
+            box-shadow: 0 20px 25px rgba(0,0,0,0.15);
+        }
+
+        .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+            padding-bottom: 15px;
+            border-bottom: 2px solid #f0f0f0;
+        }
+
+        .modal-header h3 {
+            font-size: 20px;
+            font-weight: 700;
+        }
+
+        .close-btn {
+            background: none;
+            border: none;
+            font-size: 24px;
+            cursor: pointer;
+            color: #999;
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        .form-group label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 600;
+            color: #333;
+            font-size: 14px;
+        }
+
+        .form-group input,
+        .form-group textarea,
+        .form-group select {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            font-size: 14px;
+            font-family: inherit;
+        }
+
+        .form-group textarea {
+            resize: vertical;
+            min-height: 100px;
+        }
+
+        .modal-actions {
+            display: flex;
+            gap: 10px;
+            justify-content: flex-end;
+            margin-top: 30px;
+        }
+
+        .modal-actions .btn {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 600;
+            transition: all 0.3s ease;
+        }
+
+        .modal-actions .btn-primary {
+            background: #667eea;
+            color: white;
+        }
+
+        .modal-actions .btn-primary:hover {
+            background: #5568d3;
+        }
+
+        .modal-actions .btn-cancel {
+            background: #e9ecef;
+            color: #333;
+        }
+
+        .modal-actions .btn-cancel:hover {
+            background: #dee2e6;
+        }
+
+        /* Loading */
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: #999;
+        }
+
+        .spinner {
+            display: inline-block;
+            width: 40px;
+            height: 40px;
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #667eea;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        /* Responsive */
+        @media (max-width: 768px) {
+            .sidebar {
+                width: 0;
+                transform: translateX(-100%);
+            }
+            
+            .main-content {
+                margin-left: 0;
+            }
+
+            .stats-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .header {
+                flex-direction: column;
+                gap: 15px;
+            }
+
+            table {
+                font-size: 12px;
+            }
+
+            table th, table td {
+                padding: 10px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- Sidebar -->
+        <div class="sidebar">
+            <div class="sidebar-header">
+                <i class="fas fa-shield-alt"></i>
+                <h2>Kaamwale</h2>
+            </div>
+            <nav class="sidebar-nav">
+                <a href="#" class="nav-item active" data-section="dashboard">
+                    <i class="fas fa-chart-line"></i>
+                    <span>Dashboard</span>
+                </a>
+                <a href="#" class="nav-item" data-section="users">
+                    <i class="fas fa-users"></i>
+                    <span>Users (Contractors)</span>
+                </a>
+                <a href="#" class="nav-item" data-section="workers">
+                    <i class="fas fa-hard-hat"></i>
+                    <span>Workers</span>
+                </a>
+                <a href="#" class="nav-item" data-section="jobs">
+                    <i class="fas fa-briefcase"></i>
+                    <span>Jobs</span>
+                </a>
+                <a href="#" class="nav-item" data-section="bank-accounts">
+                    <i class="fas fa-university"></i>
+                    <span>Bank Accounts</span>
+                </a>
+                <a href="#" class="nav-item" data-section="verifications">
+                    <i class="fas fa-certificate"></i>
+                    <span>Verifications</span>
+                </a>
+                <a href="#" class="nav-item" data-section="wallets">
+                    <i class="fas fa-wallet"></i>
+                    <span>Wallets</span>
+                </a>
+                <a href="#" class="nav-item" data-section="activity">
+                    <i class="fas fa-history"></i>
+                    <span>Activity Logs</span>
+                </a>
+                <a href="#" class="nav-item" data-section="leaderboard">
+                    <i class="fas fa-trophy"></i>
+                    <span>City Leaderboard</span>
+                </a>
+                <a href="#" class="nav-item" data-section="support">
+                    <i class="fas fa-ticket-alt"></i>
+                    <span>Support Tickets</span>
+                </a>
+                <hr style="margin-top: 20px; opacity: 0.2;">
+                <a href="#" class="nav-item" onclick="logout()">
+                    <i class="fas fa-sign-out-alt"></i>
+                    <span>Logout</span>
+                </a>
+            </nav>
+        </div>
+
+        <!-- Main Content -->
+        <div class="main-content">
+            <!-- Header -->
+            <div class="header">
+                <h1>Admin Dashboard</h1>
+                <div class="user-info">
+                    <span id="userPhone">Loading...</span>
+                    <button class="btn" onclick="logout()">Logout</button>
+                </div>
+            </div>
+
+            <!-- Dashboard Section -->
+            <div id="dashboard" class="data-section active">
+                <div class="section-header">
+                    <h2>Dashboard Overview</h2>
+                </div>
+                <div class="stats-grid" id="statsGrid">
+                    <div class="stat-card">
+                        <div class="stat-icon blue"><i class="fas fa-users"></i></div>
+                        <div class="stat-content">
+                            <h3>Total Users</h3>
+                            <div class="number" id="totalUsers">-</div>
+                        </div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-icon orange"><i class="fas fa-hard-hat"></i></div>
+                        <div class="stat-content">
+                            <h3>Total Workers</h3>
+                            <div class="number" id="totalWorkers">-</div>
+                        </div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-icon green"><i class="fas fa-briefcase"></i></div>
+                        <div class="stat-content">
+                            <h3>Total Jobs</h3>
+                            <div class="number" id="totalJobs">-</div>
+                        </div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-icon red"><i class="fas fa-check-circle"></i></div>
+                        <div class="stat-content">
+                            <h3>Completed Jobs</h3>
+                            <div class="number" id="completedJobs">-</div>
+                        </div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-icon green"><i class="fas fa-wallet"></i></div>
+                        <div class="stat-content">
+                            <h3>Total Wallet Balance</h3>
+                            <div class="number" id="totalBalance">₹-</div>
+                        </div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-icon blue"><i class="fas fa-certificate"></i></div>
+                        <div class="stat-content">
+                            <h3>Verified Users</h3>
+                            <div class="number" id="verifiedUsers">-</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Users Section -->
+            <div id="users" class="data-section">
+                <div class="section-header">
+                    <h2>All Users (Contractors)</h2>
+                    <input type="text" class="search-box" id="userSearch" placeholder="Search by phone...">
+                </div>
+                <div class="table-wrapper">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Phone</th>
+                                <th>Name</th>
+                                <th>Email</th>
+                                <th>Role</th>
+                                <th>Created At</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="usersTable">
+                            <tr>
+                                <td colspan="6" class="loading"><div class="spinner"></div></td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Workers Section -->
+            <div id="workers" class="data-section">
+                <div class="section-header">
+                    <h2>All Workers</h2>
+                    <input type="text" class="search-box" id="workerSearch" placeholder="Search by phone...">
+                </div>
+                <div class="table-wrapper">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Phone</th>
+                                <th>Name</th>
+                                <th>Type</th>
+                                <th>Rating</th>
+                                <th>Jobs Done</th>
+                                <th>City</th>
+                                <th>Verified</th>
+                                <th>Status</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="workersTable">
+                            <tr>
+                                <td colspan="9" class="loading"><div class="spinner"></div></td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Jobs Section -->
+            <div id="jobs" class="data-section">
+                <div class="section-header">
+                    <h2>All Jobs</h2>
+                    <input type="text" class="search-box" id="jobSearch" placeholder="Search by title...">
+                </div>
+                <div class="table-wrapper">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Job Title</th>
+                                <th>Contractor</th>
+                                <th>Worker</th>
+                                <th>Amount</th>
+                                <th>Status</th>
+                                <th>Payment</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="jobsTable">
+                            <tr>
+                                <td colspan="7" class="loading"><div class="spinner"></div></td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Bank Accounts Section -->
+            <div id="bank-accounts" class="data-section">
+                <div class="section-header">
+                    <h2>Bank Account Verification</h2>
+                    <input type="text" class="search-box" id="bankSearch" placeholder="Search by phone...">
+                </div>
+                <div class="table-wrapper">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Phone</th>
+                                <th>Account Holder</th>
+                                <th>Bank</th>
+                                <th>Account</th>
+                                <th>Status</th>
+                                <th>Added At</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="bankAccountsTable">
+                            <tr>
+                                <td colspan="7" class="loading"><div class="spinner"></div></td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Verifications Section -->
+            <div id="verifications" class="data-section">
+                <div class="section-header">
+                    <h2>Document Verifications</h2>
+                    <input type="text" class="search-box" id="verificationSearch" placeholder="Search by phone...">
+                </div>
+                <div class="table-wrapper">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Phone</th>
+                                <th>Doc Type</th>
+                                <th>Doc Number</th>
+                                <th>Image</th>
+                                <th>Status</th>
+                                <th>Uploaded At</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="verificationsTable">
+                            <tr>
+                                <td colspan="7" class="loading"><div class="spinner"></div></td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Wallets Section -->
+            <div id="wallets" class="data-section">
+                <div class="section-header">
+                    <h2>Wallet Management</h2>
+                    <input type="text" class="search-box" id="walletSearch" placeholder="Search by phone...">
+                </div>
+                <div class="table-wrapper">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Phone</th>
+                                <th>Name</th>
+                                <th>Balance</th>
+                                <th>Last Updated</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="walletsTable">
+                            <tr>
+                                <td colspan="5" class="loading"><div class="spinner"></div></td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Activity Logs Section -->
+            <div id="activity" class="data-section">
+                <div class="section-header">
+                    <h2>Activity Logs</h2>
+                    <input type="text" class="search-box" id="activitySearch" placeholder="Search...">
+                </div>
+                <div class="table-wrapper">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>User</th>
+                                <th>Action</th>
+                                <th>Details</th>
+                                <th>Timestamp</th>
+                            </tr>
+                        </thead>
+                        <tbody id="activityTable">
+                            <tr>
+                                <td colspan="4" class="loading"><div class="spinner"></div></td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- City Leaderboard Section -->
+            <div id="leaderboard" class="data-section">
+                <div class="section-header">
+                    <h2>City Leaderboard</h2>
+                    <select id="citySelect" style="padding: 8px; border-radius: 4px; border: 1px solid #ddd;">
+                        <option value="">Select City...</option>
+                    </select>
+                </div>
+                <div class="table-wrapper">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Rank</th>
+                                <th>Worker Name</th>
+                                <th>Phone</th>
+                                <th>City & State</th>
+                                <th>Rating</th>
+                                <th>Jobs Completed</th>
+                                <th>Score</th>
+                            </tr>
+                        </thead>
+                        <tbody id="leaderboardTable">
+                            <tr>
+                                <td colspan="7" class="loading"><div class="spinner"></div></td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Support Tickets Section -->
+            <div id="support" class="data-section">
+                <div class="section-header">
+                    <h2>Support Tickets</h2>
+                    <input type="text" class="search-box" id="ticketSearch" placeholder="Search by phone...">
+                </div>
+                <div class="table-wrapper">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Ticket ID</th>
+                                <th>User Phone</th>
+                                <th>Category</th>
+                                <th>Subject</th>
+                                <th>Status</th>
+                                <th>Created</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="ticketsTable">
+                            <tr>
+                                <td colspan="7" class="loading"><div class="spinner"></div></td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Job Details Modal -->
+    <div id="jobModal" class="modal">
+        <div class="modal-content" style="max-width: 700px; max-height: 90vh; overflow-y: auto;">
+            <div class="modal-header">
+                <h3>Job Details</h3>
+                <button class="close-btn" onclick="closeModal('jobModal')">&times;</button>
+            </div>
+            <div class="modal-body" id="jobDetailsContent">
+                <!-- Job details will be populated here -->
+            </div>
+        </div>
+    </div>
+
+    <!-- Verification Modal -->
+    <div id="verificationModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>Verify Bank Account</h3>
+                <button class="close-btn" onclick="closeModal('verificationModal')">&times;</button>
+            </div>
+            <div id="modalDetails"></div>
+            <div class="modal-actions">
+                <button class="btn btn-cancel" onclick="closeModal('verificationModal')">Cancel</button>
+                <button class="btn btn-primary" onclick="approveBankAccount()">Approve</button>
+                <button class="btn btn-reject" onclick="rejectBankAccount()">Reject</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE = 'http://192.168.31.105:3000';
+        let currentUser = null;
+        let currentBankAccountId = null;
+
+        // Initialize
+        document.addEventListener('DOMContentLoaded', () => {
+            checkAuth();
+            setupNavigation();
+            loadDashboard();
+        });
+
+        // Check authentication
+        async function checkAuth() {
+            const token = localStorage.getItem('adminToken');
+            if (!token) {
+                window.location.href = '/admin/login.html';
+                return;
+            }
+
+            try {
+                const res = await fetch(`${API_BASE}/users/profile`, {
+                    headers: { 'Authorization': `Bearer ${token}` }
+                });
+
+                if (!res.ok) throw new Error('Unauthorized');
+
+                const data = await res.json();
+                currentUser = data.user;
+
+                if (currentUser.role !== 'admin') {
+                    alert('Admin access required');
+                    window.location.href = '/admin/login.html';
+                    return;
+                }
+
+                document.getElementById('userPhone').textContent = currentUser.phone;
+            } catch (err) {
+                console.error('Auth error:', err);
+                localStorage.removeItem('adminToken');
+                window.location.href = '/admin/login.html';
+            }
+        }
+
+        // Setup navigation
+        function setupNavigation() {
+            const navItems = document.querySelectorAll('.nav-item');
+            navItems.forEach(item => {
+                item.addEventListener('click', (e) => {
+                    e.preventDefault();
+                    const section = item.getAttribute('data-section');
+                    showSection(section);
+                    navItems.forEach(n => n.classList.remove('active'));
+                    item.classList.add('active');
+                });
+            });
+        }
+
+        // Show section
+        function showSection(sectionId) {
+            document.querySelectorAll('.data-section').forEach(s => s.classList.remove('active'));
+            const section = document.getElementById(sectionId);
+            if (section) {
+                section.classList.add('active');
+
+                // Load data based on section
+                if (sectionId === 'dashboard') loadDashboard();
+                else if (sectionId === 'users') loadUsers();
+                else if (sectionId === 'workers') loadWorkers();
+                else if (sectionId === 'jobs') loadJobs();
+                else if (sectionId === 'bank-accounts') loadBankAccounts();
+                else if (sectionId === 'verifications') loadVerifications();
+                else if (sectionId === 'wallets') loadWallets();
+                else if (sectionId === 'activity') loadActivityLogs();
+                else if (sectionId === 'leaderboard') loadLeaderboard();
+                else if (sectionId === 'support') loadSupportTickets();
+            }
+        }
+
+        // Load dashboard
+        async function loadDashboard() {
+            try {
+                const token = localStorage.getItem('adminToken');
+                const res = await fetch(`${API_BASE}/admin/dashboard`, {
+                    headers: { 'Authorization': `Bearer ${token}` }
+                });
+
+                const data = await res.json();
+                if (data.success && data.stats) {
+                    document.getElementById('totalUsers').textContent = data.stats.totalUsers || '-';
+                    document.getElementById('totalWorkers').textContent = data.stats.totalWorkers || '-';
+                    document.getElementById('totalJobs').textContent = data.stats.totalJobs || '-';
+                    document.getElementById('completedJobs').textContent = data.stats.completedJobs || '-';
+                    document.getElementById('totalBalance').textContent = `₹${(data.stats.totalWalletBalance || 0).toLocaleString()}`;
+                    document.getElementById('verifiedUsers').textContent = data.stats.verifiedUsers || '-';
+                }
+            } catch (err) {
+                console.error('Error loading dashboard:', err);
+            }
+        }
+
+        // Load users
+        async function loadUsers() {
+            try {
+                const token = localStorage.getItem('adminToken');
+                const res = await fetch(`${API_BASE}/admin/users`, {
+                    headers: { 'Authorization': `Bearer ${token}` }
+                });
+
+                const data = await res.json();
+                const tbody = document.getElementById('usersTable');
+
+                if (data.success && data.users) {
+                    tbody.innerHTML = data.users.map(user => `
+                        <tr>
+                            <td>${user.phone}</td>
+                            <td>${user.name || '-'}</td>
+                            <td>${user.email || '-'}</td>
+                            <td>${user.role || 'user'}</td>
+                            <td>${new Date(user.createdAt).toLocaleDateString()}</td>
+                            <td><button class="btn-small btn-view">View</button></td>
+                        </tr>
+                    `).join('');
+                } else {
+                    tbody.innerHTML = '<tr><td colspan="6">No users found</td></tr>';
+                }
+            } catch (err) {
+                console.error('Error loading users:', err);
+                document.getElementById('usersTable').innerHTML = '<tr><td colspan="6">Error loading data</td></tr>';
+            }
+        }
+
+        // Load workers
+        async function loadWorkers() {
+            try {
+                const token = localStorage.getItem('adminToken');
+                const res = await fetch(`${API_BASE}/admin/workers`, {
+                    headers: { 'Authorization': `Bearer ${token}` }
+                });
+
+                const data = await res.json();
+                const tbody = document.getElementById('workersTable');
+
+                if (data.success && data.workers) {
+                    tbody.innerHTML = data.workers.map(worker => `
+                        <tr>
+                            <td>${worker.phone}</td>
+                            <td>${worker.name || '-'}</td>
+                            <td>${worker.workerType || '-'}</td>
+                            <td>⭐ ${worker.avgRating ? worker.avgRating.toFixed(1) : '0.0'}</td>
+                            <td>${worker.jobsCompleted || 0}</td>
+                            <td>${worker.city || '-'}</td>
+                            <td><span class="badge ${worker.isVerified ? 'verified' : 'pending'}">${worker.isVerified ? '✓ Yes' : 'Pending'}</span></td>
+                            <td><span class="badge ${worker.isAvailable ? 'verified' : 'rejected'}">${worker.isAvailable ? 'Available' : 'Busy'}</span></td>
+                            <td><button class="btn-small btn-view">View Profile</button></td>
+                        </tr>
+                    `).join('');
+                } else {
+                    tbody.innerHTML = '<tr><td colspan="9">No workers found</td></tr>';
+                }
+            } catch (err) {
+                console.error('Error loading workers:', err);
+                document.getElementById('workersTable').innerHTML = '<tr><td colspan="9">Error loading data</td></tr>';
+            }
+        }
+
+        // Load jobs
+        async function loadJobs() {
+            try {
+                const token = localStorage.getItem('adminToken');
+                const res = await fetch(`${API_BASE}/admin/jobs`, {
+                    headers: { 'Authorization': `Bearer ${token}` }
+                });
+
+                const data = await res.json();
+                const tbody = document.getElementById('jobsTable');
+
+                if (data.success && data.jobs) {
+                    tbody.innerHTML = data.jobs.slice(0, 50).map(job => `
+                        <tr>
+                            <td>${job.title}</td>
+                            <td>${job.contractorName || '-'}</td>
+                            <td>${job.acceptedBy || '-'}</td>
+                            <td>₹${job.amount}</td>
+                            <td><span class="badge pending">${job.status || 'open'}</span></td>
+                            <td><span class="badge ${job.paymentStatus === 'Paid' ? 'approved' : 'pending'}">${job.paymentStatus || 'pending'}</span></td>
+                            <td><button class="btn-small btn-view" onclick="showJobDetails('${job._id}')">View</button></td>
+                        </tr>
+                    `).join('');
+                } else {
+                    tbody.innerHTML = '<tr><td colspan="7">No jobs found</td></tr>';
+                }
+            } catch (err) {
+                console.error('Error loading jobs:', err);
+                document.getElementById('jobsTable').innerHTML = '<tr><td colspan="7">Error loading data</td></tr>';
+            }
+        }
+
+        // Load bank accounts
+        async function loadBankAccounts() {
+            try {
+                const token = localStorage.getItem('adminToken');
+                const res = await fetch(`${API_BASE}/admin/bank-accounts`, {
+                    headers: { 'Authorization': `Bearer ${token}` }
+                });
+
+                const data = await res.json();
+                const tbody = document.getElementById('bankAccountsTable');
+
+                if (data.success && data.bankAccounts) {
+                    tbody.innerHTML = data.bankAccounts.map(bank => `
+                        <tr>
+                            <td>${bank.phone}</td>
+                            <td>${bank.accountHolderName}</td>
+                            <td>${bank.bankName}</td>
+                            <td>****${bank.accountNumber ? bank.accountNumber.slice(-4) : '****'}</td>
+                            <td><span class="badge ${bank.isVerified ? 'verified' : 'pending'}">${bank.verificationStatus || 'pending'}</span></td>
+                            <td>${new Date(bank.createdAt).toLocaleDateString()}</td>
+                            <td>
+                                ${bank.verificationStatus === 'pending' ? `
+                                    <button class="btn-small btn-approve" onclick="openBankVerificationModal('${bank._id}')">Verify</button>
+                                ` : '-'}
+                            </td>
+                        </tr>
+                    `).join('');
+                } else {
+                    tbody.innerHTML = '<tr><td colspan="7">No bank accounts found</td></tr>';
+                }
+            } catch (err) {
+                console.error('Error loading bank accounts:', err);
+                document.getElementById('bankAccountsTable').innerHTML = '<tr><td colspan="7">Error loading data</td></tr>';
+            }
+        }
+
+        // Load verifications
+        async function loadVerifications() {
+            try {
+                const token = localStorage.getItem('adminToken');
+                const res = await fetch(`${API_BASE}/admin/verifications`, {
+                    headers: { 'Authorization': `Bearer ${token}` }
+                });
+
+                const data = await res.json();
+                console.log('Verifications data:', data);
+                const tbody = document.getElementById('verificationsTable');
+
+                if (data.success && data.verifications && data.verifications.length > 0) {
+                    tbody.innerHTML = data.verifications.map(v => {
+                        // Process all documents in the verification record
+                        const documentRows = v.documents.map((doc, idx) => {
+                            // Handle both base64 and URL formats
+                            const imageSrc = doc.fileUrl.startsWith('data:') ? doc.fileUrl : doc.fileUrl;
+                            return `
+                                <tr>
+                                    <td>${idx === 0 ? v.phone : ''}</td>
+                                    <td>${doc.type}</td>
+                                    <td>${doc.documentNumber || '-'}</td>
+                                    <td>
+                                        <a href="#" onclick="showImage('${imageSrc.replace(/'/g, "\\'")}'); return false;" class="doc-link">
+                                            <img src="${imageSrc}" alt="Document" style="max-width: 50px; max-height: 50px; cursor: pointer; border-radius: 4px;">
+                                        </a>
+                                    </td>
+                                    <td><span class="badge ${doc.verificationStatus === 'approved' ? 'verified' : doc.verificationStatus === 'rejected' ? 'rejected' : 'pending'}">${doc.verificationStatus}</span></td>
+                                    <td>${new Date(doc.uploadedAt).toLocaleDateString()}</td>
+                                    <td>
+                                        ${doc.verificationStatus === 'pending' ? `
+                                            <button class="btn-small btn-approve" onclick="approveDocument('${v._id}', '${doc._id}', '${v.phone}')">Approve</button>
+                                            <button class="btn-small btn-reject" onclick="rejectDocument('${v._id}', '${doc._id}', '${v.phone}')">Reject</button>
+                                        ` : doc.rejectionReason ? `<span title="${doc.rejectionReason}">Rejected</span>` : 'Approved'}
+                                    </td>
+                                </tr>
+                            `;
+                        }).join('');
+                        return documentRows;
+                    }).join('');
+                } else {
+                    tbody.innerHTML = '<tr><td colspan="7" style="text-align: center; padding: 20px;">No verification documents found</td></tr>';
+                }
+            } catch (err) {
+                console.error('Error loading verifications:', err);
+                document.getElementById('verificationsTable').innerHTML = '<tr><td colspan="7" style="text-align: center; color: red;">Error loading data</td></tr>';
+            }
+        }
+
+        // Load wallets
+        async function loadWallets() {
+            try {
+                const token = localStorage.getItem('adminToken');
+                const res = await fetch(`${API_BASE}/admin/wallets/summary`, {
+                    headers: { 'Authorization': `Bearer ${token}` }
+                });
+
+                const data = await res.json();
+                const tbody = document.getElementById('walletsTable');
+
+                if (data.success && data.wallets) {
+                    tbody.innerHTML = data.wallets.map(wallet => `
+                        <tr>
+                            <td>${wallet.phone}</td>
+                            <td>${wallet.userName || '-'}</td>
+                            <td>₹${wallet.balance.toLocaleString()}</td>
+                            <td>${new Date(wallet.updatedAt).toLocaleDateString()}</td>
+                            <td><button class="btn-small btn-view">Details</button></td>
+                        </tr>
+                    `).join('');
+                } else {
+                    tbody.innerHTML = '<tr><td colspan="5">No wallets found</td></tr>';
+                }
+            } catch (err) {
+                console.error('Error loading wallets:', err);
+                document.getElementById('walletsTable').innerHTML = '<tr><td colspan="5">Error loading data</td></tr>';
+            }
+        }
+
+        // Approve document
+        async function approveDocument(verificationId, documentId, phone) {
+            if (!confirm(`Approve document for ${phone}?`)) return;
+
+            try {
+                const token = localStorage.getItem('adminToken');
+                const res = await fetch(`${API_BASE}/admin/verify-document`, {
+                    method: 'POST',
+                    headers: { 
+                        'Authorization': `Bearer ${token}`,
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        verificationId,
+                        documentId,
+                        status: 'approved'
+                    })
+                });
+
+                const data = await res.json();
+                if (data.success) {
+                    alert('Document approved!');
+                    loadVerifications();
+                } else {
+                    alert('Error: ' + (data.message || 'Failed to approve'));
+                }
+            } catch (err) {
+                console.error('Error approving document:', err);
+                alert('Failed to approve document');
+            }
+        }
+
+        // Reject document
+        async function rejectDocument(verificationId, documentId, phone) {
+            const reason = prompt(`Reject document for ${phone}?\nProvide reason (optional):`);
+            if (reason === null) return;
+
+            try {
+                const token = localStorage.getItem('adminToken');
+                const res = await fetch(`${API_BASE}/admin/verify-document`, {
+                    method: 'POST',
+                    headers: { 
+                        'Authorization': `Bearer ${token}`,
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        verificationId,
+                        documentId,
+                        status: 'rejected',
+                        rejectionReason: reason || 'Rejected by admin'
+                    })
+                });
+
+                const data = await res.json();
+                if (data.success) {
+                    alert('Document rejected!');
+                    loadVerifications();
+                } else {
+                    alert('Error: ' + (data.message || 'Failed to reject'));
+                }
+            } catch (err) {
+                console.error('Error rejecting document:', err);
+                alert('Failed to reject document');
+            }
+        }
+
+        // Approve verification (legacy - for backwards compatibility)
+        async function approveVerification(verificationId, phone) {
+            if (!confirm(`Approve verification for ${phone}?`)) return;
+
+            try {
+                const token = localStorage.getItem('adminToken');
+                const res = await fetch(`${API_BASE}/admin/verify-document`, {
+                    method: 'POST',
+                    headers: { 
+                        'Authorization': `Bearer ${token}`,
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        verificationId,
+                        status: 'approved'
+                    })
+                });
+
+                const data = await res.json();
+                if (data.success) {
+                    alert('Verification approved!');
+                    loadVerifications();
+                } else {
+                    alert('Error: ' + (data.message || 'Failed to approve'));
+                }
+            } catch (err) {
+                console.error('Error approving verification:', err);
+                alert('Failed to approve verification');
+            }
+        }
+
+        // Reject verification (legacy - for backwards compatibility)
+        async function rejectVerification(verificationId, phone) {
+            if (!confirm(`Reject verification for ${phone}?`)) return;
+
+            try {
+                const token = localStorage.getItem('adminToken');
+                const res = await fetch(`${API_BASE}/admin/verify-document`, {
+                    method: 'POST',
+                    headers: { 
+                        'Authorization': `Bearer ${token}`,
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        verificationId,
+                        status: 'rejected'
+                    })
+                });
+
+                const data = await res.json();
+                if (data.success) {
+                    alert('Verification rejected!');
+                    loadVerifications();
+                } else {
+                    alert('Error: ' + (data.message || 'Failed to reject'));
+                }
+            } catch (err) {
+                console.error('Error rejecting verification:', err);
+                alert('Failed to reject verification');
+            }
+        }
+
+        // Load activity logs
+        async function loadActivityLogs() {
+            try {
+                const token = localStorage.getItem('adminToken');
+                const res = await fetch(`${API_BASE}/admin/activity-logs`, {
+                    headers: { 'Authorization': `Bearer ${token}` }
+                });
+
+                const data = await res.json();
+                const tbody = document.getElementById('activityTable');
+
+                if (data.success && data.logs) {
+                    tbody.innerHTML = data.logs.slice(0, 100).map(log => `
+                        <tr>
+                            <td>${log.userId}</td>
+                            <td>${log.action}</td>
+                            <td>${log.details || '-'}</td>
+                            <td>${new Date(log.timestamp).toLocaleString()}</td>
+                        </tr>
+                    `).join('');
+                } else {
+                    tbody.innerHTML = '<tr><td colspan="4">No activity logs found</td></tr>';
+                }
+            } catch (err) {
+                console.error('Error loading activity logs:', err);
+                document.getElementById('activityTable').innerHTML = '<tr><td colspan="4">Error loading data</td></tr>';
+            }
+        }
+
+        // Load city leaderboard
+        async function loadLeaderboard() {
+            try {
+                const token = localStorage.getItem('adminToken');
+                const city = document.getElementById('citySelect')?.value || '';
+                const queryString = city ? `?city=${encodeURIComponent(city)}` : '';
+                
+                const res = await fetch(`${API_BASE}/admin/leaderboard${queryString}`, {
+                    headers: { 'Authorization': `Bearer ${token}` }
+                });
+
+                const data = await res.json();
+                const tbody = document.getElementById('leaderboardTable');
+                const citySelect = document.getElementById('citySelect');
+
+                // Populate city dropdown if not already populated
+                if (data.success && data.cities && citySelect.children.length <= 1) {
+                    data.cities.forEach(cityObj => {
+                        const option = document.createElement('option');
+                        option.value = cityObj.city;
+                        option.textContent = `${cityObj.city}, ${cityObj.state}`;
+                        citySelect.appendChild(option);
+                    });
+                }
+
+                if (data.success && data.leaderboard && data.leaderboard.length > 0) {
+                    tbody.innerHTML = data.leaderboard.map((entry, index) => `
+                        <tr>
+                            <td>${entry.rank || index + 1}</td>
+                            <td>${entry.name || '-'}</td>
+                            <td>${entry.phone || '-'}</td>
+                            <td><span style="font-size: 12px; background: #f0f0f0; padding: 4px 8px; border-radius: 3px;">${entry.city ? entry.city + ', ' + entry.state : 'N/A'}</span></td>
+                            <td>${entry.avgRating ? entry.avgRating.toFixed(2) : '0'} ⭐</td>
+                            <td>${entry.completedJobs || entry.totalJobsPosted || 0}</td>
+                            <td>${entry.score ? entry.score.toFixed(2) : '0'}</td>
+                        </tr>
+                    `).join('');
+                } else {
+                    tbody.innerHTML = '<tr><td colspan="7">No leaderboard data available</td></tr>';
+                }
+            } catch (err) {
+                console.error('Error loading leaderboard:', err);
+                document.getElementById('leaderboardTable').innerHTML = '<tr><td colspan="7">Error loading data</td></tr>';
+            }
+        }
+
+        // Load support tickets
+        async function loadSupportTickets() {
+            try {
+                const token = localStorage.getItem('adminToken');
+                const status = document.getElementById('ticketStatusFilter')?.value || '';
+                const queryString = status ? `?status=${status}` : '';
+                
+                const res = await fetch(`${API_BASE}/admin/support-tickets${queryString}`, {
+                    headers: { 'Authorization': `Bearer ${token}` }
+                });
+
+                const data = await res.json();
+                const tbody = document.getElementById('ticketsTable');
+
+                if (data.success && data.tickets && data.tickets.length > 0) {
+                    tbody.innerHTML = data.tickets.map(ticket => {
+                        const statusBadgeClass = 
+                            ticket.status === 'resolved' ? 'approved' :
+                            ticket.status === 'open' ? 'pending' :
+                            ticket.status === 'under_review' ? 'warning' : 'pending';
+
+                        return `
+                            <tr>
+                                <td>${ticket.ticketId}</td>
+                                <td>${ticket.reporterPhone}</td>
+                                <td>${ticket.type}</td>
+                                <td>${ticket.subject}</td>
+                                <td><span class="badge ${statusBadgeClass}">${ticket.status}</span></td>
+                                <td>${new Date(ticket.createdAt).toLocaleDateString()}</td>
+                                <td><button class="btn-small btn-view" onclick="viewTicketDetails('${ticket._id}')">View</button></td>
+                            </tr>
+                        `;
+                    }).join('');
+                } else {
+                    tbody.innerHTML = '<tr><td colspan="7">No support tickets found</td></tr>';
+                }
+            } catch (err) {
+                console.error('Error loading support tickets:', err);
+                document.getElementById('ticketsTable').innerHTML = '<tr><td colspan="8">Error loading data</td></tr>';
+            }
+        }
+
+        // View ticket details in modal
+        async function viewTicketDetails(ticketId) {
+            try {
+                const token = localStorage.getItem('adminToken');
+                const res = await fetch(`${API_BASE}/admin/support-tickets/${ticketId}`, {
+                    headers: { 'Authorization': `Bearer ${token}` }
+                });
+
+                const data = await res.json();
+                if (data.success) {
+                    const ticket = data.ticket;
+                    const content = document.getElementById('jobDetailsContent');
+                    content.innerHTML = `
+                        <h4>Ticket #${ticket.ticketId}</h4>
+                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
+                            <div>
+                                <p><strong>Reporter Phone:</strong> ${ticket.reporterPhone}</p>
+                                <p><strong>Type:</strong> ${ticket.type}</p>
+                                <p><strong>Priority:</strong> <span class="badge ${
+                                    ticket.priority === 'urgent' ? 'approved' : 'pending'
+                                }">${ticket.priority}</span></p>
+                                <p><strong>Status:</strong> <span class="badge ${
+                                    ticket.status === 'resolved' ? 'approved' : 'pending'
+                                }">${ticket.status}</span></p>
+                            </div>
+                            <div>
+                                <p><strong>Created:</strong> ${new Date(ticket.createdAt).toLocaleString()}</p>
+                                <p><strong>Updated:</strong> ${new Date(ticket.updatedAt).toLocaleString()}</p>
+                                ${ticket.resolvedAt ? `<p><strong>Resolved:</strong> ${new Date(ticket.resolvedAt).toLocaleString()}</p>` : ''}
+                                ${ticket.assignedToAdmin ? `<p><strong>Assigned To:</strong> ${ticket.assignedToAdmin}</p>` : ''}
+                            </div>
+                        </div>
+                        <div style="margin-top: 15px; border-top: 1px solid #ddd; padding-top: 15px;">
+                            <h5>${ticket.subject}</h5>
+                            <p>${ticket.description}</p>
+                        </div>
+                        ${ticket.resolution ? `
+                        <div style="margin-top: 15px; background: #f0f8ff; padding: 10px; border-radius: 5px;">
+                            <h5>Resolution</h5>
+                            <p><strong>Type:</strong> ${ticket.resolution}</p>
+                            ${ticket.resolutionNotes ? `<p><strong>Notes:</strong> ${ticket.resolutionNotes}</p>` : ''}
+                        </div>
+                        ` : `
+                        <div style="margin-top: 15px;">
+                            <textarea id="resolutionNotes" placeholder="Resolution notes..." style="width: 100%; height: 80px; padding: 10px; border: 1px solid #ddd; border-radius: 5px;"></textarea>
+                            <select id="resolutionType" style="width: 100%; padding: 8px; margin-top: 10px; border: 1px solid #ddd; border-radius: 5px;">
+                                <option value="">Select Resolution Type</option>
+                                <option value="refund">Refund Issued</option>
+                                <option value="replacement">Replacement/Redo Work</option>
+                                <option value="warning">Warning Issued</option>
+                                <option value="suspension">Account Suspended</option>
+                                <option value="other">Other</option>
+                            </select>
+                            <button class="btn-primary" onclick="resolveTicket('${ticket._id}', '${ticket.ticketId}')" style="width: 100%; margin-top: 10px;">Resolve Ticket</button>
+                        </div>
+                        `}
+                    `;
+                    document.getElementById('jobModal').classList.add('show');
+                }
+            } catch (err) {
+                console.error('Error fetching ticket details:', err);
+                alert('Failed to load ticket details');
+            }
+        }
+
+        // Resolve support ticket
+        async function resolveTicket(ticketId, ticketNumber) {
+            const resolution = document.getElementById('resolutionType').value;
+            const resolutionNotes = document.getElementById('resolutionNotes').value;
+
+            if (!resolution) {
+                alert('Please select a resolution type');
+                return;
+            }
+
+            try {
+                const token = localStorage.getItem('adminToken');
+                const res = await fetch(`${API_BASE}/admin/support-tickets/${ticketNumber}/resolve`, {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${token}`,
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ resolution, resolutionNotes, status: 'resolved' })
+                });
+
+                const data = await res.json();
+                if (data.success) {
+                    alert('Ticket resolved successfully!');
+                    closeModal('jobModal');
+                    loadSupportTickets();
+                } else {
+                    alert('Error: ' + (data.message || 'Failed to resolve ticket'));
+                }
+            } catch (err) {
+                console.error('Error resolving ticket:', err);
+                alert('Failed to resolve ticket');
+            }
+        }
+
+        // Show job details modal
+        let currentJobData = null;
+        async function showJobDetails(jobId) {
+            try {
+                const token = localStorage.getItem('adminToken');
+                const res = await fetch(`${API_BASE}/admin/jobs`, {
+                    headers: { 'Authorization': `Bearer ${token}` }
+                });
+
+                const data = await res.json();
+                if (data.success && data.jobs) {
+                    const job = data.jobs.find(j => j._id === jobId);
+                    if (job) {
+                        currentJobData = job;
+                        const content = document.getElementById('jobDetailsContent');
+                        
+                        const formatDate = (date) => date ? new Date(date).toLocaleString() : '-';
+                        const getPaymentStatusClass = (status) => {
+                            if (!status) return 'pending';
+                            if (status.toLowerCase() === 'paid') return 'approved';
+                            return 'pending';
+                        };
+                        
+                        content.innerHTML = `
+                            <!-- Basic Job Information -->
+                            <div style="margin-bottom: 20px;">
+                                <h4>${job.title}</h4>
+                                <p style="color: #666; margin: 5px 0;">${job.description || '-'}</p>
+                            </div>
+
+                            <!-- Job Overview Grid -->
+                            <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 15px; margin-bottom: 20px;">
+                                <div style="background: #f9f9f9; padding: 10px; border-radius: 5px;">
+                                    <p style="font-size: 12px; color: #999; margin-bottom: 5px;">AMOUNT</p>
+                                    <p style="font-size: 18px; font-weight: bold; color: #27ae60;">₹${job.amount}</p>
+                                </div>
+                                <div style="background: #f9f9f9; padding: 10px; border-radius: 5px;">
+                                    <p style="font-size: 12px; color: #999; margin-bottom: 5px;">STATUS</p>
+                                    <span class="badge ${job.status === 'completed' ? 'approved' : job.status === 'pending' ? 'pending' : 'warning'}">${job.status || 'pending'}</span>
+                                </div>
+                                <div style="background: #f9f9f9; padding: 10px; border-radius: 5px;">
+                                    <p style="font-size: 12px; color: #999; margin-bottom: 5px;">WORKER TYPE</p>
+                                    <p style="font-weight: bold;">${job.workerType || '-'}</p>
+                                </div>
+                            </div>
+
+                            <!-- Contractor Information -->
+                            <div style="border: 1px solid #ddd; padding: 15px; border-radius: 5px; margin-bottom: 20px;">
+                                <h5 style="margin-top: 0; margin-bottom: 10px;">Contractor Information</h5>
+                                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
+                                    <div>
+                                        <p style="margin: 5px 0;"><strong>Name:</strong> ${job.contractorName || '-'}</p>
+                                        <p style="margin: 5px 0;"><strong>Phone:</strong> ${job.contractorPhone || '-'}</p>
+                                    </div>
+                                    <div>
+                                        <p style="margin: 5px 0;"><strong>Posted Date:</strong> ${formatDate(job.date)}</p>
+                                        <p style="margin: 5px 0;"><strong>Created At:</strong> ${formatDate(job.createdAt)}</p>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Worker & Acceptance Information -->
+                            ${job.acceptedBy ? `
+                            <div style="border: 1px solid #ddd; padding: 15px; border-radius: 5px; margin-bottom: 20px;">
+                                <h5 style="margin-top: 0; margin-bottom: 10px;">Worker & Acceptance Details</h5>
+                                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
+                                    <div>
+                                        <p style="margin: 5px 0;"><strong>Accepted By:</strong> ${job.acceptedBy || '-'}</p>
+                                        ${job.acceptedWorker?.name ? `<p style="margin: 5px 0;"><strong>Worker Name:</strong> ${job.acceptedWorker.name}</p>` : ''}
+                                        ${job.acceptedWorker?.phone ? `<p style="margin: 5px 0;"><strong>Worker Phone:</strong> ${job.acceptedWorker.phone}</p>` : ''}
+                                    </div>
+                                    <div>
+                                        <p style="margin: 5px 0;"><strong>Accepted At:</strong> ${formatDate(job.acceptedAt)}</p>
+                                        ${job.timeSpentMinutes ? `<p style="margin: 5px 0;"><strong>Time Spent:</strong> ${Math.floor(job.timeSpentMinutes / 60)}h ${job.timeSpentMinutes % 60}m</p>` : ''}
+                                    </div>
+                                </div>
+                            </div>
+                            ` : `<div style="background: #fff3cd; padding: 10px; border-radius: 5px; margin-bottom: 20px;"><strong>⚠️ Not yet accepted by any worker</strong></div>`}
+
+                            <!-- Attendance Information -->
+                            ${job.attendanceStatus ? `
+                            <div style="border: 1px solid #ddd; padding: 15px; border-radius: 5px; margin-bottom: 20px;">
+                                <h5 style="margin-top: 0; margin-bottom: 10px;">Attendance Information</h5>
+                                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
+                                    <div>
+                                        <p style="margin: 5px 0;"><strong>Status:</strong> <span class="badge ${job.attendanceStatus === 'present' ? 'approved' : 'pending'}">${job.attendanceStatus}</span></p>
+                                    </div>
+                                    <div>
+                                        <p style="margin: 5px 0;"><strong>Time:</strong> ${formatDate(job.attendanceTime)}</p>
+                                    </div>
+                                </div>
+                            </div>
+                            ` : ''}
+
+                            <!-- Payment Information -->
+                            <div style="border: 1px solid #ddd; padding: 15px; border-radius: 5px; margin-bottom: 20px;">
+                                <h5 style="margin-top: 0; margin-bottom: 10px;">Payment Details</h5>
+                                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
+                                    <div>
+                                        <p style="margin: 5px 0;"><strong>Status:</strong> <span class="badge ${getPaymentStatusClass(job.paymentStatus)}">${job.paymentStatus || 'Pending'}</span></p>
+                                        <p style="margin: 5px 0;"><strong>Mode:</strong> ${job.paymentMode || '-'}</p>
+                                    </div>
+                                    <div>
+                                        <p style="margin: 5px 0;"><strong>Payment Time:</strong> ${formatDate(job.paymentTime)}</p>
+                                        <p style="margin: 5px 0;"><strong>Amount:</strong> ₹${job.amount}</p>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Rating & Feedback -->
+                            ${job.rating && (job.rating.stars || job.rating.feedback) ? `
+                            <div style="border: 1px solid #ddd; padding: 15px; border-radius: 5px; margin-bottom: 20px; background: #f0f8ff;">
+                                <h5 style="margin-top: 0; margin-bottom: 10px;">Rating & Feedback</h5>
+                                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
+                                    <div>
+                                        <p style="margin: 5px 0;"><strong>Rating:</strong> <span style="font-size: 18px; font-weight: bold;">${job.rating.stars || '-'}</span> ⭐</p>
+                                        <p style="margin: 5px 0;"><strong>Rated By:</strong> ${job.rating.ratedBy || '-'}</p>
+                                    </div>
+                                    <div>
+                                        <p style="margin: 5px 0;"><strong>Feedback:</strong> ${job.rating.feedback || '-'}</p>
+                                        <p style="margin: 5px 0;"><strong>Rated At:</strong> ${formatDate(job.rating.ratedAt)}</p>
+                                    </div>
+                                </div>
+                            </div>
+                            ` : ''}
+                        `;
+                        document.getElementById('jobModal').classList.add('show');
+                    }
+                }
+            } catch (err) {
+                console.error('Error showing job details:', err);
+                alert('Failed to load job details');
+            }
+        }
+
+        // Open bank verification modal
+        function openBankVerificationModal(bankId) {
+            currentBankAccountId = bankId;
+            const modalDetails = document.getElementById('modalDetails');
+            modalDetails.innerHTML = `
+                <div class="form-group">
+                    <label>Decision</label>
+                    <select id="verificationDecision">
+                        <option value="">Select...</option>
+                        <option value="approved">Approve</option>
+                        <option value="rejected">Reject</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Notes (Optional)</label>
+                    <textarea id="verificationNotes" placeholder="Add any verification notes..."></textarea>
+                </div>
+            `;
+            document.getElementById('verificationModal').classList.add('show');
+        }
+
+        // Approve bank account
+        async function approveBankAccount() {
+            const decision = document.getElementById('verificationDecision').value;
+            const notes = document.getElementById('verificationNotes').value;
+
+            if (!decision) {
+                alert('Please select a decision');
+                return;
+            }
+
+            try {
+                const token = localStorage.getItem('adminToken');
+                const endpoint = decision === 'approved' ? 'verify' : 'reject';
+                
+                const res = await fetch(`${API_BASE}/admin/bank-accounts/${currentBankAccountId}/${endpoint}`, {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${token}`,
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ reason: notes })
+                });
+
+                const data = await res.json();
+                if (data.success) {
+                    alert(`Bank account ${decision}!`);
+                    closeModal('verificationModal');
+                    loadBankAccounts();
+                } else {
+                    alert('Error: ' + (data.message || 'Unknown error'));
+                }
+            } catch (err) {
+                console.error('Error:', err);
+                alert('Error processing verification');
+            }
+        }
+
+        // Reject bank account
+        async function rejectBankAccount() {
+            const notes = document.getElementById('verificationNotes').value || 'Rejected by admin';
+
+            try {
+                const token = localStorage.getItem('adminToken');
+                const res = await fetch(`${API_BASE}/admin/bank-accounts/${currentBankAccountId}/reject`, {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${token}`,
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ reason: notes })
+                });
+
+                const data = await res.json();
+                if (data.success) {
+                    alert('Bank account rejected');
+                    closeModal('verificationModal');
+                    loadBankAccounts();
+                } else {
+                    alert('Error: ' + (data.message || 'Unknown error'));
+                }
+            } catch (err) {
+                console.error('Error:', err);
+                alert('Error rejecting verification');
+            }
+        }
+
+        // Close modal
+        function closeModal(modalId) {
+            document.getElementById(modalId).classList.remove('show');
+        }
+
+        // Show full-size image
+        function showImage(imageSrc) {
+            const modal = document.createElement('div');
+            modal.style.cssText = `
+                position: fixed;
+                top: 0;
+                left: 0;
+                right: 0;
+                bottom: 0;
+                background: rgba(0,0,0,0.9);
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                z-index: 9999;
+                cursor: pointer;
+            `;
+            
+            const img = document.createElement('img');
+            img.src = imageSrc;
+            img.style.cssText = `
+                max-width: 90%;
+                max-height: 90%;
+                border-radius: 8px;
+                box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+            `;
+            
+            modal.appendChild(img);
+            modal.onclick = () => modal.remove();
+            document.body.appendChild(modal);
+        }
+
+        // Logout
+        function logout() {
+            localStorage.removeItem('adminToken');
+            window.location.href = '/admin/login.html';
+        }
+
+        // Close modal when clicking outside
+        document.addEventListener('click', (e) => {
+            if (e.target.classList.contains('modal')) {
+                e.target.classList.remove('show');
+            }
+        });
+
+        // Add city select change listener
+        document.getElementById('citySelect')?.addEventListener('change', () => {
+            loadLeaderboard();
+        });
+    </script>
+</body>
+</html>

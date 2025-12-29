@@ -27,10 +27,13 @@ router.post("/upload", authenticateToken, upload.single("file"), async (req, res
 
     const fileUrl = `${req.protocol}://${req.get("host")}/uploads/${req.file.filename}`;
 
+    // ✅ Handle type safely - it may not exist in req.body
+    const type = (req.body && req.body.type) || "document";
+
     // Save in uploads collection
     const newUpload = new Upload({
       userId: user._id,
-      type: req.body.type || "document",
+      type: type,
       fileName: req.file.filename,
       fileUrl,
     });

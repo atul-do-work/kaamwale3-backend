@@ -69,6 +69,7 @@ app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use("/uploads", express.static(path.join(__dirname, "uploads"))); // ✅ serve uploaded images
+app.use("/admin", express.static(path.join(__dirname, "public/admin"))); // ✅ serve admin panel
 
 // ✅ Mount wallet routes for deposit/withdraw
 const walletRoutes = require("./routes/wallet");
@@ -85,6 +86,10 @@ app.use("/leaderboard", leaderboardRoutes);
 // ✅ Mount payout routes for earnings & payouts
 const payoutRoutes = require("./routes/payout");
 app.use("/api/payouts", payoutRoutes);
+
+// ✅ Mount admin routes for dashboard
+const adminRoutes = require("./routes/admin");
+app.use("/admin", adminRoutes);
 
 // ✅ Import and start leaderboard scheduler
 const { startLeaderboardScheduler } = require("./services/leaderboardScheduler");
@@ -886,6 +891,33 @@ app.get("/users", authenticateToken, async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).json({ message: "Failed to load users" });
+  }
+});
+
+// ✅ GET: User profile (for dashboard authentication)
+app.get("/users/profile", authenticateToken, async (req, res) => {
+  try {
+    const user = await User.findOne({ phone: req.user.phone });
+    
+    if (!user) {
+      return res.status(404).json({ success: false, message: "User not found" });
+    }
+
+    return res.json({
+      success: true,
+      user: {
+        _id: user._id,
+        name: user.name,
+        phone: user.phone,
+        role: user.role,
+        profilePhoto: user.profilePhoto,
+        city: user.city,
+        state: user.state
+      }
+    });
+  } catch (err) {
+    console.error("Profile error:", err);
+    return res.status(500).json({ success: false, message: "Internal server error" });
   }
 });
 
@@ -2285,10 +2317,10 @@ app.get('/support/ticket/:ticketId', authenticateToken, async (req, res) => {
 // ---------- VERIFICATION DOCUMENT ENDPOINTS ----------
 app.post('/verification/upload', authenticateToken, async (req, res) => {
   try {
-    const { type, fileUrl, documentNumber, expiryDate } = req.body;
+    const { type, imageData, fileName, documentNumber, expiryDate } = req.body;
 
-    if (!type || !fileUrl) {
-      return res.status(400).json({ success: false, message: 'Missing required fields' });
+    if (!type || !imageData) {
+      return res.status(400).json({ success: false, message: 'Missing document type or image data' });
     }
 
     let verification = await VerificationDocument.findOne({ phone: req.user.phone });
@@ -2302,10 +2334,11 @@ app.post('/verification/upload', authenticateToken, async (req, res) => {
       });
     }
 
+    // Store base64 image data directly in MongoDB
     const document = {
       type,
-      fileUrl,
-      fileName: `${type}_${Date.now()}`,
+      fileUrl: imageData, // ✅ Store base64 image data directly
+      fileName: fileName || `${type}_${Date.now()}`,
       documentNumber,
       uploadedAt: new Date(),
       verificationStatus: 'pending',
