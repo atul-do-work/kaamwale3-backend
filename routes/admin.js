@@ -94,6 +94,7 @@ router.post('/register', async (req, res) => {
 // ============================
 router.get('/dashboard', authenticateToken, checkAdmin, async (req, res) => {
     try {
+        // Basic counts
         const totalUsers = await User.countDocuments({ role: 'contractor' });
         const totalWorkers = await Worker.countDocuments();
         const totalJobs = await Job.countDocuments();
@@ -103,16 +104,138 @@ router.get('/dashboard', authenticateToken, checkAdmin, async (req, res) => {
         const totalWalletBalance = wallets.reduce((sum, w) => sum + (w.balance || 0), 0);
         
         const verifiedUsers = await User.countDocuments({ 'verificationStatus': 'approved' });
+        
+        // Job Status Breakdown
+        const jobsByStatus = await Job.aggregate([
+            { $group: { _id: '$status', count: { $sum: 1 } } }
+        ]);
+        
+        // Payment Status Breakdown
+        const paymentBreakdown = await Job.aggregate([
+            { $group: { _id: '$paymentStatus', count: { $sum: 1 } } }
+        ]);
+        
+        // Average job amount
+        const avgJobAmount = await Job.aggregate([
+            { $group: { _id: null, avg: { $avg: '$amount' }, total: { $sum: '$amount' } } }
+        ]);
+        
+        // Worker availability
+        const availableWorkers = await Worker.countDocuments({ isAvailable: true });
+        const unavailableWorkers = await Worker.countDocuments({ isAvailable: false });
+        
+        // Verified workers
+        const verifiedWorkers = await Worker.countDocuments({ isVerified: true });
+        
+        // Workers with ratings > 4.5
+        const topRatedWorkers = await Worker.countDocuments({ avgRating: { $gte: 4.5 } });
+        
+        // Recent jobs (last 7 days)
+        const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+        const recentJobs = await Job.countDocuments({ createdAt: { $gte: sevenDaysAgo } });
+        
+        // Recent users (last 7 days)
+        const recentUsers = await User.countDocuments({ createdAt: { $gte: sevenDaysAgo } });
+        
+        // Support tickets status
+        const ticketsByStatus = await SupportTicket.aggregate([
+            { $group: { _id: '$status', count: { $sum: 1 } } }
+        ]);
+        
+        // Open tickets
+        const openTickets = await SupportTicket.countDocuments({ status: { $in: ['open', 'under_review', 'waiting_user_response'] } });
+        
+        // Average worker rating
+        const avgWorkerRating = await Worker.aggregate([
+            { $group: { _id: null, avg: { $avg: '$avgRating' } } }
+        ]);
+        
+        // Worker skills distribution
+        const skillsDistribution = await Worker.aggregate([
+            { $unwind: '$skills' },
+            { $group: { _id: '$skills', count: { $sum: 1 } } },
+            { $sort: { count: -1 } },
+            { $limit: 10 }
+        ]);
+        
+        // Cities with most activity
+        const citiesActivity = await User.aggregate([
+            { $match: { city: { $exists: true, $ne: null } } },
+            { $group: { _id: '$city', count: { $sum: 1 } } },
+            { $sort: { count: -1 } },
+            { $limit: 5 }
+        ]);
+        
+        // Bank accounts verification status
+        const bankAccountsStatus = await BankAccount.aggregate([
+            { $group: { _id: '$verificationStatus', count: { $sum: 1 } } }
+        ]);
+        
+        // Total pending verification documents
+        const pendingDocuments = await VerificationDocument.countDocuments({ 
+            'documents': { $elemMatch: { verificationStatus: 'pending' } }
+        });
+        
+        // Platform revenue (paid jobs amount)
+        const platformRevenue = await Job.aggregate([
+            { $match: { paymentStatus: 'Paid' } },
+            { $group: { _id: null, total: { $sum: '$amount' } } }
+        ]);
 
         res.json({
             success: true,
             stats: {
+                // Core metrics
                 totalUsers,
                 totalWorkers,
                 totalJobs,
                 completedJobs,
                 totalWalletBalance,
-                verifiedUsers
+                verifiedUsers,
+                
+                // Job analytics
+                jobsByStatus: jobsByStatus.reduce((acc, item) => {
+                    acc[item._id || 'unknown'] = item.count;
+                    return acc;
+                }, {}),
+                paymentBreakdown: paymentBreakdown.reduce((acc, item) => {
+                    acc[item._id || 'unpaid'] = item.count;
+                    return acc;
+                }, {}),
+                avgJobAmount: avgJobAmount[0]?.avg || 0,
+                totalJobAmount: avgJobAmount[0]?.total || 0,
+                
+                // Worker analytics
+                availableWorkers,
+                unavailableWorkers,
+                verifiedWorkers,
+                topRatedWorkers,
+                avgWorkerRating: avgWorkerRating[0]?.avg || 0,
+                
+                // Recent activity
+                recentJobs,
+                recentUsers,
+                
+                // Support tickets
+                openTickets,
+                ticketsByStatus: ticketsByStatus.reduce((acc, item) => {
+                    acc[item._id || 'unknown'] = item.count;
+                    return acc;
+                }, {}),
+                
+                // Skills and locations
+                topSkills: skillsDistribution.slice(0, 5),
+                topCities: citiesActivity,
+                
+                // Verification analytics
+                bankAccountsStatus: bankAccountsStatus.reduce((acc, item) => {
+                    acc[item._id || 'unverified'] = item.count;
+                    return acc;
+                }, {}),
+                pendingDocuments,
+                
+                // Revenue
+                platformRevenue: platformRevenue[0]?.total || 0
             }
         });
     } catch (error) {
