@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "908152812324",
+    "project_id": "do-work-c3f71",
+    "storage_bucket": "do-work-c3f71.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:908152812324:android:4d52f7d9aafce6c35539b1",
+        "android_client_info": {
+          "package_name": "com.atulsharma897438.kaamwale3"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCX61hSisx0DGVM7EZmLYx1sz0Pvib3TWs"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

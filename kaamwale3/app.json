@@ -1,0 +1,59 @@
+{
+  "expo": {
+    "name": "DoWork",
+    "slug": "do-work-map",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "scheme": "kaamwale3",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
+
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.atulsharma897438.kaamwale3",
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      }
+    },
+
+    "android": {
+      "package": "com.atulsharma897438.kaamwale3",
+      "permissions": ["INTERNET", "POST_NOTIFICATIONS", "RECEIVE_BOOT_COMPLETED", "MODIFY_AUDIO_SETTINGS"],
+      "googleServicesFile": "./google-services.json",
+      "icon": "./assets/icon.png",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#E6F4FE"
+      }
+    },
+
+    "plugins": [
+      "expo-router",
+      "@maplibre/maplibre-react-native",
+      "expo-notifications",
+      "expo-web-browser",
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/splash.png",
+          "imageWidth": 200,
+          "resizeMode": "contain",
+          "backgroundColor": "#ffffff"
+        }
+      ]
+    ],
+
+    "experiments": {
+      "typedRoutes": true,
+      "reactCompiler": true
+    },
+
+    "extra": {
+      "eas": {
+        "projectId": "e4907a5d-c026-41c1-8cb5-0ce75ae7bc77"
+      }
+    },
+
+    "owner": "mapboxatul_41721"
+  }
+}

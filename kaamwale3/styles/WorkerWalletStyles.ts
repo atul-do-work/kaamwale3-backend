@@ -1,0 +1,157 @@
+import { StyleSheet, Dimensions } from 'react-native';
+
+const { height, width } = Dimensions.get('window');
+
+export default StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: '#f5f5f5',
+  },
+  headerContainer: {
+    width: '100%',
+    height: height * 0.2,
+    backgroundColor: '#1a2f4d',
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderBottomLeftRadius: 25,
+    borderBottomRightRadius: 25,
+    elevation: 5,
+    shadowColor: '#000',
+    shadowOpacity: 0.2,
+    shadowOffset: { width: 0, height: 2 },
+    shadowRadius: 4,
+  },
+  headerText: {
+    color: '#fff',
+    fontSize: 15,
+    fontWeight: '600',
+    marginBottom: 6,
+  },
+  amountText: {
+    color: '#fff',
+    fontSize: 30,
+    fontWeight: 'bold',
+  },
+  balanceContainer: {
+    width: width * 0.9,
+    alignSelf: 'center',
+    marginTop: 15,
+    backgroundColor: '#fff',
+    borderRadius: 20,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 20,
+    paddingHorizontal: 20,
+    elevation: 3,
+    shadowColor: '#000',
+    shadowOpacity: 0.1,
+    shadowOffset: { width: 0, height: 2 },
+    shadowRadius: 4,
+  },
+  balanceTitle: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#333',
+  },
+  balanceAmount: {
+    fontSize: 17,
+    fontWeight: 'bold',
+    color: '#1a2f4d',
+  },
+  // Cards row container
+  cardsRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'space-between',
+    paddingHorizontal: 20,
+    marginTop: 20,
+  },
+  cardContainer: {
+    width: (width * 0.9) / 2 - 10, // 2 cards per row with spacing
+    backgroundColor: '#fff',
+    borderRadius: 15,
+    paddingVertical: 20,
+    paddingHorizontal: 10,
+    marginBottom: 15,
+    justifyContent: 'center',
+    alignItems: 'center',
+    elevation: 3,
+    shadowColor: '#000',
+    shadowOpacity: 0.1,
+    shadowOffset: { width: 0, height: 2 },
+    shadowRadius: 4,
+  },
+  cardAmount: {
+    fontSize: 20,
+    fontWeight: 'bold',
+    color: '#1a2f4d',
+    marginBottom: 6,
+  },
+  cardTitle: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#333',
+  },
+  cardDate: {
+    fontSize: 12,
+    color: '#777',
+    marginTop: 2,
+  },
+  contentContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginTop: 20,
+  },
+  text: {
+    fontSize: 14,
+    color: '#333',
+  },
+  // Deposit & Withdraw buttons
+  buttonRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    width: '90%',
+    alignSelf: 'center',
+    marginTop: 20,
+  },
+  actionButton: {
+    flex: 0.48,
+    paddingVertical: 14,
+    borderRadius: 12,
+    justifyContent: 'center',
+    alignItems: 'center',
+    elevation: 3,
+    shadowColor: '#000',
+    shadowOpacity: 0.1,
+    shadowOffset: { width: 0, height: 2 },
+    shadowRadius: 4,
+  },
+  buttonText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  // ✅ Added for input row for deposit/withdraw
+  inputRow: {
+    flexDirection: 'row',
+    width: '90%',
+    alignSelf: 'center',
+    marginTop: 15,
+    alignItems: 'center',
+  },
+  amountInput: {
+    flex: 1,
+    borderWidth: 1,
+    borderColor: '#ccc',
+    borderRadius: 12,
+    paddingHorizontal: 15,
+    paddingVertical: 12,
+    marginRight: 10,
+    backgroundColor: '#fff',
+    fontSize: 16,
+    color: '#333',
+  },
+  
+});
