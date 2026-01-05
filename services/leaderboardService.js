@@ -145,10 +145,16 @@ async function calculateContractorScore(userId) {
  */
 async function calculateCityLeaderboard(city, state) {
   try {
-    // Get all contractors in this city
+    // Ensure city and state are properly normalized
+    const normalizedCity = (city || '').toLowerCase().trim();
+    const normalizedState = (state || '').toLowerCase().trim();
+
+    console.log(`🔍 Searching for contractors in: ${normalizedCity}, ${normalizedState}`);
+
+    // Get all contractors in this city with case-insensitive query
     const contractors = await User.find({
-      city: city.toLowerCase(),
-      state: state.toLowerCase(),
+      city: new RegExp(`^${normalizedCity}$`, 'i'), // Case-insensitive regex match
+      state: new RegExp(`^${normalizedState}$`, 'i'), // Case-insensitive regex match
       role: 'contractor', // Only contractors
     });
 

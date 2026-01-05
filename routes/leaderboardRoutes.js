@@ -59,6 +59,79 @@ async function reverseGeocode(latitude, longitude) {
 }
 
 /**
+ * GET /leaderboard/my-city
+ * Get leaderboard for the current user's city
+ * This is the main endpoint contractors should use
+ */
+router.get('/my-city', authenticateToken, async (req, res) => {
+  try {
+    const user = await User.findById(req.user.id);
+
+    if (!user || !user.city) {
+      return res.status(400).json({
+        success: false,
+        message: 'User location not found. Please update your location first.',
+      });
+    }
+
+    const userCity = user.city.toLowerCase().trim();
+    const userState = (user.state || 'Unknown').toLowerCase().trim();
+
+    console.log(`📍 Fetching leaderboard for user's city: ${userCity}, ${userState}`);
+
+    // Try to get from cache first
+    let leaderboard = await CityLeaderboard.findOne({
+      city: new RegExp(`^${userCity}$`, 'i'),
+      state: new RegExp(`^${userState}$`, 'i'),
+    });
+
+    // If not in cache or expired, calculate fresh
+    if (!leaderboard || new Date() > leaderboard.expiresAt) {
+      console.log(`🔄 Recalculating leaderboard for ${userCity}, ${userState}`);
+      const leaderboardData = await calculateCityLeaderboard(userCity, userState);
+
+      // Save to cache
+      leaderboard = await CityLeaderboard.findOneAndUpdate(
+        { city: userCity, state: userState },
+        {
+          city: userCity,
+          state: userState,
+          leaderboard: leaderboardData,
+          totalContractors: leaderboardData.length,
+          calculatedAt: new Date(),
+          expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
+        },
+        { upsert: true, new: true }
+      );
+    }
+
+    // Find current user's rank
+    const currentUserRank = leaderboard.leaderboard.find(
+      (item) => item.contractorId.toString() === req.user.id
+    );
+
+    res.json({
+      success: true,
+      city: leaderboard.city,
+      state: leaderboard.state,
+      totalContractors: leaderboard.totalContractors,
+      leaderboard: leaderboard.leaderboard,
+      myRank: currentUserRank?.rank || null,
+      myScore: currentUserRank?.score || 0,
+      myTier: currentUserRank?.tier || 'new',
+      calculatedAt: leaderboard.calculatedAt,
+    });
+  } catch (err) {
+    console.error('Error fetching my city leaderboard:', err);
+    res.status(500).json({
+      success: false,
+      message: 'Error fetching leaderboard',
+      error: err.message,
+    });
+  }
+});
+
+/**
  * GET /leaderboard/city
  * Get leaderboard for contractor's city (auto-detect from lat/lon)
  * Query: latitude, longitude
@@ -86,8 +159,8 @@ router.get('/city', authenticateToken, async (req, res) => {
 
     // Try to get from cache first
     let leaderboard = await CityLeaderboard.findOne({
-      city: geoData.city,
-      state: geoData.state,
+      city: new RegExp(`^${geoData.city}$`, 'i'),
+      state: new RegExp(`^${geoData.state}$`, 'i'),
     });
 
     // If not in cache or expired, calculate fresh
@@ -96,7 +169,10 @@ router.get('/city', authenticateToken, async (req, res) => {
 
       // Save to cache
       leaderboard = await CityLeaderboard.findOneAndUpdate(
-        { city: geoData.city, state: geoData.state },
+        { 
+          city: new RegExp(`^${geoData.city}$`, 'i'),
+          state: new RegExp(`^${geoData.state}$`, 'i')
+        },
         {
           city: geoData.city,
           state: geoData.state,
@@ -148,13 +224,13 @@ router.get('/city/:cityName', authenticateToken, async (req, res) => {
 
     if (state) {
       leaderboard = await CityLeaderboard.findOne({
-        city: cityName.toLowerCase(),
-        state: state.toLowerCase(),
+        city: new RegExp(`^${cityName}$`, 'i'),
+        state: new RegExp(`^${state}$`, 'i'),
       });
     } else {
       // Try to find any city with this name
       leaderboard = await CityLeaderboard.findOne({
-        city: cityName.toLowerCase(),
+        city: new RegExp(`^${cityName}$`, 'i'),
       });
     }
 
@@ -167,11 +243,14 @@ router.get('/city/:cityName', authenticateToken, async (req, res) => {
 
       leaderboard = await CityLeaderboard.findOneAndUpdate(
         state
-          ? { city: cityName.toLowerCase(), state: state.toLowerCase() }
-          : { city: cityName.toLowerCase() },
+          ? { 
+              city: new RegExp(`^${cityName}$`, 'i'),
+              state: new RegExp(`^${state}$`, 'i')
+            }
+          : { city: new RegExp(`^${cityName}$`, 'i') },
         {
-          city: cityName.toLowerCase(),
-          state: (state || 'Unknown').toLowerCase(),
+          city: cityName.toLowerCase().trim(),
+          state: (state || 'Unknown').toLowerCase().trim(),
           leaderboard: leaderboardData,
           totalContractors: leaderboardData.length,
           calculatedAt: new Date(),
@@ -240,15 +319,18 @@ router.put('/update-location', authenticateToken, async (req, res) => {
 
     // Get new city leaderboard
     let leaderboard = await CityLeaderboard.findOne({
-      city: geoData.city,
-      state: geoData.state,
+      city: new RegExp(`^${geoData.city}$`, 'i'),
+      state: new RegExp(`^${geoData.state}$`, 'i'),
     });
 
     if (!leaderboard || new Date() > leaderboard.expiresAt) {
       const leaderboardData = await calculateCityLeaderboard(geoData.city, geoData.state);
 
       leaderboard = await CityLeaderboard.findOneAndUpdate(
-        { city: geoData.city, state: geoData.state },
+        { 
+          city: new RegExp(`^${geoData.city}$`, 'i'),
+          state: new RegExp(`^${geoData.state}$`, 'i')
+        },
         {
           city: geoData.city,
           state: geoData.state,

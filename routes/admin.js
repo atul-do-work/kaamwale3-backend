@@ -67,9 +67,10 @@ router.post('/register', async (req, res) => {
         // Log activity if role is admin
         if (role === 'admin') {
             await ActivityLog.create({
-                userId: 'system',
-                action: 'ADMIN_CREATED',
-                details: `New admin user created: ${name} (${phone})`,
+                userId: newUser._id.toString(),
+                phone: phone,
+                action: 'admin_created',
+                description: `New admin user created: ${name} (${phone})`,
                 timestamp: new Date()
             });
         }

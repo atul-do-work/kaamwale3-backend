@@ -1,13 +1,14 @@
 const { getDistanceFromLatLonInKm } = require("../utils/distance");
 
 /**
- * Find nearby workers within 5km radius of the job location
- * @param {Object} jobLocation - { lat, lon, workerType }
+ * Find nearby workers within 10km radius of the job location
+ * Prioritizes workers closest to the contractor posting the job
+ * @param {Object} jobLocation - { lat, lon, workerType, contractorLat, contractorLon }
  * @param {Map} connectedWorkers - Map of connected workers with their locations
- * @returns {Array} Array of nearby workers sorted by distance
+ * @returns {Array} Array of nearby workers sorted by distance to contractor
  */
 exports.findNearbyWorkers = (jobLocation, connectedWorkers) => {
-  const RADIUS_KM = 5; // 5km radius
+  const RADIUS_KM = 10; // 10km radius (extended for better coverage)
   const nearbyWorkers = [];
   const skippedWorkers = [];
 

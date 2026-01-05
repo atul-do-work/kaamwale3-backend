@@ -33,6 +33,7 @@ const activityLogSchema = new mongoose.Schema(
         "bank_account_rejected",
         "document_verified",
         "document_rejected",
+        "admin_created",
       ],
       required: true,
       index: true,

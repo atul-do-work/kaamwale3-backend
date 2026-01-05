@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Kaamwale - Admin Dashboard</title>
+    <title>Do-Work - Admin Dashboard</title>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <style>
         * {
@@ -631,7 +631,7 @@
         <div class="sidebar">
             <div class="sidebar-header">
                 <i class="fas fa-shield-alt"></i>
-                <h2>Kaamwale</h2>
+                <h2>Do-Work</h2>
             </div>
             <nav class="sidebar-nav">
                 <a href="#" class="nav-item active" data-section="dashboard">
@@ -1141,7 +1141,8 @@
     </div>
 
     <script>
-        const API_BASE = 'http://192.168.31.105:3000';
+        // Use the same origin the admin panel was served from so API calls go to the running backend.
+        const API_BASE = window.location.origin || 'http://localhost:3000';
         let currentUser = null;
         let currentBankAccountId = null;
 

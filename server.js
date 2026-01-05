@@ -66,10 +66,11 @@ const io = new Server(server, {
 app.set('io', io);
 
 app.use(cors());
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
-app.use("/uploads", express.static(path.join(__dirname, "uploads"))); // ✅ serve uploaded images
-app.use("/admin", express.static(path.join(__dirname, "public/admin"))); // ✅ serve admin panel
+// Increase body size limits to allow base64 image uploads from mobile clients
+app.use(express.json({ limit: '10mb'}));
+app.use(express.urlencoded({ extended: true, limit: '10mb' })); 
+app.use("/uploads", express.static(path.join(__dirname, "uploads"))); 
+app.use("/admin", express.static(path.join(__dirname, "public/admin")));
 
 // ✅ Mount wallet routes for deposit/withdraw
 const walletRoutes = require("./routes/wallet");
@@ -588,6 +589,23 @@ io.on("connection", (socket) => {
         });
         await newJob.save();
 
+        // ✅ Update contractor's current location when posting job
+        // This keeps contractor location fresh and accurate for job prioritization
+        try {
+          await User.findByIdAndUpdate(
+            user.id,
+            {
+              latitude: lat,
+              longitude: lon,
+              locationLastUpdated: new Date()
+            }
+          );
+          console.log(`📍 Updated contractor location: (${lat}, ${lon})`);
+        } catch (err) {
+          console.warn('⚠️ Warning: Could not update contractor location:', err.message);
+          // Don't fail job posting - location update is non-critical
+        }
+
         console.log(`📢 Job ${newJob._id} posted. Will search for nearby workers when offering...`);
 
         // ✅ Start offering to nearby workers (dynamic search)
@@ -643,7 +661,11 @@ const storage = multer.diskStorage({
   destination: (req, file, cb) => cb(null, "uploads/"),
   filename: (req, file, cb) => cb(null, Date.now() + "-" + file.originalname),
 });
-const upload = multer({ storage });
+const upload = multer({ 
+  storage,
+  // Increase file size limits
+  limits: { fileSize: 10 * 1024 * 1024 }, // 10MB max file size
+});
 
 // ---------------- NEW ROUTE: UPLOAD PROFILE PHOTO ----------------
 app.post("/users/photo", authenticateToken, upload.single("photo"), async (req, res) => {
@@ -1416,6 +1438,23 @@ app.post("/jobs/post", authenticateToken, async (req, res) => {
     });
     await newJob.save();
 
+    // ✅ Update contractor's current location when posting job
+    // This keeps contractor location fresh and accurate for job prioritization
+    try {
+      await User.findByIdAndUpdate(
+        req.user.id,
+        {
+          latitude: lat,
+          longitude: lon,
+          locationLastUpdated: new Date()
+        }
+      );
+      console.log(`📍 Updated contractor location: (${lat}, ${lon})`);
+    } catch (err) {
+      console.warn('⚠️ Warning: Could not update contractor location:', err.message);
+      // Don't fail job posting - location update is non-critical
+    }
+
     console.log(`📢 New job posted: ${title} (ID: ${newJob._id}) at (${lat}, ${lon}) - type: ${workerType}`);
 
     // ✅ AUTO-UPDATE CONTRACTOR STATS
@@ -1645,6 +1684,7 @@ app.post("/jobs/nearby", authenticateToken, async (req, res) => {
   try {
     const { lat, lon, workerType } = req.body;
     const workerName = req.user.name;
+    const MAX_RADIUS_KM = 10; // Maximum search radius
 
     let jobs = await Job.find();
     
@@ -1665,12 +1705,40 @@ app.post("/jobs/nearby", authenticateToken, async (req, res) => {
         !(j.declinedBy && j.declinedBy.includes(workerName))
     );
 
-    availableJobs.forEach((j) => {
-      j.distance = getDistanceFromLatLonInKm(lat, lon, j.lat, j.lon);
+    // Calculate distances and filter by radius
+    const jobsWithDistance = [];
+    for (const j of availableJobs) {
+      const distanceToJob = getDistanceFromLatLonInKm(lat, lon, j.lat, j.lon);
+      
+      // Skip jobs beyond 10km radius
+      if (distanceToJob > MAX_RADIUS_KM) {
+        continue;
+      }
+      
+      // ✅ FIXED: Use job's location (always fresh, contractor posted from there)
+      // Job location = Contractor's actual location when posting
+      // This avoids stale contractor location data from User model (last login)
+      const distanceToContractor = distanceToJob; // Job location is contractor's actual location
+      
+      jobsWithDistance.push({
+        ...j.toObject ? j.toObject() : j,
+        distanceToJob,
+        distanceToContractor
+      });
+    }
+
+    // Sort by contractor proximity first, then job proximity
+    // Since distanceToContractor = distanceToJob, this effectively sorts by job proximity
+    jobsWithDistance.sort((a, b) => {
+      // Primary: sort by distance to contractor (which is job location - always fresh)
+      if (a.distanceToContractor !== b.distanceToContractor) {
+        return a.distanceToContractor - b.distanceToContractor;
+      }
+      // Tiebreaker: same as primary (both use job location)
+      return a.distanceToJob - b.distanceToJob;
     });
 
-    availableJobs.sort((a, b) => a.distance - b.distance);
-    return res.json(availableJobs);
+    return res.json(jobsWithDistance);
   } catch (err) {
     console.error(err);
     return res.status(500).json({ message: "Internal server error" });
@@ -2315,16 +2383,21 @@ app.get('/support/ticket/:ticketId', authenticateToken, async (req, res) => {
 });
 
 // ---------- VERIFICATION DOCUMENT ENDPOINTS ----------
-app.post('/verification/upload', authenticateToken, async (req, res) => {
+// Accept both multipart/form-data uploads (preferred) and legacy base64 JSON payloads
+app.post('/verification/upload', authenticateToken, upload.single('file'), async (req, res) => {
   try {
-    const { type, imageData, fileName, documentNumber, expiryDate } = req.body;
+    // Fields from either multipart/form-data (req.body) or JSON
+    // Safely destructure with fallback values
+    const type = req.body?.type || req.query?.type;
+    const documentNumber = req.body?.documentNumber || req.query?.documentNumber;
+    const expiryDate = req.body?.expiryDate || req.query?.expiryDate;
 
-    if (!type || !imageData) {
-      return res.status(400).json({ success: false, message: 'Missing document type or image data' });
+    // If neither a file nor a type is provided, reject
+    if (!type && !req.file && !req.body?.imageData) {
+      return res.status(400).json({ success: false, message: 'Missing document type or file' });
     }
 
     let verification = await VerificationDocument.findOne({ phone: req.user.phone });
-
     if (!verification) {
       verification = new VerificationDocument({
         userId: req.user._id || req.user.phone,
@@ -2334,12 +2407,30 @@ app.post('/verification/upload', authenticateToken, async (req, res) => {
       });
     }
 
-    // Store base64 image data directly in MongoDB
+    // Determine file storage: prefer uploaded file (multer), fallback to base64 imageData
+    let fileUrl = null;
+    let fileName = null;
+
+    if (req.file) {
+      // Serve uploaded file from /uploads
+      fileName = req.file.originalname || req.file.filename;
+      // Build an absolute URL so clients can preview if required
+      const host = req.headers.host || `localhost:${PORT}`;
+      const protocol = req.headers['x-forwarded-proto'] || req.protocol || 'http';
+      fileUrl = `${protocol}://${host}/uploads/${req.file.filename}`;
+      console.log(`📄 Stored uploaded file for ${req.user.phone}: ${fileUrl}`);
+    } else if (req.body?.imageData) {
+      // Legacy: store base64 string directly
+      fileUrl = req.body.imageData;
+      fileName = req.body.fileName || `${type || 'doc'}_${Date.now()}`;
+      console.log(`📄 Received base64 document for ${req.user.phone} (legacy path)`);
+    }
+
     const document = {
-      type,
-      fileUrl: imageData, // ✅ Store base64 image data directly
-      fileName: fileName || `${type}_${Date.now()}`,
-      documentNumber,
+      type: type || 'unknown',
+      fileUrl: fileUrl,
+      fileName: fileName || '',
+      documentNumber: documentNumber || undefined,
       uploadedAt: new Date(),
       verificationStatus: 'pending',
       expiryDate: expiryDate ? new Date(expiryDate) : undefined,
@@ -2348,11 +2439,10 @@ app.post('/verification/upload', authenticateToken, async (req, res) => {
     verification.documents.push(document);
     await verification.save();
 
-    console.log(`📄 Document uploaded: ${type} by ${req.user.phone}`);
-    res.json({ success: true, verification, message: 'Document uploaded for verification' });
+    return res.json({ success: true, verification, message: 'Document uploaded for verification' });
   } catch (err) {
     console.error('Document upload error:', err);
-    res.status(500).json({ success: false, message: 'Error uploading document' });
+    return res.status(500).json({ success: false, message: 'Error uploading document' });
   }
 });
 
