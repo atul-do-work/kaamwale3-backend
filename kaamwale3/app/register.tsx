@@ -49,6 +49,12 @@ export default function Register() {
     if (!name || !phone || !password)
       return Alert.alert('Error', 'Fill all fields');
 
+    // Validate phone number (10 digits)
+    const phoneTrim = phone.trim();
+    if (!/^\d{10}$/.test(phoneTrim)) {
+      return Alert.alert('Invalid Phone', 'Phone number must be exactly 10 digits');
+    }
+
     try {
       // ✅ GET FCM TOKEN - Wait for it to be available (race condition fix)
       let fcmToken = null;
@@ -79,7 +85,7 @@ export default function Register() {
       const res = await fetch(`${API_BASE}/users/register`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, phone, password, role }),
+        body: JSON.stringify({ name, phone: phoneTrim, password, role }),
       });
 
       const data = await res.json();

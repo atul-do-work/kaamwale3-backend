@@ -29,6 +29,13 @@ export default function LoginScreen() {
       return;
     }
 
+    // Validate phone (10 digits)
+    const phoneTrim = phone.trim();
+    if (!/^\d{10}$/.test(phoneTrim)) {
+      Alert.alert('Invalid Phone', 'Phone number must be exactly 10 digits');
+      return;
+    }
+
     setLoading(true);
 
     try {
@@ -56,11 +63,11 @@ export default function LoginScreen() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          phone,
-          password,
-          latitude,
-          longitude,
-        }),
+            phone: phoneTrim,
+            password,
+            latitude,
+            longitude,
+          }),
       });
 
       const data = await response.json();

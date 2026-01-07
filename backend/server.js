@@ -700,6 +700,12 @@ app.post("/users/register", async (req, res) => {
     if (!name || !phone || !password || !role)
       return res.status(400).json({ success: false, message: "All fields required" });
 
+    // Validate phone number (10 digits)
+    const phoneTrim = String(phone || '').trim();
+    if (!/^\d{10}$/.test(phoneTrim)) {
+      return res.status(400).json({ success: false, message: 'Phone number must be exactly 10 digits' });
+    }
+
     const existingUser = await User.findOne({ phone });
     if (existingUser) return res.status(400).json({ success: false, message: "Phone already registered" });
 
@@ -750,6 +756,11 @@ app.post("/login", loginLimiter, async (req, res) => {
     const { phone, password, latitude, longitude, fcmToken } = req.body; // ✅ Add fcmToken
     if (!phone || !password) {
       return res.status(400).json({ success: false, message: "Phone and password required" });
+    }
+    // Validate phone number format
+    const phoneTrim = String(phone || '').trim();
+    if (!/^\d{10}$/.test(phoneTrim)) {
+      return res.status(400).json({ success: false, message: 'Phone number must be exactly 10 digits' });
     }
     const user = await User.findOne({ phone });
     if (!user) return res.status(401).json({ success: false, message: "Invalid phone or password" });
