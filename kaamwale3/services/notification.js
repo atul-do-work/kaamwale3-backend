@@ -19,8 +19,9 @@ export async function registerForPushNotificationsAsync() {
         bypassDnd: true,
         enableVibration: true,
         enableLights: true,
+        sound: 'default'
       });
-      console.log('✅ Android channel configured');
+      console.log('✅ Android channel configured with sound');
     }
     
     // Check current permission status
