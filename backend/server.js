@@ -50,7 +50,7 @@ const SupportTicket = require("./models/SupportTicket");
 const VerificationDocument = require("./models/VerificationDocument");
 const CancellationLog = require("./models/CancellationLog");
 const NotificationHistory = require("./models/NotificationHistory");
-const { sendNotificationToUserPhone } = require('./utils/push');
+const { sendNotificationToUserPhone, sendJobOfferPushToWorkers } = require('./utils/push');
 const { retryPendingPushes } = require('./utils/pushRetry');
 
 
@@ -609,6 +609,25 @@ io.on("connection", (socket) => {
         }
 
         console.log(`📢 Job ${newJob._id} posted. Will search for nearby workers when offering...`);
+
+        // ✅ SEND PUSH NOTIFICATIONS TO NEARBY WORKERS (for backgrounded apps)
+        try {
+          const nearbyWorkers = findNearbyWorkers(
+            { lat, lon, workerType },
+            connectedWorkers
+          );
+          
+          if (nearbyWorkers && nearbyWorkers.length > 0) {
+            const workerPhones = nearbyWorkers.map(w => w.phone).filter(Boolean);
+            console.log(`📤 Sending job offer push to ${workerPhones.length} nearby workers...`);
+            
+            const pushResult = await sendJobOfferPushToWorkers(workerPhones, newJob);
+            console.log(`✅ Job offer push result: ${pushResult.sent} sent, ${pushResult.failed} failed`);
+          }
+        } catch (pushErr) {
+          console.error('⚠️ Error sending job offer pushes:', pushErr && pushErr.message);
+          // Don't fail job posting - push is secondary
+        }
 
         // ✅ Start offering to nearby workers (dynamic search)
         try {
@@ -1475,6 +1494,25 @@ app.post("/jobs/post", authenticateToken, async (req, res) => {
 
     // ✅ Job posted successfully
     console.log(`📢 Job ${newJob._id} posted at (${lat}, ${lon})`);
+
+    // ✅ SEND PUSH NOTIFICATIONS TO NEARBY WORKERS (for backgrounded apps)
+    try {
+      const nearbyWorkers = findNearbyWorkers(
+        { lat, lon, workerType },
+        connectedWorkers
+      );
+      
+      if (nearbyWorkers && nearbyWorkers.length > 0) {
+        const workerPhones = nearbyWorkers.map(w => w.phone).filter(Boolean);
+        console.log(`📤 Sending job offer push to ${workerPhones.length} nearby workers...`);
+        
+        const pushResult = await sendJobOfferPushToWorkers(workerPhones, newJob);
+        console.log(`✅ Job offer push result: ${pushResult.sent} sent, ${pushResult.failed} failed`);
+      }
+    } catch (pushErr) {
+      console.error('⚠️ Error sending job offer pushes:', pushErr && pushErr.message);
+      // Don't fail job posting - push is secondary
+    }
 
     // ✅ Start offering to nearby workers (dynamic search)
     try {

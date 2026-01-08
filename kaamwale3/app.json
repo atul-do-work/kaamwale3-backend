@@ -1,7 +1,7 @@
 {
   "expo": {
     "name": "DoWork",
-    "slug": "do-work-map",
+    "slug": "do-workkumar",
     "version": "1.0.0",
     "orientation": "portrait",
     "scheme": "kaamwale3",
@@ -50,10 +50,10 @@
 
     "extra": {
       "eas": {
-        "projectId": "e4907a5d-c026-41c1-8cb5-0ce75ae7bc77"
+        "projectId": "0f4d40d8-f843-45be-a3da-f26430d07160"
       }
     },
 
-    "owner": "mapboxatul_41721"
+    "owner": "atulkumar098765"
   }
 }

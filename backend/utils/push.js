@@ -90,4 +90,52 @@ async function sendNotificationToUserPhone(phone, payload) {
   }
 }
 
-module.exports = { initFirebase, sendPushToToken, sendNotificationToUserPhone };
+async function sendJobOfferPushToWorkers(workerPhones, job, metadata = {}) {
+  try {
+    if (!workerPhones || workerPhones.length === 0) {
+      console.log('No workers to send job offer push');
+      return { success: true, sent: 0, failed: 0 };
+    }
+
+    let sent = 0, failed = 0;
+
+    for (const workerPhone of workerPhones) {
+      try {
+        const result = await sendNotificationToUserPhone(workerPhone, {
+          type: 'job_offer',
+          title: `New Job: ${job.title}`,
+          body: `₹${job.amount} • ${job.workerType || 'General'} • Nearby`,
+          jobId: job._id.toString(),
+          metadata: {
+            jobTitle: job.title,
+            amount: job.amount,
+            workerType: job.workerType,
+            lat: job.lat,
+            lon: job.lon,
+            actionRequired: true,
+            ...metadata
+          },
+          deepLink: `worker/jobs/${job._id.toString()}`,
+        });
+
+        if (result.success) {
+          sent++;
+          console.log(`📨 Job offer push sent to ${workerPhone}`);
+        } else {
+          failed++;
+          console.warn(`⚠️ Job offer push failed for ${workerPhone}`);
+        }
+      } catch (e) {
+        failed++;
+        console.error(`Error sending job offer to ${workerPhone}:`, e && e.message);
+      }
+    }
+
+    return { success: true, sent, failed, total: workerPhones.length };
+  } catch (err) {
+    console.error('Error in sendJobOfferPushToWorkers:', err && err.message);
+    return { success: false, error: err };
+  }
+}
+
+module.exports = { initFirebase, sendPushToToken, sendNotificationToUserPhone, sendJobOfferPushToWorkers };
