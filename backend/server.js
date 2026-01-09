@@ -50,8 +50,6 @@ const SupportTicket = require("./models/SupportTicket");
 const VerificationDocument = require("./models/VerificationDocument");
 const CancellationLog = require("./models/CancellationLog");
 const NotificationHistory = require("./models/NotificationHistory");
-const { sendNotificationToUserPhone, sendJobOfferPushToWorkers } = require('./utils/push');
-const { retryPendingPushes } = require('./utils/pushRetry');
 
 
 
@@ -610,25 +608,6 @@ io.on("connection", (socket) => {
 
         console.log(`📢 Job ${newJob._id} posted. Will search for nearby workers when offering...`);
 
-        // ✅ SEND PUSH NOTIFICATIONS TO NEARBY WORKERS (for backgrounded apps)
-        try {
-          const nearbyWorkers = findNearbyWorkers(
-            { lat, lon, workerType },
-            connectedWorkers
-          );
-          
-          if (nearbyWorkers && nearbyWorkers.length > 0) {
-            const workerPhones = nearbyWorkers.map(w => w.phone).filter(Boolean);
-            console.log(`📤 Sending job offer push to ${workerPhones.length} nearby workers...`);
-            
-            const pushResult = await sendJobOfferPushToWorkers(workerPhones, newJob);
-            console.log(`✅ Job offer push result: ${pushResult.sent} sent, ${pushResult.failed} failed`);
-          }
-        } catch (pushErr) {
-          console.error('⚠️ Error sending job offer pushes:', pushErr && pushErr.message);
-          // Don't fail job posting - push is secondary
-        }
-
         // ✅ Start offering to nearby workers (dynamic search)
         try {
           await offerJobToNextWorker(newJob);
@@ -719,12 +698,6 @@ app.post("/users/register", async (req, res) => {
     if (!name || !phone || !password || !role)
       return res.status(400).json({ success: false, message: "All fields required" });
 
-    // Validate phone number (10 digits)
-    const phoneTrim = String(phone || '').trim();
-    if (!/^\d{10}$/.test(phoneTrim)) {
-      return res.status(400).json({ success: false, message: 'Phone number must be exactly 10 digits' });
-    }
-
     const existingUser = await User.findOne({ phone });
     if (existingUser) return res.status(400).json({ success: false, message: "Phone already registered" });
 
@@ -775,11 +748,6 @@ app.post("/login", loginLimiter, async (req, res) => {
     const { phone, password, latitude, longitude, fcmToken } = req.body; // ✅ Add fcmToken
     if (!phone || !password) {
       return res.status(400).json({ success: false, message: "Phone and password required" });
-    }
-    // Validate phone number format
-    const phoneTrim = String(phone || '').trim();
-    if (!/^\d{10}$/.test(phoneTrim)) {
-      return res.status(400).json({ success: false, message: 'Phone number must be exactly 10 digits' });
     }
     const user = await User.findOne({ phone });
     if (!user) return res.status(401).json({ success: false, message: "Invalid phone or password" });
@@ -1495,25 +1463,6 @@ app.post("/jobs/post", authenticateToken, async (req, res) => {
     // ✅ Job posted successfully
     console.log(`📢 Job ${newJob._id} posted at (${lat}, ${lon})`);
 
-    // ✅ SEND PUSH NOTIFICATIONS TO NEARBY WORKERS (for backgrounded apps)
-    try {
-      const nearbyWorkers = findNearbyWorkers(
-        { lat, lon, workerType },
-        connectedWorkers
-      );
-      
-      if (nearbyWorkers && nearbyWorkers.length > 0) {
-        const workerPhones = nearbyWorkers.map(w => w.phone).filter(Boolean);
-        console.log(`📤 Sending job offer push to ${workerPhones.length} nearby workers...`);
-        
-        const pushResult = await sendJobOfferPushToWorkers(workerPhones, newJob);
-        console.log(`✅ Job offer push result: ${pushResult.sent} sent, ${pushResult.failed} failed`);
-      }
-    } catch (pushErr) {
-      console.error('⚠️ Error sending job offer pushes:', pushErr && pushErr.message);
-      // Don't fail job posting - push is secondary
-    }
-
     // ✅ Start offering to nearby workers (dynamic search)
     try {
       await offerJobToNextWorker(newJob);
@@ -1595,8 +1544,8 @@ app.post("/jobs/accept/:id", authenticateToken, async (req, res) => {
     try {
       const jobTitle = updated.title;
       const amount = updated.amount;
-      // Create notification and attempt push
-      await sendNotificationToUserPhone(updated.contractorPhone, {
+      await NotificationHistory.create({
+        recipientPhone: updated.contractorPhone,
         senderPhone: req.user.phone,
         senderName: workerName || req.user.name,
         type: 'job_accepted',
@@ -1609,8 +1558,9 @@ app.post("/jobs/accept/:id", authenticateToken, async (req, res) => {
           actionRequired: true
         },
         deepLink: `contractor/jobs/${updated._id.toString()}`,
+        pushNotificationSent: false,
       });
-      console.log(`📬 Notification queued/sent to contractor for job acceptance`);
+      console.log(`📬 Notification sent to contractor for job acceptance`);
     } catch (e) {
       console.error('Error creating job acceptance notification for contractor:', e);
     }
@@ -1620,7 +1570,8 @@ app.post("/jobs/accept/:id", authenticateToken, async (req, res) => {
       if (updated.acceptedWorker && updated.acceptedWorker.phone) {
         const jobTitle = updated.title;
         const amount = updated.amount;
-        await sendNotificationToUserPhone(updated.acceptedWorker.phone, {
+        await NotificationHistory.create({
+          recipientPhone: updated.acceptedWorker.phone,
           senderPhone: updated.contractorPhone,
           senderName: updated.contractorName || 'Contractor',
           type: 'job_accepted',
@@ -1633,8 +1584,9 @@ app.post("/jobs/accept/:id", authenticateToken, async (req, res) => {
             actionRequired: true
           },
           deepLink: `worker/jobs/${updated._id.toString()}`,
+          pushNotificationSent: false,
         });
-        console.log(`📬 Notification queued/sent to worker for job acceptance confirmation`);
+        console.log(`📬 Notification sent to worker for job acceptance confirmation`);
       }
     } catch (e) {
       console.error('Error creating job acceptance notification for worker:', e);
@@ -1927,7 +1879,8 @@ app.post("/jobs/pay/:id", authenticateToken, async (req, res) => {
     // ✅ CREATE NOTIFICATION FOR WORKER - PAYMENT SENT (only to the accepted worker)
     try {
       if (job.acceptedWorker && job.acceptedWorker.phone) {
-        await sendNotificationToUserPhone(job.acceptedWorker.phone, {
+        await NotificationHistory.create({
+          recipientPhone: job.acceptedWorker.phone,
           senderPhone: req.user.phone,
           senderName: req.user.name || job.contractorName || 'Contractor',
           type: 'payment_received',
@@ -1940,8 +1893,9 @@ app.post("/jobs/pay/:id", authenticateToken, async (req, res) => {
             actionRequired: false
           },
           deepLink: `worker/wallet`,
+          pushNotificationSent: false,
         });
-        console.log(`📬 Payment notification queued/sent to worker ${job.acceptedWorker.name}`);
+        console.log(`📬 Payment notification sent to worker ${job.acceptedWorker.name}`);
       }
     } catch (e) {
       console.error('Error creating payment notification:', e);
@@ -2025,7 +1979,8 @@ app.post("/jobs/rate/:id", authenticateToken, async (req, res) => {
     try {
       if (job.acceptedWorker && job.acceptedWorker.phone) {
         const ratingText = `${stars} star${stars > 1 ? 's' : ''}`;
-        await sendNotificationToUserPhone(job.acceptedWorker.phone, {
+        await NotificationHistory.create({
+          recipientPhone: job.acceptedWorker.phone,
           senderPhone: req.user.phone,
           senderName: req.user.name || job.contractorName || 'Contractor',
           type: 'rating_received',
@@ -2038,8 +1993,9 @@ app.post("/jobs/rate/:id", authenticateToken, async (req, res) => {
             actionRequired: false
           },
           deepLink: `worker/profile`,
+          pushNotificationSent: false,
         });
-        console.log(`📬 Rating notification queued/sent to worker ${job.acceptedWorker.name}`);
+        console.log(`📬 Rating notification sent to worker ${job.acceptedWorker.name}`);
       }
     } catch (e) {
       console.error('Error creating rating notification:', e);
@@ -2802,13 +2758,3 @@ setTimeout(() => {
 server.listen(PORT, "0.0.0.0", () => {
   console.log(`Server running with Socket.io on port ${PORT}`);
 });
-
-// Start push retry worker: run once at startup, then every 5 minutes
-(async () => {
-  try {
-    await retryPendingPushes();
-  } catch (e) { console.error('Initial push retry failed', e && e.message); }
-  setInterval(() => {
-    retryPendingPushes().catch(err => console.error('Push retry error:', err && err.message));
-  }, 5 * 60 * 1000);
-})();

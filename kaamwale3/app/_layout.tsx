@@ -32,6 +32,30 @@ export default function RootLayout() {
           console.log('✅ FCM Token obtained on app startup:', fcmToken.substring(0, 30) + '...');
           // Store for later use
           await AsyncStorage.setItem('appFcmToken', fcmToken);
+          
+          // ✅ NEW: If user is logged in, update backend with fresh token
+          try {
+            const accessToken = await AsyncStorage.getItem('accessToken');
+            if (accessToken) {
+              console.log('📱 User logged in - updating backend with fresh FCM token...');
+              const response = await fetch(`${process.env.EXPO_PUBLIC_API_BASE || 'http://localhost:3000'}/auth/refresh-fcm-token`, {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                  'Authorization': `Bearer ${accessToken}`
+                },
+                body: JSON.stringify({ fcmToken })
+              });
+              const data = await response.json();
+              if (data.success) {
+                console.log('✅ Backend FCM token updated on startup');
+              } else {
+                console.warn('⚠️ Failed to update backend FCM token:', data.message);
+              }
+            }
+          } catch (err) {
+            console.warn('⚠️ Could not update backend token on startup:', err);
+          }
         } else {
           console.warn('⚠️ FCM Token request returned null');
         }

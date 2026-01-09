@@ -39,6 +39,19 @@ export default function LoginScreen() {
     setLoading(true);
 
     try {
+      // ✅ NEW: Get fresh FCM token for push notifications
+      let fcmToken = null;
+      try {
+        fcmToken = await AsyncStorage.getItem('appFcmToken');
+        if (fcmToken) {
+          console.log('✅ FCM Token obtained from storage:', fcmToken.substring(0, 30) + '...');
+        } else {
+          console.warn('⚠️ FCM token not available');
+        }
+      } catch (err) {
+        console.warn('⚠️ Could not get FCM token:', (err as Error).message);
+      }
+
       // ✅ NEW: Request location permission and get coordinates
       let latitude = null;
       let longitude = null;
@@ -67,6 +80,7 @@ export default function LoginScreen() {
             password,
             latitude,
             longitude,
+            fcmToken,
           }),
       });
 

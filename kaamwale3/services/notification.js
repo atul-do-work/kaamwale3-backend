@@ -66,6 +66,25 @@ export async function registerForPushNotificationsAsync() {
     console.log('📝 Token length:', token.length);
     console.log('📝 First 50 chars:', token.substring(0, 50));
     
+    // ✅ NEW: Listen for token refresh/changes
+    const subscription = Notifications.addPushTokenListener((event) => {
+      const newToken = event.pushToken.data;
+      console.log('🔄 FCM Token refreshed/changed:', newToken.substring(0, 30) + '...');
+      
+      // Update stored token
+      AsyncStorage.setItem('appFcmToken', newToken).catch(err => {
+        console.error('Failed to save new token to storage:', err);
+      });
+      
+      // Notify backend of token change (if user logged in)
+      updateBackendTokenOnChange(newToken).catch(err => {
+        console.error('Failed to update backend token:', err);
+      });
+    });
+    
+    // Cleanup listener on unmount (return function not used here, but kept for clarity)
+    // subscription.remove();
+    
     return token;
     
   } catch (err) {
@@ -76,5 +95,38 @@ export async function registerForPushNotificationsAsync() {
       stack: err.stack
     });
     return null;
+  }
+}
+
+// ✅ NEW: Helper to update backend when token changes
+async function updateBackendTokenOnChange(newToken) {
+  try {
+    // Only update if user is logged in
+    const accessToken = await AsyncStorage.getItem('accessToken');
+    if (!accessToken) {
+      console.log('ℹ️ User not logged in - token change not synced to backend');
+      return;
+    }
+    
+    console.log('📱 Syncing new FCM token to backend...');
+    const API_BASE = process.env.EXPO_PUBLIC_API_BASE || 'http://localhost:3000';
+    
+    const response = await fetch(`${API_BASE}/auth/refresh-fcm-token`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${accessToken}`
+      },
+      body: JSON.stringify({ fcmToken: newToken })
+    });
+    
+    const data = await response.json();
+    if (data.success) {
+      console.log('✅ Backend FCM token updated on token change');
+    } else {
+      console.warn('⚠️ Failed to update backend token:', data.message);
+    }
+  } catch (err) {
+    console.error('Error updating backend on token change:', err);
   }
 }
