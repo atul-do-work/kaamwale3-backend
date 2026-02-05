@@ -49,6 +49,9 @@ const userSchema = new mongoose.Schema({
   },
   // Leaderboard points for premium users
   points: { type: Number, default: 0 },
+  // ✅ Worker Profile - Main Skill & Expected Wages
+  mainSkill: { type: String, default: '' }, // Labour, Mason, Engineer, ITI/Technician
+  expectedWage: { type: String, default: '' }, // 0-400, 400-550, 550-700, 700-max
 }, { timestamps: true });
 
 // create 2dsphere index for location queries

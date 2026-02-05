@@ -691,6 +691,39 @@ app.post("/users/photo", authenticateToken, upload.single("photo"), async (req, 
   }
 });
 
+// ✅ UPDATE USER PROFILE - Main Skill & Expected Wage
+app.post("/users/update-profile", authenticateToken, async (req, res) => {
+  try {
+    const { mainSkill, expectedWage } = req.body;
+    
+    if (!mainSkill || !expectedWage) {
+      return res.status(400).json({ success: false, message: "Missing required fields" });
+    }
+
+    const user = await User.findOne({ phone: req.user.phone });
+    if (!user) return res.status(404).json({ success: false, message: "User not found" });
+
+    user.mainSkill = mainSkill;
+    user.expectedWage = expectedWage;
+    await user.save();
+
+    console.log(`✅ Profile updated for ${req.user.phone}: mainSkill=${mainSkill}, expectedWage=${expectedWage}`);
+    return res.json({ 
+      success: true, 
+      message: "Profile updated successfully",
+      user: {
+        name: user.name,
+        phone: user.phone,
+        mainSkill: user.mainSkill,
+        expectedWage: user.expectedWage,
+      }
+    });
+  } catch (err) {
+    console.error("Profile update error", err);
+    return res.status(500).json({ success: false, message: "Internal server error" });
+  }
+});
+
 // ---------------- USER ROUTES ----------------
 app.post("/users/register", async (req, res) => {
   try {
