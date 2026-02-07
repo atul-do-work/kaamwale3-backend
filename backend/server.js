@@ -690,7 +690,6 @@ app.post("/users/photo", authenticateToken, upload.single("photo"), async (req, 
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 });
-
 // ✅ UPDATE USER PROFILE - Main Skill & Expected Wage
 app.post("/users/update-profile", authenticateToken, async (req, res) => {
   try {
@@ -2687,6 +2686,55 @@ app.put('/notifications/read-all', authenticateToken, async (req, res) => {
   } catch (err) {
     console.error('Mark all notifications read error:', err);
     res.status(500).json({ success: false, message: 'Error updating notifications' });
+  }
+});
+
+// ✅ VERIFY WORKER PROFILE IS COMPLETE (CHECK MAIN SKILL & WAGE)
+app.post('/workers/verify-profile', authenticateToken, async (req, res) => {
+  try {
+    const phone = req.user.phone;
+
+    console.log(`\n🔍 Profile verification request for phone: ${phone}`);
+
+    // Find user and check mainSkill and expectedWage
+    const user = await User.findOne({ phone });
+
+    if (!user) {
+      console.error(`❌ User not found for phone: ${phone}`);
+      return res.status(404).json({ success: false, message: 'User not found' });
+    }
+
+    console.log(`📋 User found: ${user.name}`);
+    console.log(`   - mainSkill: ${user.mainSkill || 'NOT SET'}`);
+    console.log(`   - expectedWage: ${user.expectedWage || 'NOT SET'}`);
+
+    // Check if both mainSkill and expectedWage are set
+    const isProfileComplete = !!(user.mainSkill && user.expectedWage);
+
+    if (isProfileComplete) {
+      console.log(`✅ Profile is COMPLETE - User can go online`);
+      return res.status(200).json({ 
+        success: true, 
+        message: 'Profile is complete',
+        isProfileComplete: true,
+        mainSkill: user.mainSkill,
+        expectedWage: user.expectedWage
+      });
+    } else {
+      console.log(`❌ Profile is INCOMPLETE`);
+      return res.status(200).json({ 
+        success: false, 
+        message: 'Profile is incomplete. Please set Main Skill and Expected Wage.',
+        isProfileComplete: false,
+        missingFields: {
+          mainSkill: !user.mainSkill,
+          expectedWage: !user.expectedWage
+        }
+      });
+    }
+  } catch (err) {
+    console.error(`❌ Profile verification error:`, err);
+    res.status(500).json({ success: false, message: 'Failed to verify profile', error: err.message });
   }
 });
 
