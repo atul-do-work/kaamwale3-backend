@@ -8,9 +8,12 @@ const jobSchema = new mongoose.Schema({
   amount: Number,
   contractorName: String,
   contractorPhone: String, // ✅ Store contractor phone for filtering
+  imageUrl: String, // ✅ URL of job image uploaded by contractor
   lat: Number,
   lon: Number,
   date: { type: Date, default: Date.now },
+  startTime: String, // ✅ Start time like "09:00" or "9 AM"
+  endTime: String, // ✅ End time like "18:00" or "6 PM"
   status: { type: String, default: 'pending' },
   acceptedBy: String,
   acceptedWorker: { // ✅ Snapshot of worker data when accepted

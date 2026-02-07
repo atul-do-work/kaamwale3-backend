@@ -233,13 +233,19 @@ async function offerJobToNextWorker(job) {
       pendingJobTimeouts.delete(job._id.toString());
     }
     
-    // ✅ DYNAMIC: Find nearby workers RIGHT NOW (not from stored list)
+    // ✅ DYNAMIC: Find nearby workers with SKILL and WAGE MATCHING
     const currentNearbyWorkers = findNearbyWorkers(
-      { lat: job.lat, lon: job.lon, workerType: job.workerType },
+      { 
+        lat: job.lat, 
+        lon: job.lon, 
+        mainSkill: job.description, // job.description contains the mainSkill (Labour, Mason, etc)
+        amount: job.amount, // Job wage
+        workerType: job.workerType
+      },
       connectedWorkers
     );
     
-    console.log(`🔍 Dynamic search: Found ${currentNearbyWorkers.length} nearby workers (${declinedWorkerNames.length} declined)`);
+    console.log(`🔍 Smart matching: Found ${currentNearbyWorkers.length} nearby workers with matching skill & wage (${declinedWorkerNames.length} declined)`);
     
     // Find first worker who hasn't declined AND doesn't have unpaid jobs AND is ONLINE
     let nextWorker = null;
@@ -294,7 +300,7 @@ async function offerJobToNextWorker(job) {
     }
     
     // Found a worker! Offer the job
-    console.log(`📤 Offering job ${job._id} to worker: ${nextWorker.name} (distance: ${nextWorker.distance}km)`);
+    console.log(`📤 Offering job ${job._id} to worker: ${nextWorker.name} (Skill: ${nextWorker.mainSkill}, Wage: ${nextWorker.expectedWage}, Distance: ${nextWorker.distance}km)`);
 
     const workerSocket = io.sockets.sockets.get(nextWorker.socketId);
     if (workerSocket) {
@@ -1426,9 +1432,33 @@ app.post('/auth/logout', async (req, res) => {
 
 
 // ---------------- JOB ROUTES ----------------
+// ✅ UPLOAD JOB IMAGE
+app.post("/jobs/upload-image", authenticateToken, async (req, res) => {
+  try {
+    if (!req.files || !req.files.photo) {
+      return res.status(400).json({ success: false, message: "No image provided" });
+    }
+
+    const file = req.files.photo;
+    const filename = `job-${Date.now()}-${Math.random().toString(36).substr(2, 9)}.jpg`;
+    const uploadPath = path.join(__dirname, 'uploads', filename);
+
+    await file.mv(uploadPath);
+
+    // Return the image URL that can be accessed
+    const imageUrl = `${process.env.NGROK_URL || 'http://localhost:5000'}/uploads/${filename}`;
+    
+    console.log(`✅ Job image uploaded: ${imageUrl}`);
+    res.json({ success: true, imageUrl });
+  } catch (err) {
+    console.error("Job image upload error:", err);
+    res.status(500).json({ success: false, message: "Failed to upload job image" });
+  }
+});
+
 app.post("/jobs/post", authenticateToken, async (req, res) => {
   try {
-    const { title, description, workerType, amount, lat, lon, date } = req.body;
+    const { title, description, workerType, amount, lat, lon, date, imageUrl, startTime, endTime } = req.body;
     const contractorName = req.user.name;
 
     if (!title || !lat || !lon)
@@ -1462,9 +1492,12 @@ app.post("/jobs/post", authenticateToken, async (req, res) => {
       amount,
       contractorName,
       contractorPhone: req.user.phone, // ✅ Also store phone for reference
+      imageUrl: imageUrl || null, // ✅ Store job image URL
       lat,
       lon,
       date: date || new Date(),
+      startTime: startTime || null, // ✅ Store start time
+      endTime: endTime || null, // ✅ Store end time
       status: "pending",
       declinedBy: [],
     });

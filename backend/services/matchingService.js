@@ -1,14 +1,44 @@
 const { getDistanceFromLatLonInKm } = require("../utils/distance");
 
 /**
- * Find nearby workers within 10km radius of the job location
- * Prioritizes workers closest to the contractor posting the job
- * @param {Object} jobLocation - { lat, lon, workerType, contractorLat, contractorLon }
+ * Check if worker's wage range matches job wage
+ * Worker wage ranges: "0-400", "400-550", "550-700", "700-max"
+ * Returns true if job wage falls within or overlaps with worker's range
+ */
+const isWageInRange = (jobAmount, workerWageRange) => {
+  if (!workerWageRange || !jobAmount) return true; // If worker has no preference, match any wage
+  
+  const amount = parseInt(jobAmount);
+  const ranges = {
+    "0-400": { min: 0, max: 400 },
+    "400-550": { min: 400, max: 550 },
+    "550-700": { min: 550, max: 700 },
+    "700-max": { min: 700, max: 999999 }
+  };
+  
+  const range = ranges[workerWageRange];
+  if (!range) return true; // Invalid range, allow
+  
+  // Check if job amount is within worker's wage range
+  return amount >= range.min && amount <= range.max;
+};
+
+/**
+ * Find nearby workers within 10km radius with SKILL and WAGE matching
+ * Filters workers by:
+ * 1. Location (within 10km)
+ * 2. Online status
+ * 3. Skill match (worker's mainSkill matches job's mainSkill)
+ * 4. Wage range match (job wage within worker's expected wage range)
+ * 5. No unpaid jobs (checks database)
+ * 6. Haven't declined this job
+ * 
+ * @param {Object} jobLocation - { lat, lon, mainSkill, amount, description }
  * @param {Map} connectedWorkers - Map of connected workers with their locations
  * @returns {Array} Array of nearby workers sorted by distance to contractor
  */
 exports.findNearbyWorkers = (jobLocation, connectedWorkers) => {
-  const RADIUS_KM = 10; // 10km radius (extended for better coverage)
+  const RADIUS_KM = 10; // 10km radius
   const nearbyWorkers = [];
   const skippedWorkers = [];
 
@@ -25,6 +55,20 @@ exports.findNearbyWorkers = (jobLocation, connectedWorkers) => {
       continue;
     }
 
+    // ✅ SKILL MATCHING: Check if worker's mainSkill matches job's mainSkill
+    // jobLocation.mainSkill is the job requirement (e.g., "Labour", "Mason")
+    // worker.mainSkill is the worker's skill
+    if (jobLocation.mainSkill && worker.mainSkill && jobLocation.mainSkill !== worker.mainSkill) {
+      skippedWorkers.push(`${worker.name} (skill mismatch: needs ${jobLocation.mainSkill}, has ${worker.mainSkill})`);
+      continue;
+    }
+
+    // ✅ WAGE MATCHING: Check if job wage is within worker's expected wage range
+    if (!isWageInRange(jobLocation.amount, worker.expectedWage)) {
+      skippedWorkers.push(`${worker.name} (wage out of range: job=₹${jobLocation.amount}, expects ${worker.expectedWage})`);
+      continue;
+    }
+
     // Calculate distance from job location to worker location
     const distKm = getDistanceFromLatLonInKm(
       jobLocation.lat,
@@ -34,28 +78,29 @@ exports.findNearbyWorkers = (jobLocation, connectedWorkers) => {
     );
 
     // ✅ DEBUG: Log all workers and distances
-    console.log(`📍 Worker: ${worker.name} at (${worker.lat}, ${worker.lon}) → Distance: ${distKm.toFixed(2)}km`);
+    console.log(`📍 Worker: ${worker.name} (${worker.mainSkill}, ₹${worker.expectedWage}) at (${worker.lat}, ${worker.lon}) → Distance: ${distKm.toFixed(2)}km`);
 
-    // Only include workers within 5km radius
+    // Only include workers within 10km radius
     if (distKm <= RADIUS_KM) {
-      console.log(`✅ MATCHED: ${worker.name} (${distKm.toFixed(2)}km away)`);
+      console.log(`✅ MATCHED: ${worker.name} - Skill: ${worker.mainSkill}, Wage: ${worker.expectedWage}, Distance: ${distKm.toFixed(2)}km`);
       nearbyWorkers.push({
         socketId,
         name: worker.name,
         phone: worker.phone,
-        workerType: worker.workerType,
+        mainSkill: worker.mainSkill,
+        expectedWage: worker.expectedWage,
         lat: worker.lat,
         lon: worker.lon,
         distance: Math.round(distKm * 10) / 10, // Round to 1 decimal
       });
     } else {
-      console.log(`❌ TOO FAR: ${worker.name} (${distKm.toFixed(2)}km away) - exceeds 5km radius`);
+      console.log(`❌ TOO FAR: ${worker.name} (${distKm.toFixed(2)}km away) - exceeds 10km radius`);
     }
   }
 
   // Log skipped workers for debugging
   if (skippedWorkers.length > 0) {
-    console.log(`🔴 Skipped offline workers: ${skippedWorkers.join(', ')}`);
+    console.log(`🔴 Skipped workers: ${skippedWorkers.join(', ')}`);
   }
 
   // Sort by distance (nearest first)
