@@ -14,6 +14,7 @@ const multer = require("multer"); // ✅ For profile photo uploads
 const mongoose = require("mongoose");
 const WorkerModel = require("./models/Worker");
 const { findNearbyWorkers } = require("./services/matchingService");
+const fileUpload = require('express-fileupload'); // ✅ For job image uploads
 
 // ---------------- CONFIG ----------------
 const PORT = process.env.PORT || 3000;
@@ -68,7 +69,8 @@ app.set('io', io);
 app.use(cors());
 // Increase body size limits to allow base64 image uploads from mobile clients
 app.use(express.json({ limit: '10mb'}));
-app.use(express.urlencoded({ extended: true, limit: '10mb' })); 
+app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+app.use(fileUpload()); // ✅ Enable file upload handling
 app.use("/uploads", express.static(path.join(__dirname, "uploads"))); 
 app.use("/admin", express.static(path.join(__dirname, "public/admin")));
 
@@ -1461,8 +1463,8 @@ app.post("/jobs/post", authenticateToken, async (req, res) => {
     const { title, description, workerType, amount, lat, lon, date, imageUrl, startTime, endTime } = req.body;
     const contractorName = req.user.name;
 
-    if (!title || !lat || !lon)
-      return res.status(400).json({ success: false, message: "Missing required fields" });
+    if (!title || !lat || !lon || lat === 0 || lon === 0)
+      return res.status(400).json({ success: false, message: "Missing required fields: title, lat, lon must be provided and non-zero" });
 
     let wallet = await Wallet.findOne({ phone: req.user.phone });
     if (!wallet) {
