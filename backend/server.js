@@ -94,6 +94,10 @@ app.use("/api/payouts", payoutRoutes);
 const adminRoutes = require("./routes/admin");
 app.use("/admin", adminRoutes);
 
+// ✅ Mount upload routes for profile photos and documents
+const uploadRoutes = require("./routes/Upload");
+app.use("/upload", uploadRoutes);
+
 // ✅ Import and start leaderboard scheduler
 const { startLeaderboardScheduler } = require("./services/leaderboardScheduler");
 
@@ -247,6 +251,7 @@ async function offerJobToNextWorker(job) {
       connectedWorkers
     );
     
+    console.log(`🔍 Job Details - Title: ${job.title}, Skill: ${job.description}, Amount: ${job.amount}, Location: (${job.lat}, ${job.lon})`);
     console.log(`🔍 Smart matching: Found ${currentNearbyWorkers.length} nearby workers with matching skill & wage (${declinedWorkerNames.length} declined)`);
     
     // Find first worker who hasn't declined AND doesn't have unpaid jobs AND is ONLINE
@@ -311,6 +316,38 @@ async function offerJobToNextWorker(job) {
         distance: nextWorker.distance,
         totalNearbyWorkers: currentNearbyWorkers.length,
       });
+      
+      // ✅ ALSO SEND FIREBASE PUSH NOTIFICATION FOR FOREGROUND ALERT
+      try {
+        const worker = await User.findOne({ phone: nextWorker.phone });
+        if (worker && worker.fcmToken) {
+          console.log(`📲 Sending Firebase push notification to ${nextWorker.name}...`);
+          const pushResult = await sendNotificationToUserPhone(worker.phone, {
+            type: 'job_offer',
+            title: `New Job: ${job.title}`,
+            body: `₹${job.amount} • ${job.workerType || job.description} • ${nextWorker.distance}km away`,
+            jobId: job._id.toString(),
+            metadata: {
+              jobTitle: job.title,
+              amount: job.amount,
+              workerType: job.workerType,
+              lat: job.lat,
+              lon: job.lon,
+              actionRequired: true,
+            },
+          });
+          
+          if (pushResult.success) {
+            console.log(`✅ Firebase push sent to ${nextWorker.name}`);
+          } else {
+            console.warn(`⚠️ Firebase push failed for ${nextWorker.name}:`, pushResult.error);
+          }
+        } else {
+          console.warn(`⚠️ No FCM token for worker ${nextWorker.phone}`);
+        }
+      } catch (pushErr) {
+        console.error(`❌ Error sending Firebase push:`, pushErr);
+      }
       
       // Set timeout - if worker doesn't respond, try next one
       const WORKER_TIMEOUT_SECONDS = 60;
@@ -1296,6 +1333,7 @@ app.get("/leaderboard", async (req, res) => {
 
 // ===== OTP & AUTH ROUTES =====
 const { sendOtp } = require('./utils/sendOtp'); // ✅ Import Firebase OTP service
+const { sendPushToToken, sendNotificationToUserPhone } = require('./utils/push'); // ✅ Import Firebase push notifications for jobs
 
 // Request OTP - sends via Firebase Push or Console (for testing)
 app.post('/auth/request-otp', async (req, res) => {
@@ -1333,9 +1371,10 @@ app.post('/auth/request-otp', async (req, res) => {
     await user.save();
     console.log('  - User saved to database');
 
-    // Generate and send OTP
+    // Generate and send OTP. Prefer FCM token from request, fall back to stored token.
     console.log('  - Calling sendOtp()...');
-    const otpResult = await sendOtp(phone, fcmToken);
+    const tokenToUse = fcmToken || user.fcmToken || null;
+    const otpResult = await sendOtp(phone, tokenToUse);
     
     if (otpResult.success) {
       // Store OTP in database for verification
@@ -2858,6 +2897,32 @@ app.put('/workers/availability', authenticateToken, async (req, res) => {
   } catch (err) {
     console.error('❌ Update worker availability error:', err);
     res.status(500).json({ success: false, message: 'Error updating worker availability', error: err.message });
+  }
+});
+
+// ✅ REFRESH FCM TOKEN - Update user's FCM token when they reopen app
+app.post("/auth/refresh-fcm-token", authenticateToken, async (req, res) => {
+  try {
+    const { fcmToken } = req.body;
+    
+    if (!fcmToken) {
+      return res.status(400).json({ success: false, message: "FCM token required" });
+    }
+
+    const user = await User.findOne({ phone: req.user.phone });
+    if (!user) {
+      return res.status(404).json({ success: false, message: "User not found" });
+    }
+
+    // Update FCM token
+    user.fcmToken = fcmToken;
+    await user.save();
+
+    console.log(`📱 FCM token refreshed for ${req.user.phone}: ${fcmToken.substring(0, 30)}...`);
+    res.json({ success: true, message: "FCM token updated" });
+  } catch (err) {
+    console.error("Error refreshing FCM token:", err);
+    res.status(500).json({ success: false, message: "Internal server error" });
   }
 });
 

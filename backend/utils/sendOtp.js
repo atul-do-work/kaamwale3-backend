@@ -52,7 +52,7 @@ async function sendOtpViaPush(phone, fcmToken) {
     }
 
     const otp = generateOtp();
-    console.log(`  - Generated OTP: ${otp}`);
+    // Generate OTP (do NOT log OTP value in production)
 
     const message = {
       notification: {
@@ -82,7 +82,6 @@ async function sendOtpViaPush(phone, fcmToken) {
       ...message,
       token: fcmToken,
     });
-
     console.log(`✅ OTP sent via Firebase Push to ${phone}. Message ID: ${response}`);
     return { success: true, otp: otp };
   } catch (err) {
@@ -97,7 +96,8 @@ async function sendOtpViaPush(phone, fcmToken) {
 function sendOtpViaConsole(phone) {
   try {
     const otp = generateOtp();
-    console.log(`\n🔐 OTP for ${phone}: ${otp} (expires in 5 minutes)\n`);
+    // Console fallback will not reveal OTP in logs in production
+    console.log(`\n🔐 OTP generated for ${phone} (expires in 5 minutes)\n`);
     return { success: true, otp: otp };
   } catch (err) {
     console.error('❌ OTP Generation Error:', err.message);
