@@ -70,7 +70,8 @@ app.use(cors());
 // Increase body size limits to allow base64 image uploads from mobile clients
 app.use(express.json({ limit: '10mb'}));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
-app.use(fileUpload()); // ✅ Enable file upload handling
+// ⚠️ IMPORTANT: Do NOT use fileUpload() globally - it conflicts with multer!
+// We'll use fileUpload only on specific routes where needed
 app.use("/uploads", express.static(path.join(__dirname, "uploads"))); 
 app.use("/admin", express.static(path.join(__dirname, "public/admin")));
 
@@ -404,6 +405,20 @@ io.use(async (socket, next) => {
               console.log(`🟢 Worker ${user.phone} marked as AVAILABLE (reconnected)`);
             }
             await existing.save();
+            
+            // Fetch mainSkill and expectedWage from User model
+            let mainSkill = null;
+            let expectedWage = null;
+            try {
+              const userRecord = await User.findOne({ phone: user.phone });
+              if (userRecord) {
+                mainSkill = userRecord.mainSkill;
+                expectedWage = userRecord.expectedWage;
+              }
+            } catch (e) {
+              console.error("Error fetching user mainSkill/expectedWage during reconnection:", e);
+            }
+            
             // keep a lightweight map for quick access
             connectedWorkers.set(socket.id, {
               name: existing.phone || user.name,
@@ -411,6 +426,8 @@ io.use(async (socket, next) => {
               lat: existing.location?.coordinates?.[1] || 0,
               lon: existing.location?.coordinates?.[0] || 0,
               workerType: existing.skills && existing.skills[0],
+              mainSkill: mainSkill, // ✅ Fetch from User model
+              expectedWage: expectedWage, // ✅ Fetch from User model
               socketId: socket.id,
               isAvailable: existing.isAvailable, // ✅ Now it's true from reconnection
             });
@@ -481,12 +498,16 @@ io.on("connection", (socket) => {
           coordinates: [lon || 0, lat || 0],
         };
 
-        // Fetch User record to get profilePhoto
+        // Fetch User record to get profilePhoto, mainSkill, and expectedWage
         let profilePhoto = null;
+        let mainSkill = null;
+        let expectedWage = null;
         try {
           const userRecord = await User.findOne({ phone });
           if (userRecord) {
             profilePhoto = userRecord.profilePhoto;
+            mainSkill = userRecord.mainSkill;
+            expectedWage = userRecord.expectedWage;
           }
         } catch (e) {
           console.error("Error fetching user profile photo for worker:", e);
@@ -504,6 +525,8 @@ io.on("connection", (socket) => {
           lat: lat || 0,
           lon: lon || 0,
           workerType: workerType || (updated.skills && updated.skills[0]),
+          mainSkill: mainSkill, // ✅ Fetch from User model
+          expectedWage: expectedWage, // ✅ Fetch from User model
           socketId: socket.id,
           isAvailable: updated.isAvailable || false, // ✅ Use worker's current availability status from toggle endpoint
         });
@@ -750,6 +773,16 @@ app.post("/users/update-profile", authenticateToken, async (req, res) => {
     user.mainSkill = mainSkill;
     user.expectedWage = expectedWage;
     await user.save();
+
+    // ✅ Update connectedWorkers map if this worker is currently connected
+    for (const [socketId, worker] of connectedWorkers.entries()) {
+      if (worker.phone === req.user.phone) {
+        worker.mainSkill = mainSkill;
+        worker.expectedWage = expectedWage;
+        console.log(`✅ Updated connected worker ${req.user.phone}: mainSkill=${mainSkill}, expectedWage=${expectedWage}`);
+        break;
+      }
+    }
 
     console.log(`✅ Profile updated for ${req.user.phone}: mainSkill=${mainSkill}, expectedWage=${expectedWage}`);
     return res.json({ 
@@ -1474,7 +1507,7 @@ app.post('/auth/logout', async (req, res) => {
 
 // ---------------- JOB ROUTES ----------------
 // ✅ UPLOAD JOB IMAGE
-app.post("/jobs/upload-image", authenticateToken, async (req, res) => {
+app.post("/jobs/upload-image", authenticateToken, fileUpload(), async (req, res) => {
   try {
     if (!req.files || !req.files.photo) {
       return res.status(400).json({ success: false, message: "No image provided" });
@@ -1486,8 +1519,11 @@ app.post("/jobs/upload-image", authenticateToken, async (req, res) => {
 
     await file.mv(uploadPath);
 
-    // Return the image URL that can be accessed
-    const imageUrl = `${process.env.NGROK_URL || 'http://localhost:5000'}/uploads/${filename}`;
+    // Return the image URL that can be accessed - use same logic as profile photos
+    const protocol = req.protocol || "http";
+    const host = process.env.SERVER_URL_DOMAIN || req.headers.host || "localhost:3000";
+    const serverURL = `${protocol}://${host}`;
+    const imageUrl = `${serverURL}/uploads/${filename}`;
     
     console.log(`✅ Job image uploaded: ${imageUrl}`);
     res.json({ success: true, imageUrl });

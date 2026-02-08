@@ -58,7 +58,13 @@ exports.findNearbyWorkers = (jobLocation, connectedWorkers) => {
     // ✅ SKILL MATCHING: Check if worker's mainSkill matches job's mainSkill
     // jobLocation.mainSkill is the job requirement (e.g., "Labour", "Mason")
     // worker.mainSkill is the worker's skill
-    if (jobLocation.mainSkill && worker.mainSkill && jobLocation.mainSkill !== worker.mainSkill) {
+    // ⚠️ IMPORTANT: Worker MUST have mainSkill set (cannot be undefined/null)
+    if (!worker.mainSkill) {
+      skippedWorkers.push(`${worker.name} (mainSkill NOT SET - worker must complete profile first)`);
+      continue;
+    }
+    
+    if (jobLocation.mainSkill && jobLocation.mainSkill !== worker.mainSkill) {
       skippedWorkers.push(`${worker.name} (skill mismatch: needs ${jobLocation.mainSkill}, has ${worker.mainSkill})`);
       continue;
     }
