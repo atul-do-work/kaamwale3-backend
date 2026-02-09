@@ -18,7 +18,7 @@
 
     "android": {
       "package": "com.atulsharma897438.kaamwale3",
-      "permissions": ["INTERNET", "POST_NOTIFICATIONS", "RECEIVE_BOOT_COMPLETED", "MODIFY_AUDIO_SETTINGS"],
+      "permissions": ["INTERNET", "POST_NOTIFICATIONS", "RECEIVE_BOOT_COMPLETED", "MODIFY_AUDIO_SETTINGS", "ACCESS_FINE_LOCATION", "ACCESS_COARSE_LOCATION"],
       "googleServicesFile": "./google-services.json",
       "icon": "./assets/icon.png",
       "adaptiveIcon": {
