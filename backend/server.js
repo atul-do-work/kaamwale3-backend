@@ -15,6 +15,7 @@ const mongoose = require("mongoose");
 const WorkerModel = require("./models/Worker");
 const { findNearbyWorkers } = require("./services/matchingService");
 const fileUpload = require('express-fileupload'); // ✅ For job image uploads
+const { updateGigDataOnCompletion, updateGigDataOnCancellation, updateGigDataOnAcceptance, getWorkerGigsSummary } = require("./utils/gigsDataTracker"); // ✅ Gigs tracking
 
 // ---------------- CONFIG ----------------
 const PORT = process.env.PORT || 3000;
@@ -255,8 +256,8 @@ async function offerJobToNextWorker(job) {
     console.log(`🔍 Job Details - Title: ${job.title}, Skill: ${job.description}, Amount: ${job.amount}, Location: (${job.lat}, ${job.lon})`);
     console.log(`🔍 Smart matching: Found ${currentNearbyWorkers.length} nearby workers with matching skill & wage (${declinedWorkerNames.length} declined)`);
     
-    // Find first worker who hasn't declined AND doesn't have unpaid jobs AND is ONLINE
-    let nextWorker = null;
+    // Build list of candidate workers who haven't declined, are online and don't have unpaid jobs
+    const candidates = [];
     for (const worker of currentNearbyWorkers) {
       if (declinedWorkerNames.includes(worker.name)) {
         continue; // Skip declined workers
@@ -280,12 +281,11 @@ async function offerJobToNextWorker(job) {
         continue; // Skip workers with unpaid jobs
       }
       
-      // This worker is available!
-      nextWorker = worker;
-      break;
+      // This worker is available - add to candidates
+      candidates.push(worker);
     }
     
-    if (!nextWorker) {
+    if (!candidates || candidates.length === 0) {
       // No available worker right now - just wait and retry
       console.log(`⏳ No available workers for job ${job._id} - will retry when workers come online`);
       
@@ -306,8 +306,79 @@ async function offerJobToNextWorker(job) {
       pendingJobTimeouts.set(job._id.toString(), retryTimeoutId);
       return;
     }
-    
-    // Found a worker! Offer the job
+
+    // If this is a bulk hiring job, offer to multiple workers simultaneously up to required slots
+    if (job.bulkHiring) {
+      const alreadyAccepted = job.acceptedWorkers ? job.acceptedWorkers.length : 0;
+      const slots = Math.max(0, (job.requiredWorkers || 1) - alreadyAccepted);
+      if (slots <= 0) {
+        console.log(`✅ Job ${job._id} already has required workers accepted`);
+        return;
+      }
+
+      console.log(`📤 Bulk offer: offering to up to ${slots} workers from ${candidates.length} candidates`);
+      let offered = 0;
+      for (const candidate of candidates) {
+        if (offered >= slots) break;
+        const workerSocket = io.sockets.sockets.get(candidate.socketId);
+        if (!workerSocket) continue;
+
+        try {
+          workerSocket.emit("newJob", {
+            ...job.toObject(),
+            distance: candidate.distance,
+            totalNearbyWorkers: currentNearbyWorkers.length,
+            bulkOffer: true,
+          });
+
+          // Send push notification if available
+          try {
+            const worker = await User.findOne({ phone: candidate.phone });
+            if (worker && worker.fcmToken) {
+              await sendNotificationToUserPhone(worker.phone, {
+                type: 'job_offer',
+                title: `New Job: ${job.title}`,
+                body: `₹${job.amount} • ${job.workerType || job.description} • ${candidate.distance}km away`,
+                jobId: job._id.toString(),
+                metadata: { jobTitle: job.title, amount: job.amount, workerType: job.workerType, lat: job.lat, lon: job.lon, actionRequired: true },
+              });
+            }
+          } catch (pushErr) {
+            console.error(`❌ Error sending push for bulk candidate ${candidate.phone}:`, pushErr);
+          }
+
+          // Set individual timeout to try other workers if not enough acceptances
+          const WORKER_TIMEOUT_SECONDS = 60;
+          const timeoutId = setTimeout(async () => {
+            try {
+              const jobCheck = await Job.findById(job._id);
+              if (jobCheck && (!jobCheck.bulkHiring || (jobCheck.acceptedWorkers?.length || 0) < (jobCheck.requiredWorkers || 1))) {
+                console.log(`⏱️ Bulk candidate ${candidate.name} timeout - retrying offers for job ${job._id}...`);
+                await offerJobToNextWorker(jobCheck);
+              }
+            } catch (e) {
+              console.error('Error in bulk job timeout:', e);
+            }
+          }, WORKER_TIMEOUT_SECONDS * 1000);
+
+          // Store timeout (overwrite previous simple timeout id)
+          pendingJobTimeouts.set(job._id.toString(), timeoutId);
+          offered++;
+          console.log(`⏳ Bulk offer sent to ${candidate.name} (${candidate.phone})`);
+        } catch (emitErr) {
+          console.error('Error emitting bulk offer to candidate:', emitErr);
+        }
+      }
+      return;
+    }
+
+    // Single-offer flow: pick first candidate
+    const nextWorker = candidates[0];
+    if (!nextWorker) {
+      console.log(`⚠️ No single candidate found after filtering for job ${job._id}`);
+      return;
+    }
+
     console.log(`📤 Offering job ${job._id} to worker: ${nextWorker.name} (Skill: ${nextWorker.mainSkill}, Wage: ${nextWorker.expectedWage}, Distance: ${nextWorker.distance}km)`);
 
     const workerSocket = io.sockets.sockets.get(nextWorker.socketId);
@@ -1561,6 +1632,8 @@ app.post("/jobs/post", authenticateToken, async (req, res) => {
     });
     await wallet.save();
 
+    const { bulkHiring, requiredWorkers } = req.body;
+
     const newJob = new Job({
       // ✅ MongoDB auto-generates _id - no need for custom id field
       title,
@@ -1575,6 +1648,8 @@ app.post("/jobs/post", authenticateToken, async (req, res) => {
       date: date || new Date(),
       startTime: startTime || null, // ✅ Store start time
       endTime: endTime || null, // ✅ Store end time
+      bulkHiring: bulkHiring === true || bulkHiring === 'true' || false,
+      requiredWorkers: parseInt(requiredWorkers) || 1,
       status: "pending",
       declinedBy: [],
     });
@@ -1654,21 +1729,105 @@ app.post("/jobs/accept/:id", authenticateToken, async (req, res) => {
       const workerRecord = await WorkerModel.findOne({ phone: req.user.phone });
       const userRecord = await User.findOne({ phone: req.user.phone }); // ✅ Get profile photo from User model
       
-      if (workerRecord) {
-        acceptedWorkerSnapshot = {
-          id: workerRecord._id.toString(),
-          name: req.user.name || req.user.phone,
-          phone: workerRecord.phone,
-          skills: workerRecord.skills || [],
-          profilePhoto: userRecord?.profilePhoto || null, // ✅ Get from User model
-          location: workerRecord.location || null,
-        };
-      }
+      acceptedWorkerSnapshot = {
+        id: workerRecord?._id?.toString() || null,
+        name: req.user.name || req.user.phone,
+        phone: req.user.phone,
+        skills: workerRecord?.skills || [],
+        profilePhoto: userRecord?.profilePhoto || null,
+        location: workerRecord?.location || null,
+        acceptedAt: new Date(),
+      };
     } catch (e) {
       console.error("Error fetching worker record for accept snapshot:", e);
     }
 
-    // Atomic update: only accept if status is still 'pending'
+    // Fetch job
+    const job = await Job.findById(jobId);
+    if (!job) {
+      return res.status(404).json({ success: false, message: "Job not found" });
+    }
+
+    // Re-check unpaid jobs for this worker (both single and bulk)
+    const hasUnpaidJobSingle = await Job.findOne({ acceptedBy: workerPhone, paymentStatus: { $ne: "Paid" } });
+    const hasUnpaidJobBulk = await Job.findOne({ "acceptedWorkers.phone": workerPhone, paymentStatus: { $ne: "Paid" } });
+    if (hasUnpaidJobSingle || hasUnpaidJobBulk) {
+      return res.status(400).json({ success: false, message: "You have an unpaid job. Complete or decline it first." });
+    }
+
+    // Handle bulk hiring acceptance
+    if (job.bulkHiring) {
+      // Prevent duplicate accepts
+      if (job.acceptedWorkers && job.acceptedWorkers.find(w => w.phone === workerPhone)) {
+        return res.status(400).json({ success: false, message: "You have already accepted this job" });
+      }
+
+      job.acceptedWorkers = job.acceptedWorkers || [];
+      job.acceptedWorkers.push(acceptedWorkerSnapshot);
+
+      // If required reached, finalize job
+      if (job.acceptedWorkers.length >= (job.requiredWorkers || 1)) {
+        job.status = 'accepted';
+        job.acceptedBy = job.acceptedWorkers[0]?.phone || workerPhone;
+        job.acceptedWorker = job.acceptedWorkers[0] || acceptedWorkerSnapshot;
+        job.acceptedAt = job.acceptedAt || new Date();
+      }
+
+      await job.save();
+
+      // Track acceptance
+      try {
+        await updateGigDataOnAcceptance(workerPhone, {
+          jobId: job._id.toString(),
+          title: job.title,
+          amount: job.amount,
+          workerType: job.workerType
+        });
+      } catch (e) {
+        console.error("❌ Error updating gigs data on acceptance:", e);
+      }
+
+      // Notify contractor about updated accepted count
+      try {
+        await NotificationHistory.create({
+          recipientPhone: job.contractorPhone,
+          senderPhone: req.user.phone,
+          senderName: workerName || req.user.name,
+          type: 'job_accepted',
+          title: `Worker Accepted: ${job.title}`,
+          body: `${workerName} accepted your job. ${job.acceptedWorkers.length}/${job.requiredWorkers} accepted.`,
+          jobId: job._id.toString(),
+          metadata: { acceptedCount: job.acceptedWorkers.length, requiredWorkers: job.requiredWorkers },
+          deepLink: `contractor/jobs/${job._id.toString()}`,
+          pushNotificationSent: false,
+        });
+      } catch (e) {
+        console.error('Error creating job acceptance notification for contractor:', e);
+      }
+
+      // Emit targeted update with accepted workers list
+      const payload = { ...job.toObject(), _targetedUpdate: true, targetedFor: [job.contractorName] };
+      await emitJobUpdatedToUsers(payload, [job.contractorName]);
+
+      // If finalized, also notify workers and start tracking
+      if (job.status === 'accepted') {
+        if (pendingJobTimeouts.has(jobId)) {
+          clearTimeout(pendingJobTimeouts.get(jobId));
+          pendingJobTimeouts.delete(jobId);
+        }
+
+        try {
+          const TRACK_MINUTES = Number(process.env.TRACK_MINUTES) || 10;
+          trackingJobs.set(jobId, Date.now() + TRACK_MINUTES * 40 * 1000);
+        } catch (e) {
+          console.error("Error starting tracking for job", e);
+        }
+      }
+
+      return res.json({ success: true, message: "Job accepted successfully", job });
+    }
+
+    // Non-bulk: Atomic update: only accept if status is still 'pending'
     const updated = await Job.findOneAndUpdate(
       { _id: jobId, status: "pending" },
       { $set: { status: "accepted", acceptedBy: workerPhone, acceptedWorker: acceptedWorkerSnapshot, acceptedAt: new Date() } }, // ✅ Use phone
@@ -1681,7 +1840,21 @@ app.post("/jobs/accept/:id", authenticateToken, async (req, res) => {
     }
 
     console.log(`✅ Job accepted successfully by ${workerName} (phone: ${workerPhone})`);
-    
+
+    // ✅ TRACK: Update gigs data on job acceptance
+    try {
+      await updateGigDataOnAcceptance(workerPhone, {
+        jobId: updated._id.toString(),
+        title: updated.title,
+        amount: updated.amount,
+        workerType: updated.workerType
+      });
+      console.log(`✅ Gigs data updated for acceptance by ${workerPhone}`);
+    } catch (e) {
+      console.error("❌ Error updating gigs data on acceptance:", e);
+      // Don't fail the request if tracking fails
+    }
+
     // ✅ Create notification for contractor
     try {
       const jobTitle = updated.title;
@@ -1706,7 +1879,7 @@ app.post("/jobs/accept/:id", authenticateToken, async (req, res) => {
     } catch (e) {
       console.error('Error creating job acceptance notification for contractor:', e);
     }
-    
+
     // ✅ Create notification for worker - confirming they accepted the job
     try {
       if (updated.acceptedWorker && updated.acceptedWorker.phone) {
@@ -1733,7 +1906,7 @@ app.post("/jobs/accept/:id", authenticateToken, async (req, res) => {
     } catch (e) {
       console.error('Error creating job acceptance notification for worker:', e);
     }
-    
+
     // ✅ TARGETED UPDATE: Only notify contractor and worker (NOT all 1 lakh workers!)
     // Contractor needs to know job is accepted (update their posted jobs list)
     // Worker who accepted needs confirmation
@@ -1745,14 +1918,14 @@ app.post("/jobs/accept/:id", authenticateToken, async (req, res) => {
       targetedFor: [updated.contractorName, workerName]
     };
     await emitJobUpdatedToUsers(acceptPayload, [updated.contractorName, workerName]);
-    
+
     // ✅ Cancel worker timeout since job was accepted
     if (pendingJobTimeouts.has(jobId)) {
       clearTimeout(pendingJobTimeouts.get(jobId));
       pendingJobTimeouts.delete(jobId);
       console.log(`✅ Cancelled timeout for accepted job ${jobId}`);
     }
-    
+
     // Start forwarding location updates for this job for a limited time (10 minutes)
     try {
       const TRACK_MINUTES = Number(process.env.TRACK_MINUTES) || 10;
@@ -1772,6 +1945,7 @@ app.post("/jobs/decline/:id", authenticateToken, async (req, res) => {
   try {
     const jobId = req.params.id;
     const workerName = req.user.name;
+    const workerPhone = req.user.phone;
 
     console.log(`📋 Decline request for job: ${jobId} by worker: ${workerName}`);
 
@@ -1787,15 +1961,62 @@ app.post("/jobs/decline/:id", authenticateToken, async (req, res) => {
       job.declinedBy.push(workerName);
     }
     
-    // If job was accepted by this worker, reset status to pending and clear tracking
-    if (job.acceptedBy === workerName && job.status === "accepted") {
-      job.status = "pending";
-      job.acceptedBy = null;
-      job.acceptedWorker = null;
-      job.acceptedAt = null;
-      // Stop tracking location for this declined job
-      if (trackingJobs.has(jobId)) {
-        trackingJobs.delete(jobId);
+    // If job was accepted by this worker (single) or part of bulk acceptedWorkers, update accordingly
+    if (job.bulkHiring) {
+      // Remove from acceptedWorkers if present
+      const before = job.acceptedWorkers ? job.acceptedWorkers.length : 0;
+      job.acceptedWorkers = (job.acceptedWorkers || []).filter(w => w.phone !== workerPhone);
+      const after = job.acceptedWorkers.length;
+
+      if (after < before) {
+        console.log(`🔄 Removed worker ${workerPhone} from acceptedWorkers (${before} → ${after})`);
+        // If job was finalized and now has fewer than required, revert to pending
+        if (job.status === 'accepted' && after < (job.requiredWorkers || 1)) {
+          job.status = 'pending';
+          job.acceptedBy = null;
+          job.acceptedWorker = null;
+          job.acceptedAt = null;
+          if (trackingJobs.has(jobId)) trackingJobs.delete(jobId);
+        }
+
+        // ✅ TRACK: Update gigs data on job cancellation for this worker
+        try {
+          await updateGigDataOnCancellation(workerPhone, {
+            jobId: job._id.toString(),
+            title: job.title,
+            amount: job.amount,
+            workerType: job.workerType
+          });
+          console.log(`✅ Gigs data updated for cancellation by ${workerPhone}`);
+        } catch (e) {
+          console.error("❌ Error updating gigs data on cancellation:", e);
+        }
+      }
+    } else {
+      // Single accept flow
+      if (job.acceptedBy === workerPhone && job.status === "accepted") {
+        job.status = "pending";
+        job.acceptedBy = null;
+        job.acceptedWorker = null;
+        job.acceptedAt = null;
+        // Stop tracking location for this declined job
+        if (trackingJobs.has(jobId)) {
+          trackingJobs.delete(jobId);
+        }
+        
+        // ✅ TRACK: Update gigs data on job cancellation
+        try {
+          await updateGigDataOnCancellation(workerPhone, {
+            jobId: job._id.toString(),
+            title: job.title,
+            amount: job.amount,
+            workerType: job.workerType
+          });
+          console.log(`✅ Gigs data updated for cancellation by ${workerPhone}`);
+        } catch (e) {
+          console.error("❌ Error updating gigs data on cancellation:", e);
+          // Don't fail the request if tracking fails
+        }
       }
     }
     
@@ -2068,12 +2289,55 @@ app.post("/jobs/pay/:id", authenticateToken, async (req, res) => {
     // ✅ AUTO-UPDATE CONTRACTOR STATS AFTER PAYMENT
     await updateContractorStats(req.user.phone);
 
+    // ✅ TRACK: Update gigs data on job completion
+    try {
+      await updateGigDataOnCompletion(job.acceptedBy, {
+        jobId: job._id.toString(),
+        title: job.title,
+        amount: job.amount,
+        workerType: job.workerType,
+        timeSpentMinutes: job.timeSpentMinutes || 0
+      });
+      console.log(`✅ Gigs data updated for completion by ${job.acceptedBy}`);
+    } catch (e) {
+      console.error("❌ Error updating gigs data on completion:", e);
+      // Don't fail the request if tracking fails
+    }
+
     // Targeted: notify contractor and worker about payment
     await emitJobUpdatedToUsers(job, [job.contractorName, job.acceptedBy || job.contractorName]);
     return res.json({ success: true, message: "Payment successful", job });
   } catch (err) {
     console.error(err);
     return res.status(500).json({ success: false, message: "Internal server error" });
+  }
+});
+
+// -------- WORKER INCENTIVE DATA ENDPOINT --------
+app.get("/worker/incentive-data", authenticateToken, async (req, res) => {
+  try {
+    const workerPhone = req.user.phone;
+    console.log(`📊 Fetching incentive data for worker: ${workerPhone}`);
+
+    const gigsData = await getWorkerGigsSummary(workerPhone);
+    
+    if (!gigsData) {
+      return res.status(404).json({ 
+        success: false, 
+        message: "Worker not found or no gigs data available" 
+      });
+    }
+
+    return res.json({ 
+      success: true, 
+      data: gigsData 
+    });
+  } catch (err) {
+    console.error("❌ Error fetching incentive data:", err);
+    return res.status(500).json({ 
+      success: false, 
+      message: "Error fetching incentive data" 
+    });
   }
 });
 

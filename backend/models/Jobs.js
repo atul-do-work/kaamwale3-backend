@@ -15,8 +15,8 @@ const jobSchema = new mongoose.Schema({
   startTime: String, // ✅ Start time like "09:00" or "9 AM"
   endTime: String, // ✅ End time like "18:00" or "6 PM"
   status: { type: String, default: 'pending' },
-  acceptedBy: String,
-  acceptedWorker: { // ✅ Snapshot of worker data when accepted
+  acceptedBy: String, // ✅ Legacy: first accepted worker phone
+  acceptedWorker: { // ✅ Snapshot of worker data when accepted - legacy, use acceptedWorkers for bulk
     id: String,
     name: String,
     phone: String,
@@ -27,6 +27,20 @@ const jobSchema = new mongoose.Schema({
       coordinates: [Number], // [longitude, latitude]
     }
   },
+  // ✅ NEW: Bulk hiring fields
+  bulkHiring: { type: Boolean, default: false }, // Whether this is a bulk hiring job
+  requiredWorkers: { type: Number, default: 1 }, // How many workers needed
+  acceptedWorkers: [{ // Array of accepted workers with snapshot data
+    phone: String,
+    name: String,
+    profilePhoto: String,
+    acceptedAt: Date,
+    skills: [String],
+    location: {
+      type: { type: String, enum: ["Point"], default: "Point" },
+      coordinates: [Number],
+    }
+  }],
   declinedBy: [String],
   attendanceStatus: String,
   attendanceTime: Date,
