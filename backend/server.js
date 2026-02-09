@@ -108,6 +108,97 @@ const fs = require("fs").promises;
 const uploadsDir = path.join(__dirname, "uploads");
 fs.mkdir(uploadsDir, { recursive: true }).catch(console.error);
 
+// ==================== OLA MAPS PROXY ENDPOINTS (Production-Ready) ====================
+// These endpoints proxy Ola Maps API calls and keep sensitive credentials on backend
+const OLA_API_KEY = process.env.OLA_API_KEY || "mLUlm8Motwb8xQlxYGA136TCAkDYVuhLHds9vANS";
+const OLA_CLIENT_ID = process.env.OLA_CLIENT_ID || "80cd9c19-9fec-4241-8b26-dd6d0b6f6426";
+const OLA_CLIENT_SECRET = process.env.OLA_CLIENT_SECRET || "4f23bf58aa0f40f88310bd2f542e852c";
+
+// POST /ola/token - Exchange client credentials for OAuth access token (server-side)
+app.post("/ola/token", async (req, res) => {
+  try {
+    const params = new URLSearchParams();
+    params.append("grant_type", "client_credentials");
+    params.append("scope", "openid");
+    params.append("client_id", OLA_CLIENT_ID);
+    params.append("client_secret", OLA_CLIENT_SECRET);
+
+    const tokenResp = await fetch("https://api.olamaps.io/auth/v1/token", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: params.toString(),
+    });
+
+    const tokenData = await tokenResp.json();
+    return res.json(tokenData);
+  } catch (err) {
+    console.error("❌ OLA token error:", err.message);
+    return res.status(500).json({ success: false, message: "Failed to fetch Ola token" });
+  }
+});
+
+// GET /ola/places - Places autocomplete (search for locations)
+app.get("/ola/places", async (req, res) => {
+  try {
+    const input = req.query.input || "";
+    if (!input) return res.status(400).json({ success: false, message: "Missing input parameter" });
+
+    const url = `https://api.olamaps.io/places/v1/autocomplete?input=${encodeURIComponent(input)}&api_key=${OLA_API_KEY}`;
+    const response = await fetch(url);
+    const data = await response.json();
+    
+    if (!response.ok) {
+      console.warn(`⚠️ OLA Places API error: ${response.status}`, data);
+    }
+    return res.json(data);
+  } catch (err) {
+    console.error("❌ OLA places error:", err.message);
+    return res.status(500).json({ success: false, message: "Places lookup failed" });
+  }
+});
+
+// GET /ola/geocode - Forward geocode (text → coordinates)
+app.get("/ola/geocode", async (req, res) => {
+  try {
+    const text = req.query.text || "";
+    if (!text) return res.status(400).json({ success: false, message: "Missing text parameter" });
+
+    const url = `https://api.olamaps.io/geocode/v1/search?text=${encodeURIComponent(text)}&api_key=${OLA_API_KEY}`;
+    const response = await fetch(url);
+    const data = await response.json();
+    
+    if (!response.ok) {
+      console.warn(`⚠️ OLA Geocode API error: ${response.status}`, data);
+    }
+    return res.json(data);
+  } catch (err) {
+    console.error("❌ OLA geocode error:", err.message);
+    return res.status(500).json({ success: false, message: "Geocode failed" });
+  }
+});
+
+// GET /ola/reverse-geocode - Reverse geocode (coordinates → place name)
+app.get("/ola/reverse-geocode", async (req, res) => {
+  try {
+    const { lat, lon } = req.query;
+    if (!lat || !lon) return res.status(400).json({ success: false, message: "Missing lat/lon parameters" });
+
+    const url = `https://api.olamaps.io/geocode/v1/reverse?latlng=${lat},${lon}&api_key=${OLA_API_KEY}`;
+    const response = await fetch(url);
+    const data = await response.json();
+    
+    if (!response.ok) {
+      console.warn(`⚠️ OLA Reverse Geocode API error: ${response.status}`, data);
+    }
+    return res.json(data);
+  } catch (err) {
+    console.error("❌ OLA reverse geocode error:", err.message);
+    return res.status(500).json({ success: false, message: "Reverse geocode failed" });
+  }
+});
+
+// =====================================================================================
+
 // ---------------- RATE LIMITERS ----------------
 const loginLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -257,10 +348,18 @@ async function offerJobToNextWorker(job) {
     console.log(`🔍 Smart matching: Found ${currentNearbyWorkers.length} nearby workers with matching skill & wage (${declinedWorkerNames.length} declined)`);
     
     // Build list of candidate workers who haven't declined, are online and don't have unpaid jobs
+    // ✅ For bulk hiring, also skip workers already in acceptedWorkers
+    const acceptedPhones = (job.bulkHiring && job.acceptedWorkers) ? job.acceptedWorkers.map(w => w.phone) : [];
     const candidates = [];
     for (const worker of currentNearbyWorkers) {
       if (declinedWorkerNames.includes(worker.name)) {
         continue; // Skip declined workers
+      }
+      
+      // ✅ For bulk hiring, skip workers who already accepted
+      if (job.bulkHiring && acceptedPhones.includes(worker.phone)) {
+        console.log(`✅ Worker ${worker.name} (${worker.phone}) already accepted this bulk job, skipping...`);
+        continue;
       }
       
       // ✅ CHECK: Is worker online/available in USER model (primary source of truth)?
