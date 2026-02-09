@@ -17,6 +17,12 @@ export default function WaitingScreen() {
   const [token, setToken] = useState<string | null>(null);
   const [currentUser, setCurrentUser] = useState<any | null>(null);
   
+  // ✅ NEW: Bulk hiring states
+  const [isBulkHiring, setIsBulkHiring] = useState(false);
+  const [requiredWorkers, setRequiredWorkers] = useState(1);
+  const [acceptedWorkers, setAcceptedWorkers] = useState<any[]>([]);
+  const [bulkHiringComplete, setBulkHiringComplete] = useState(false);
+  
   // ✅ NEW: Chat/Callback modal states
   const [chatModalVisible, setChatModalVisible] = useState(false);
   const [chatMessages, setChatMessages] = useState<Array<{id: string, sender: 'user' | 'support', text: string, timestamp: Date}>>([
@@ -231,7 +237,21 @@ export default function WaitingScreen() {
             }
             
             console.log("✅ Job status:", job.status);
-            if (job.status === "accepted") {
+            
+            // ✅ Check if this is a bulk hiring job
+            if (job.bulkHiring) {
+              console.log(`📊 Bulk hiring job - Required: ${job.requiredWorkers}, Accepted: ${job.acceptedWorkers?.length || 0}`);
+              setIsBulkHiring(true);
+              setRequiredWorkers(job.requiredWorkers || 1);
+              setAcceptedWorkers(job.acceptedWorkers || []);
+              
+              // Check if all required workers have accepted
+              if (job.acceptedWorkers && job.acceptedWorkers.length >= job.requiredWorkers) {
+                console.log("🎉 All workers accepted!");
+                setBulkHiringComplete(true);
+                setModalVisible(true);
+              }
+            } else if (job.status === "accepted") {
               console.log("🎉 Job accepted! Showing modal");
               // Use acceptedWorker snapshot if available, fallback to acceptedBy
               const worker = job.acceptedWorker || { name: job.acceptedBy };
@@ -288,7 +308,26 @@ export default function WaitingScreen() {
       {/* Center Loader */}
       <View style={styles.centerArea}>
         <ActivityIndicator size="large" color="#667eea" />
-        <Text style={styles.loadingText}>We are notifying workers near you</Text>
+        {isBulkHiring ? (
+          <>
+            <Text style={styles.loadingText}>Waiting for Workers...</Text>
+            <View style={styles.bulkHiringCounter}>
+              <Text style={styles.counterText}>
+                {acceptedWorkers.length} / {requiredWorkers} Workers Accepted
+              </Text>
+              <View style={styles.progressBar}>
+                <View 
+                  style={[
+                    styles.progressFill,
+                    { width: `${(acceptedWorkers.length / requiredWorkers) * 100}%` }
+                  ]}
+                />
+              </View>
+            </View>
+          </>
+        ) : (
+          <Text style={styles.loadingText}>We are notifying workers near you</Text>
+        )}
       </View>
 
       {/* Bottom Buttons */}
@@ -376,39 +415,74 @@ export default function WaitingScreen() {
           <View style={styles.modalCard}>
             {/* Header: Success Icon */}
             <View style={styles.modalHeader}>
-              <Ionicons name="checkmark-circle" size={60} color="#10b981" />
-              <Text style={styles.modalTitle}>Job Accepted!</Text>
+              <Ionicons name={isBulkHiring ? "people" : "checkmark-circle"} size={60} color={isBulkHiring ? "#667eea" : "#10b981"} />
+              <Text style={styles.modalTitle}>
+                {isBulkHiring ? `${acceptedWorkers.length} Workers Accepted!` : "Job Accepted!"}
+              </Text>
             </View>
 
-            {/* Worker Profile Section */}
-            <View style={styles.workerSection}>
-              {/* Profile Photo */}
-              {acceptedWorker?.profilePhoto ? (
-                <Image 
-                  source={{ uri: acceptedWorker.profilePhoto }} 
-                  style={styles.profilePhoto}
-                />
-              ) : (
-                <View style={[styles.profilePhoto, { backgroundColor: "#e5e7eb", justifyContent: "center", alignItems: "center" }]}>
-                  <Ionicons name="person" size={40} color="#9ca3af" />
+            {/* ✅ Bulk Hiring: Show all accepted workers */}
+            {isBulkHiring && bulkHiringComplete ? (
+              <ScrollView style={styles.bulkWorkersList}>
+                {acceptedWorkers.map((worker, index) => (
+                  <View key={index} style={styles.bulkWorkerCard}>
+                    {/* Profile Photo */}
+                    {worker.profilePhoto ? (
+                      <Image 
+                        source={{ uri: worker.profilePhoto }} 
+                        style={styles.bulkWorkerPhoto}
+                      />
+                    ) : (
+                      <View style={[styles.bulkWorkerPhoto, { backgroundColor: "#e5e7eb", justifyContent: "center", alignItems: "center" }]}>
+                        <Ionicons name="person" size={24} color="#9ca3af" />
+                      </View>
+                    )}
+                    
+                    <View style={styles.bulkWorkerInfo}>
+                      <Text style={styles.bulkWorkerName}>{worker.name || worker.phone || "Worker"}</Text>
+                      {worker.skills && worker.skills.length > 0 && (
+                        <Text style={styles.bulkWorkerSkills}>{worker.skills.join(", ")}</Text>
+                      )}
+                      {worker.acceptedAt && (
+                        <Text style={styles.acceptedTime}>
+                          Accepted at {new Date(worker.acceptedAt).toLocaleTimeString()}
+                        </Text>
+                      )}
+                    </View>
+                  </View>
+                ))}
+              </ScrollView>
+            ) : (
+              /* Single Worker Modal */
+              <View style={styles.workerSection}>
+                {/* Profile Photo */}
+                {acceptedWorker?.profilePhoto ? (
+                  <Image 
+                    source={{ uri: acceptedWorker.profilePhoto }} 
+                    style={styles.profilePhoto}
+                  />
+                ) : (
+                  <View style={[styles.profilePhoto, { backgroundColor: "#e5e7eb", justifyContent: "center", alignItems: "center" }]}>
+                    <Ionicons name="person" size={40} color="#9ca3af" />
+                  </View>
+                )}
+
+                {/* Worker Info */}
+                <Text style={styles.workerName}>{acceptedWorker?.name || acceptedWorker?.phone || "Worker"}</Text>
+                
+                {acceptedWorker?.skills && acceptedWorker.skills.length > 0 && (
+                  <Text style={styles.workerSkills}>{acceptedWorker.skills.join(", ")}</Text>
+                )}
+
+                {/* Location Info */}
+                <View style={styles.locationContainer}>
+                  <Ionicons name="location" size={18} color="#6366f1" />
+                  <Text style={styles.locationText}>
+                    {workerLocationName}
+                  </Text>
                 </View>
-              )}
-
-              {/* Worker Info */}
-              <Text style={styles.workerName}>{acceptedWorker?.name || acceptedWorker?.phone || "Worker"}</Text>
-              
-              {acceptedWorker?.skills && acceptedWorker.skills.length > 0 && (
-                <Text style={styles.workerSkills}>{acceptedWorker.skills.join(", ")}</Text>
-              )}
-
-              {/* Location Info */}
-              <View style={styles.locationContainer}>
-                <Ionicons name="location" size={18} color="#6366f1" />
-                <Text style={styles.locationText}>
-                  {workerLocationName}
-                </Text>
               </View>
-            </View>
+            )}
 
             {/* OK Button */}
             <TouchableOpacity onPress={handleCloseModal} style={styles.okButton}>
@@ -641,5 +715,69 @@ const styles = StyleSheet.create({
     backgroundColor: "#667eea",
     justifyContent: "center",
     alignItems: "center",
+  },
+  // ✅ Bulk hiring styles
+  bulkHiringCounter: {
+    marginTop: 20,
+    width: '80%',
+    alignItems: 'center',
+  },
+  counterText: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#667eea',
+    marginBottom: 12,
+  },
+  progressBar: {
+    width: '100%',
+    height: 8,
+    backgroundColor: 'rgba(102, 126, 234, 0.2)',
+    borderRadius: 4,
+    overflow: 'hidden',
+  },
+  progressFill: {
+    height: '100%',
+    backgroundColor: '#667eea',
+  },
+  bulkWorkersList: {
+    width: '100%',
+    maxHeight: 300,
+    marginBottom: 20,
+  },
+  bulkWorkerCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#f3f4f6',
+    padding: 12,
+    marginBottom: 10,
+    borderRadius: 12,
+    borderLeftWidth: 4,
+    borderLeftColor: '#10b981',
+  },
+  bulkWorkerPhoto: {
+    width: 50,
+    height: 50,
+    borderRadius: 25,
+    marginRight: 12,
+    borderWidth: 2,
+    borderColor: '#10b981',
+  },
+  bulkWorkerInfo: {
+    flex: 1,
+  },
+  bulkWorkerName: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#1f2937',
+    marginBottom: 4,
+  },
+  bulkWorkerSkills: {
+    fontSize: 12,
+    color: '#6b7280',
+    marginBottom: 4,
+  },
+  acceptedTime: {
+    fontSize: 11,
+    color: '#9ca3af',
   },
 });

@@ -8,14 +8,16 @@ import {
   ActivityIndicator,
   FlatList,
   RefreshControl,
-  Modal,
-  Alert,
   Platform,
+  Dimensions,
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { API_BASE } from '../utils/config';
+import { LinearGradient } from 'expo-linear-gradient';
+
+const { width } = Dimensions.get('window');
 
 const logActivity = async (action: string, details: string) => {
   try {
@@ -58,27 +60,71 @@ interface GigHistory {
   workDuration?: string;
 }
 
-interface AvailableJob {
-  _id: string;
-  title: string;
-  amount: number;
-  description: string;
-  location: string;
-  contractorName: string;
-  skills?: string[];
-  workDuration?: string;
-  deadline?: string;
+interface IncentiveTracker {
+  consecutiveDays: number;
+  totalHours: number;
+  cancellations: number;
+  lastWorkDate: string | null;
+  hoursToday: number;
+  eligibleFor5Days: boolean;
+  eligibleFor10Days: boolean;
+  eligibleFor20Days: boolean;
+}
+
+interface Milestone {
+  id: string;
+  days: number;
+  reward: number;
+  icon: string;
+  color: string;
+  completed: boolean;
+  progress: number;
 }
 
 export default function GigHistory() {
   const router = useRouter();
   const [gigs, setGigs] = useState<GigHistory[]>([]);
-  const [availableJobs, setAvailableJobs] = useState<AvailableJob[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [filter, setFilter] = useState<'all' | 'completed' | 'cancelled' | 'pending'>('all');
-  const [showBookingModal, setShowBookingModal] = useState(false);
-  const [bookingLoading, setBookingLoading] = useState(false);
+  const [incentiveData, setIncentiveData] = useState<IncentiveTracker>({
+    consecutiveDays: 0,
+    totalHours: 0,
+    cancellations: 0,
+    lastWorkDate: null,
+    hoursToday: 0,
+    eligibleFor5Days: false,
+    eligibleFor10Days: false,
+    eligibleFor20Days: false,
+  });
+  const [milestones, setMilestones] = useState<Milestone[]>([
+    {
+      id: '5days',
+      days: 5,
+      reward: 50,
+      icon: 'fire',
+      color: '#FF6B6B',
+      completed: false,
+      progress: 0,
+    },
+    {
+      id: '10days',
+      days: 10,
+      reward: 150,
+      icon: 'star',
+      color: '#FFD93D',
+      completed: false,
+      progress: 0,
+    },
+    {
+      id: '20days',
+      days: 20,
+      reward: 300,
+      icon: 'favorite',
+      color: '#FF1493',
+      completed: false,
+      progress: 0,
+    },
+  ]);
 
   useEffect(() => {
     fetchGigHistory();
@@ -95,58 +141,49 @@ export default function GigHistory() {
       if (res.ok) {
         const data = await res.json();
         setGigs(data);
+        calculateIncentiveProgress(data);
         await logActivity('GIG_HISTORY_VIEWED', 'User viewed their gig history');
       }
     } catch (err) {
       console.error('Error fetching gig history:', err);
-      Alert.alert('Error', 'Failed to load gig history');
     } finally {
       setLoading(false);
     }
   };
 
-  const fetchAvailableJobs = async () => {
-    try {
-      setBookingLoading(true);
-      const token = await AsyncStorage.getItem('token');
-      const res = await fetch(`${API_BASE}/jobs/available`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
+  const calculateIncentiveProgress = (gigsData: GigHistory[]) => {
+    // This will be populated with backend data later
+    // For now, we'll calculate from client-side gig data
+    
+    const completedGigs = gigsData.filter(g => g.paymentStatus === 'Paid');
+    const cancelledGigs = gigsData.filter(g => g.status === 'cancelled');
+    
+    // Calculate consecutive days (placeholder - will be from backend)
+    const consecutiveDays = Math.floor(Math.random() * 21); // For UI demo
+    const totalHours = completedGigs.length * 8; // Assuming 8 hours per gig
 
-      if (res.ok) {
-        const data = await res.json();
-        setAvailableJobs(data.slice(0, 5));
-      }
-    } catch (err) {
-      console.error('Error fetching available jobs:', err);
-    } finally {
-      setBookingLoading(false);
-    }
-  };
+    const tracker: IncentiveTracker = {
+      consecutiveDays,
+      totalHours,
+      cancellations: cancelledGigs.length,
+      lastWorkDate: new Date().toISOString(),
+      hoursToday: 8,
+      eligibleFor5Days: consecutiveDays >= 5 && cancelledGigs.length <= 1 && totalHours >= 35,
+      eligibleFor10Days: consecutiveDays >= 10 && cancelledGigs.length <= 1 && totalHours >= 70,
+      eligibleFor20Days: consecutiveDays >= 20 && cancelledGigs.length <= 1 && totalHours >= 140,
+    };
 
-  const handleBookJob = async (jobId: string) => {
-    try {
-      const token = await AsyncStorage.getItem('token');
-      const res = await fetch(`${API_BASE}/jobs/accept`, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ jobId }),
-      });
+    setIncentiveData(tracker);
 
-      if (res.ok) {
-        Alert.alert('Success', 'Job booked successfully!');
-        await logActivity('JOB_BOOKED', `Booked job: ${jobId}`);
-        setShowBookingModal(false);
-        await fetchGigHistory();
-      } else {
-        Alert.alert('Error', 'Failed to book job');
-      }
-    } catch (err) {
-      Alert.alert('Error', 'Failed to book job. Please try again.');
-    }
+    // Update milestones with progress
+    const updatedMilestones = milestones.map(m => ({
+      ...m,
+      progress: Math.min(consecutiveDays / m.days, 1),
+      completed: m.id === '5days' && tracker.eligibleFor5Days ||
+                m.id === '10days' && tracker.eligibleFor10Days ||
+                m.id === '20days' && tracker.eligibleFor20Days,
+    }));
+    setMilestones(updatedMilestones);
   };
 
   const onRefresh = async () => {
@@ -155,24 +192,26 @@ export default function GigHistory() {
     setRefreshing(false);
   };
 
-  const getFilteredGigs = () => {
-    return gigs.filter(gig => {
-      if (filter === 'all') return true;
-      if (filter === 'completed') return gig.paymentStatus === 'Paid';
-      if (filter === 'cancelled') return gig.status === 'cancelled';
-      if (filter === 'pending') return gig.paymentStatus !== 'Paid' && gig.status !== 'cancelled';
-      return true;
-    });
+  const formatDate = (date: string) => {
+    try {
+      return new Date(date).toLocaleDateString('en-IN', {
+        day: '2-digit',
+        month: 'short',
+        year: 'numeric',
+      });
+    } catch {
+      return 'N/A';
+    }
   };
 
   const getStatusColor = (status: string) => {
     switch (status) {
       case 'Paid':
         return '#27AE60';
-      case 'cancelled':
-        return '#E74C3C';
       case 'Pending':
         return '#F39C12';
+      case 'cancelled':
+        return '#E74C3C';
       default:
         return '#95A5A6';
     }
@@ -182,31 +221,139 @@ export default function GigHistory() {
     switch (status) {
       case 'Paid':
         return 'check-circle';
-      case 'cancelled':
-        return 'cancel';
       case 'Pending':
         return 'schedule';
+      case 'cancelled':
+        return 'cancel';
       default:
         return 'info';
     }
   };
 
-  const formatDate = (dateString: string) => {
-    try {
-      const date = new Date(dateString);
-      return date.toLocaleDateString('en-IN', {
-        day: 'numeric',
-        month: 'short',
-        year: 'numeric',
-      });
-    } catch {
-      return 'N/A';
-    }
-  };
+  const renderIncentiveHeader = () => (
+    <LinearGradient
+      colors={['#667EEA', '#764BA2']}
+      start={{ x: 0, y: 0 }}
+      end={{ x: 1, y: 1 }}
+      style={styles.incentiveHeader}
+    >
+      <View style={styles.incentiveContent}>
+        <View style={styles.incentiveInfo}>
+          <Text style={styles.incentiveTitle}>🎁 Earn Incentives</Text>
+          <Text style={styles.incentiveSubtitle}>Complete tasks to unlock rewards</Text>
+        </View>
+        <View style={styles.incentiveStats}>
+          <View style={styles.statItem}>
+            <Text style={styles.statValue}>{incentiveData.consecutiveDays}</Text>
+            <Text style={styles.statLabel}>Days</Text>
+          </View>
+          <View style={styles.statDivider} />
+          <View style={styles.statItem}>
+            <Text style={styles.statValue}>{incentiveData.totalHours}</Text>
+            <Text style={styles.statLabel}>Hours</Text>
+          </View>
+        </View>
+      </View>
+    </LinearGradient>
+  );
+
+  const renderConditionsCard = () => (
+    <View style={styles.conditionsCard}>
+      <Text style={styles.conditionsTitle}>✓ Requirements</Text>
+      <View style={styles.conditionsList}>
+        <View style={[styles.condition, { borderLeftColor: incentiveData.consecutiveDays >= 5 ? '#27AE60' : '#BDC3C7' }]}>
+          <MaterialIcons 
+            name={incentiveData.consecutiveDays >= 5 ? 'check' : 'close'} 
+            size={20} 
+            color={incentiveData.consecutiveDays >= 5 ? '#27AE60' : '#BDC3C7'}
+          />
+          <View style={styles.conditionText}>
+            <Text style={styles.conditionLabel}>Complete 5 consecutive days</Text>
+            <Text style={styles.conditionValue}>{incentiveData.consecutiveDays}/5 days</Text>
+          </View>
+        </View>
+
+        <View style={[styles.condition, { borderLeftColor: incentiveData.totalHours >= 35 ? '#27AE60' : '#BDC3C7' }]}>
+          <MaterialIcons 
+            name={incentiveData.totalHours >= 35 ? 'check' : 'close'} 
+            size={20} 
+            color={incentiveData.totalHours >= 35 ? '#27AE60' : '#BDC3C7'}
+          />
+          <View style={styles.conditionText}>
+            <Text style={styles.conditionLabel}>Minimum 7 hours per day</Text>
+            <Text style={styles.conditionValue}>{incentiveData.totalHours} hours total</Text>
+          </View>
+        </View>
+
+        <View style={[styles.condition, { borderLeftColor: incentiveData.cancellations <= 1 ? '#27AE60' : '#BDC3C7' }]}>
+          <MaterialIcons 
+            name={incentiveData.cancellations <= 1 ? 'check' : 'close'} 
+            size={20} 
+            color={incentiveData.cancellations <= 1 ? '#27AE60' : '#BDC3C7'}
+          />
+          <View style={styles.conditionText}>
+            <Text style={styles.conditionLabel}>No last-minute cancellations</Text>
+            <Text style={styles.conditionValue}>Max 1 cancellation allowed</Text>
+          </View>
+        </View>
+      </View>
+    </View>
+  );
+
+  const renderMilestoneCard = (milestone: Milestone) => (
+    <View key={milestone.id} style={styles.milestoneCard}>
+      <LinearGradient
+        colors={[milestone.color + '20', milestone.color + '05']}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+        style={styles.milestoneGradient}
+      >
+        <View style={styles.milestoneHeader}>
+          <View style={[styles.milestoneIcon, { backgroundColor: milestone.color }]}>
+            <MaterialIcons name={milestone.icon as any} size={24} color="#fff" />
+          </View>
+          <View style={styles.milestoneInfo}>
+            <Text style={styles.milestoneTitle}>{milestone.days} Days</Text>
+            <Text style={styles.milestoneReward}>₹{milestone.reward} Reward</Text>
+          </View>
+          {milestone.completed && (
+            <View style={styles.completedBadge}>
+              <MaterialIcons name="check-circle" size={28} color="#27AE60" />
+            </View>
+          )}
+        </View>
+
+        {!milestone.completed && (
+          <View style={styles.progressSection}>
+            <View style={styles.progressBar}>
+              <View
+                style={[
+                  styles.progressFill,
+                  {
+                    width: `${Math.min(milestone.progress * 100, 100)}%`,
+                    backgroundColor: milestone.color,
+                  },
+                ]}
+              />
+            </View>
+            <Text style={styles.progressText}>
+              {Math.round(milestone.progress * 100)}% Complete
+            </Text>
+          </View>
+        )}
+
+        {milestone.completed && (
+          <View style={styles.completedStatus}>
+            <Text style={styles.completedText}>🎉 Reward Unlocked!</Text>
+          </View>
+        )}
+      </LinearGradient>
+    </View>
+  );
 
   const renderGigCard = (gig: GigHistory) => {
     const paymentStatus = gig.paymentStatus || 'Pending';
-    const isCompleted = paymentStatus === 'Paid';
+    const displayStatus = paymentStatus === 'Paid' ? 'Completed' : paymentStatus;
 
     return (
       <View style={styles.gigCard}>
@@ -226,9 +373,7 @@ export default function GigHistory() {
             ]}
           >
             <MaterialIcons name={getStatusIcon(paymentStatus) as any} size={16} color="#fff" />
-            <Text style={styles.statusBadgeText}>
-              {paymentStatus === 'Paid' ? 'Completed' : paymentStatus}
-            </Text>
+            <Text style={styles.statusBadgeText}>{displayStatus}</Text>
           </View>
         </View>
 
@@ -252,47 +397,16 @@ export default function GigHistory() {
         {gig.rating && (
           <View style={styles.ratingBox}>
             <Text style={styles.ratingLabel}>💬 Feedback</Text>
-            <Text style={styles.ratingText}>{gig.rating.feedback}</Text>
+            <Text style={styles.ratingText}>{gig.rating.feedback || 'No feedback provided'}</Text>
           </View>
         )}
       </View>
     );
   };
 
-  const filteredGigs = getFilteredGigs();
-
-  const renderAvailableJobCard = (job: AvailableJob) => (
-    <View style={styles.availableJobCard}>
-      <View style={styles.jobHeader}>
-        <View style={styles.jobInfo}>
-          <Text style={styles.jobTitle} numberOfLines={1}>{job.title}</Text>
-          <Text style={styles.jobContractor}>by {job.contractorName}</Text>
-        </View>
-        <Text style={styles.jobAmount}>₹{job.amount}</Text>
-      </View>
-      <Text style={styles.jobDescription} numberOfLines={2}>{job.description}</Text>
-      <View style={styles.jobMeta}>
-        <View style={styles.jobMetaItem}>
-          <MaterialIcons name="location-on" size={14} color="#E74C3C" />
-          <Text style={styles.jobMetaText}>{job.location}</Text>
-        </View>
-        {job.workDuration && (
-          <View style={styles.jobMetaItem}>
-            <MaterialIcons name="schedule" size={14} color="#3498db" />
-            <Text style={styles.jobMetaText}>{job.workDuration}</Text>
-          </View>
-        )}
-      </View>
-      <TouchableOpacity
-        style={styles.bookButton}
-        onPress={() => handleBookJob(job._id)}
-        disabled={bookingLoading}
-      >
-        <MaterialIcons name="add-circle" size={18} color="#fff" />
-        <Text style={styles.bookButtonText}>Book Now</Text>
-      </TouchableOpacity>
-    </View>
-  );
+  const completedGigs = gigs.filter(g => g.paymentStatus === 'Paid');
+  const pendingGigs = gigs.filter(g => g.paymentStatus !== 'Paid' && g.status !== 'cancelled');
+  const cancelledGigs = gigs.filter(g => g.status === 'cancelled');
 
   return (
     <View style={styles.container}>
@@ -302,183 +416,74 @@ export default function GigHistory() {
           <MaterialIcons name="arrow-back" size={28} color="#000" />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Gig History</Text>
-        <TouchableOpacity
-          onPress={() => {
-            fetchAvailableJobs();
-            setShowBookingModal(true);
-          }}
-          style={styles.bookingButton}
-        >
-          <MaterialIcons name="add" size={24} color="#fff" />
-        </TouchableOpacity>
+        <View style={{ width: 44 }} />
       </View>
-
-      {/* Status Overview Cards */}
-      <View style={styles.statusCardsContainer}>
-        <TouchableOpacity
-          style={[styles.statusCard, styles.completedCard, filter === 'completed' && styles.statusCardActive]}
-          onPress={() => setFilter('completed')}
-        >
-          <View style={styles.statusCardContent}>
-            <MaterialIcons name="check-circle" size={24} color="#27AE60" />
-            <Text style={styles.statusCardValue}>{gigs.filter(g => g.paymentStatus === 'Paid').length}</Text>
-            <Text style={styles.statusCardLabel}>Completed</Text>
-          </View>
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={[styles.statusCard, styles.pendingCard, filter === 'pending' && styles.statusCardActive]}
-          onPress={() => setFilter('pending')}
-        >
-          <View style={styles.statusCardContent}>
-            <MaterialIcons name="schedule" size={24} color="#F39C12" />
-            <Text style={styles.statusCardValue}>{gigs.filter(g => g.paymentStatus !== 'Paid' && g.status !== 'cancelled').length}</Text>
-            <Text style={styles.statusCardLabel}>Pending</Text>
-          </View>
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={[styles.statusCard, styles.cancelledCard, filter === 'cancelled' && styles.statusCardActive]}
-          onPress={() => setFilter('cancelled')}
-        >
-          <View style={styles.statusCardContent}>
-            <MaterialIcons name="cancel" size={24} color="#E74C3C" />
-            <Text style={styles.statusCardValue}>{gigs.filter(g => g.status === 'cancelled').length}</Text>
-            <Text style={styles.statusCardLabel}>Cancelled</Text>
-          </View>
-        </TouchableOpacity>
-      </View>
-
-      {/* Filter Tabs */}
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        style={styles.filterScroll}
-      >
-        <View style={styles.filterContainer}>
-          {(['all', 'completed', 'pending', 'cancelled'] as const).map((filterOption) => (
-            <TouchableOpacity
-              key={filterOption}
-              style={[
-                styles.filterButton,
-                filter === filterOption && styles.filterButtonActive,
-              ]}
-              onPress={() => setFilter(filterOption)}
-            >
-              <Text
-                style={[
-                  styles.filterButtonText,
-                  filter === filterOption && styles.filterButtonTextActive,
-                ]}
-              >
-                {filterOption === 'all' ? 'All' : filterOption.charAt(0).toUpperCase() + filterOption.slice(1)}
-              </Text>
-            </TouchableOpacity>
-          ))}
-        </View>
-      </ScrollView>
 
       {loading ? (
         <View style={styles.centerContainer}>
-          <ActivityIndicator size="large" color="#3498db" />
-        </View>
-      ) : filteredGigs.length === 0 ? (
-        <View style={styles.emptyContainer}>
-          <MaterialIcons name="work-outline" size={64} color="#BDC3C7" />
-          <Text style={styles.emptyTitle}>No Gigs Found</Text>
-          <Text style={styles.emptyText}>
-            {filter === 'all'
-              ? 'Start accepting jobs to see your gig history'
-              : `No ${filter} gigs yet`}
-          </Text>
-          <TouchableOpacity
-            style={styles.emptyActionButton}
-            onPress={() => {
-              fetchAvailableJobs();
-              setShowBookingModal(true);
-            }}
-          >
-            <MaterialIcons name="add-circle-outline" size={20} color="#fff" />
-            <Text style={styles.emptyActionText}>Browse Available Jobs</Text>
-          </TouchableOpacity>
+          <ActivityIndicator size="large" color="#667EEA" />
         </View>
       ) : (
-        <FlatList
-          data={filteredGigs}
-          keyExtractor={(item) => item._id}
-          renderItem={({ item }) => renderGigCard(item)}
-          contentContainerStyle={styles.listContent}
-          refreshControl={
-            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
-          }
-          ListFooterComponent={
-            <>
-              {/* Summary Card */}
-              {filteredGigs.length > 0 && (
-                <View style={styles.summaryCard}>
-                  <View style={styles.summaryItem}>
-                    <Text style={styles.summaryLabel}>Total Gigs</Text>
-                    <Text style={styles.summaryValue}>{filteredGigs.length}</Text>
-                  </View>
-                  <View style={styles.summaryDivider} />
-                  <View style={styles.summaryItem}>
-                    <Text style={styles.summaryLabel}>Earnings</Text>
-                    <Text style={styles.summaryValue}>
-                      ₹{filteredGigs.reduce((sum, gig) => sum + gig.amount, 0)}
-                    </Text>
-                  </View>
-                  <View style={styles.summaryDivider} />
-                  <View style={styles.summaryItem}>
-                    <Text style={styles.summaryLabel}>Completed</Text>
-                    <Text style={styles.summaryValue}>
-                      {filteredGigs.filter(g => g.paymentStatus === 'Paid').length}
-                    </Text>
-                  </View>
-                </View>
-              )}
-              <View style={{ height: 20 }} />
-            </>
-          }
-        />
-      )}
+        <ScrollView
+          showsVerticalScrollIndicator={false}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+        >
+          {/* Incentive Header */}
+          {renderIncentiveHeader()}
 
-      {/* Booking Modal */}
-      <Modal
-        visible={showBookingModal}
-        transparent
-        animationType="slide"
-        onRequestClose={() => setShowBookingModal(false)}
-      >
-        <View style={styles.modalContainer}>
-          <View style={[styles.modalHeader, { paddingTop: Platform.OS === 'ios' ? 12 : 8 }]}>
-            <Text style={styles.modalTitle}>Available Jobs</Text>
-            <TouchableOpacity onPress={() => setShowBookingModal(false)}>
-              <MaterialIcons name="close" size={28} color="#000" />
-            </TouchableOpacity>
+          {/* Conditions Card */}
+          {renderConditionsCard()}
+
+          {/* Milestones Section */}
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>📊 Milestones</Text>
+            {milestones.map(milestone => renderMilestoneCard(milestone))}
           </View>
 
-          {bookingLoading ? (
-            <View style={styles.centerContainer}>
-              <ActivityIndicator size="large" color="#3498db" />
+          {/* Gig Status Overview */}
+          <View style={styles.statusOverview}>
+            <View style={styles.statusOverviewCard}>
+              <View style={styles.statusOverviewIcon}>
+                <MaterialIcons name="check-circle" size={28} color="#27AE60" />
+              </View>
+              <Text style={styles.statusOverviewValue}>{completedGigs.length}</Text>
+              <Text style={styles.statusOverviewLabel}>Completed</Text>
             </View>
-          ) : availableJobs.length === 0 ? (
-            <View style={styles.emptyContainer}>
-              <MaterialIcons name="inbox" size={64} color="#BDC3C7" />
-              <Text style={styles.emptyTitle}>No Jobs Available</Text>
-              <Text style={styles.emptyText}>Check back later for new opportunities</Text>
+
+            <View style={styles.statusOverviewCard}>
+              <View style={styles.statusOverviewIcon}>
+                <MaterialIcons name="schedule" size={28} color="#F39C12" />
+              </View>
+              <Text style={styles.statusOverviewValue}>{pendingGigs.length}</Text>
+              <Text style={styles.statusOverviewLabel}>Pending</Text>
             </View>
-          ) : (
-            <ScrollView style={styles.modalContent} showsVerticalScrollIndicator={false}>
-              {availableJobs.map(job => (
-                <View key={job._id}>
-                  {renderAvailableJobCard(job)}
-                </View>
-              ))}
-              <View style={{ height: 20 }} />
-            </ScrollView>
-          )}
-        </View>
-      </Modal>
+
+            <View style={styles.statusOverviewCard}>
+              <View style={styles.statusOverviewIcon}>
+                <MaterialIcons name="cancel" size={28} color="#E74C3C" />
+              </View>
+              <Text style={styles.statusOverviewValue}>{cancelledGigs.length}</Text>
+              <Text style={styles.statusOverviewLabel}>Cancelled</Text>
+            </View>
+          </View>
+
+          {/* Gigs List Section */}
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>📋 All Gigs</Text>
+            {gigs.length === 0 ? (
+              <View style={styles.emptyState}>
+                <MaterialIcons name="work-outline" size={64} color="#BDC3C7" />
+                <Text style={styles.emptyTitle}>No Gigs Yet</Text>
+                <Text style={styles.emptyText}>Start accepting jobs to build your gig history</Text>
+              </View>
+            ) : (
+              gigs.map(gig => renderGigCard(gig))
+            )}
+          </View>
+
+          <View style={{ height: 30 }} />
+        </ScrollView>
+      )}
     </View>
   );
 }
@@ -486,7 +491,7 @@ export default function GigHistory() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#f5f5f5',
+    backgroundColor: '#F8F9FA',
   },
   header: {
     flexDirection: 'row',
@@ -503,13 +508,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
-  bookingButton: {
-    padding: 8,
-    backgroundColor: '#3498db',
-    borderRadius: 20,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
   headerTitle: {
     fontSize: 18,
     fontWeight: '700',
@@ -517,80 +515,240 @@ const styles = StyleSheet.create({
     flex: 1,
     textAlign: 'center',
   },
-  filterScroll: {
-    backgroundColor: '#fff',
-    borderBottomWidth: 1,
-    borderBottomColor: '#e0e0e0',
-  },
-  filterContainer: {
-    flexDirection: 'row',
-    gap: 8,
-    paddingHorizontal: 12,
-    paddingVertical: 12,
-  },
-  filterButton: {
-    paddingHorizontal: 14,
-    paddingVertical: 6,
-    borderRadius: 16,
-    backgroundColor: '#f0f0f0',
-    borderWidth: 1,
-    borderColor: '#e0e0e0',
-  },
-  filterButtonActive: {
-    backgroundColor: '#3498db',
-    borderColor: '#3498db',
-  },
-  filterButtonText: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: '#7F8C8D',
-  },
-  filterButtonTextActive: {
-    color: '#fff',
-  },
   centerContainer: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
   },
-  emptyContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    paddingHorizontal: 32,
+  // Incentive Header Styles
+  incentiveHeader: {
+    paddingHorizontal: 16,
+    paddingVertical: 20,
+    marginHorizontal: 12,
+    marginTop: 12,
+    borderRadius: 12,
+    shadowColor: '#667EEA',
+    shadowOpacity: 0.3,
+    shadowOffset: { width: 0, height: 4 },
+    shadowRadius: 8,
+    elevation: 5,
   },
-  emptyTitle: {
+  incentiveContent: {
+    gap: 16,
+  },
+  incentiveInfo: {
+    gap: 4,
+  },
+  incentiveTitle: {
     fontSize: 18,
     fontWeight: '700',
-    color: '#000',
-    marginTop: 16,
-  },
-  emptyText: {
-    fontSize: 14,
-    color: '#7F8C8D',
-    marginTop: 8,
-    textAlign: 'center',
-  },
-  emptyActionButton: {
-    flexDirection: 'row',
-    backgroundColor: '#3498db',
-    paddingHorizontal: 24,
-    paddingVertical: 12,
-    borderRadius: 8,
-    alignItems: 'center',
-    gap: 8,
-    marginTop: 20,
-  },
-  emptyActionText: {
     color: '#fff',
-    fontWeight: '600',
-    fontSize: 14,
   },
-  listContent: {
+  incentiveSubtitle: {
+    fontSize: 13,
+    color: '#E8EAFF',
+    fontWeight: '500',
+  },
+  incentiveStats: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  statItem: {
+    flex: 1,
+    alignItems: 'center',
+  },
+  statValue: {
+    fontSize: 24,
+    fontWeight: '800',
+    color: '#fff',
+  },
+  statLabel: {
+    fontSize: 11,
+    color: '#E8EAFF',
+    marginTop: 2,
+    fontWeight: '600',
+  },
+  statDivider: {
+    width: 1,
+    height: 40,
+    backgroundColor: '#E8EAFF',
+  },
+  // Conditions Card
+  conditionsCard: {
+    backgroundColor: '#fff',
+    marginHorizontal: 12,
+    marginTop: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 16,
+    borderRadius: 12,
+    shadowColor: '#000',
+    shadowOpacity: 0.08,
+    shadowOffset: { width: 0, height: 2 },
+    shadowRadius: 4,
+    elevation: 2,
+  },
+  conditionsTitle: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#000',
+    marginBottom: 12,
+  },
+  conditionsList: {
+    gap: 12,
+  },
+  condition: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    paddingLeft: 12,
+    paddingVertical: 8,
+    borderLeftWidth: 3,
+  },
+  conditionText: {
+    flex: 1,
+    gap: 2,
+  },
+  conditionLabel: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#000',
+  },
+  conditionValue: {
+    fontSize: 11,
+    color: '#7F8C8D',
+    fontWeight: '500',
+  },
+  // Milestone Styles
+  section: {
     paddingHorizontal: 12,
-    paddingTop: 12,
+    paddingTop: 20,
     paddingBottom: 12,
   },
+  sectionTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#000',
+    marginBottom: 12,
+  },
+  milestoneCard: {
+    marginBottom: 12,
+    borderRadius: 12,
+    overflow: 'hidden',
+  },
+  milestoneGradient: {
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#E8EAFF',
+  },
+  milestoneHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    marginBottom: 12,
+  },
+  milestoneIcon: {
+    width: 48,
+    height: 48,
+    borderRadius: 10,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  milestoneInfo: {
+    flex: 1,
+    gap: 2,
+  },
+  milestoneTitle: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#000',
+  },
+  milestoneReward: {
+    fontSize: 12,
+    color: '#7F8C8D',
+    fontWeight: '500',
+  },
+  completedBadge: {
+    width: 36,
+    height: 36,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  progressSection: {
+    gap: 6,
+  },
+  progressBar: {
+    height: 6,
+    backgroundColor: '#E8EAFF',
+    borderRadius: 3,
+    overflow: 'hidden',
+  },
+  progressFill: {
+    height: '100%',
+    borderRadius: 3,
+  },
+  progressText: {
+    fontSize: 11,
+    color: '#7F8C8D',
+    fontWeight: '600',
+    textAlign: 'right',
+  },
+  completedStatus: {
+    marginTop: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    backgroundColor: '#F0FDF4',
+    borderRadius: 8,
+    borderLeftWidth: 3,
+    borderLeftColor: '#27AE60',
+  },
+  completedText: {
+    fontSize: 12,
+    color: '#27AE60',
+    fontWeight: '700',
+    textAlign: 'center',
+  },
+  // Status Overview
+  statusOverview: {
+    flexDirection: 'row',
+    paddingHorizontal: 12,
+    gap: 10,
+    marginTop: 8,
+  },
+  statusOverviewCard: {
+    flex: 1,
+    backgroundColor: '#fff',
+    borderRadius: 12,
+    paddingVertical: 14,
+    alignItems: 'center',
+    gap: 6,
+    shadowColor: '#000',
+    shadowOpacity: 0.08,
+    shadowOffset: { width: 0, height: 2 },
+    shadowRadius: 4,
+    elevation: 2,
+  },
+  statusOverviewIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: '#F8F9FA',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  statusOverviewValue: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#000',
+  },
+  statusOverviewLabel: {
+    fontSize: 11,
+    color: '#7F8C8D',
+    fontWeight: '500',
+  },
+  // Gig Card Styles
   gigCard: {
     backgroundColor: '#fff',
     borderRadius: 12,
@@ -641,6 +799,7 @@ const styles = StyleSheet.create({
     paddingBottom: 10,
     borderBottomWidth: 1,
     borderBottomColor: '#f0f0f0',
+    flexWrap: 'wrap',
   },
   detailItem: {
     flexDirection: 'row',
@@ -671,181 +830,19 @@ const styles = StyleSheet.create({
     color: '#555',
     lineHeight: 18,
   },
-  summaryCard: {
-    backgroundColor: '#fff',
-    flexDirection: 'row',
-    marginHorizontal: 0,
-    marginBottom: 16,
-    marginTop: 16,
-    borderRadius: 12,
-    overflow: 'hidden',
-    shadowColor: '#000',
-    shadowOpacity: 0.08,
-    shadowOffset: { width: 0, height: 2 },
-    shadowRadius: 4,
-    elevation: 2,
-  },
-  summaryItem: {
-    flex: 1,
-    paddingVertical: 14,
+  emptyState: {
     alignItems: 'center',
-    justifyContent: 'center',
+    paddingVertical: 40,
+    gap: 12,
   },
-  summaryLabel: {
-    fontSize: 11,
-    color: '#7F8C8D',
-    marginBottom: 4,
-    fontWeight: '500',
-  },
-  summaryValue: {
-    fontSize: 15,
-    fontWeight: '700',
-    color: '#000',
-  },
-  summaryDivider: {
-    width: 1,
-    backgroundColor: '#e0e0e0',
-  },
-  // Modal Styles
-  modalContainer: {
-    flex: 1,
-    backgroundColor: '#f5f5f5',
-  },
-  modalHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingVertical: 14,
-    backgroundColor: '#fff',
-    borderBottomWidth: 1,
-    borderBottomColor: '#e0e0e0',
-  },
-  modalTitle: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: '#000',
-  },
-  modalContent: {
-    flex: 1,
-    padding: 12,
-  },
-  availableJobCard: {
-    backgroundColor: '#fff',
-    borderRadius: 12,
-    padding: 14,
-    marginBottom: 12,
-    shadowColor: '#000',
-    shadowOpacity: 0.08,
-    shadowOffset: { width: 0, height: 2 },
-    shadowRadius: 4,
-    elevation: 2,
-  },
-  jobHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 8,
-  },
-  jobInfo: {
-    flex: 1,
-    marginRight: 8,
-  },
-  jobTitle: {
-    fontSize: 15,
-    fontWeight: '700',
-    color: '#000',
-    marginBottom: 2,
-  },
-  jobContractor: {
-    fontSize: 12,
-    color: '#7F8C8D',
-  },
-  jobAmount: {
+  emptyTitle: {
     fontSize: 16,
     fontWeight: '700',
-    color: '#27AE60',
-  },
-  jobDescription: {
-    fontSize: 12,
-    color: '#555',
-    marginBottom: 8,
-    lineHeight: 16,
-  },
-  jobMeta: {
-    flexDirection: 'row',
-    gap: 12,
-    marginBottom: 10,
-  },
-  jobMetaItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-  },
-  jobMetaText: {
-    fontSize: 11,
-    color: '#7F8C8D',
-  },
-  bookButton: {
-    flexDirection: 'row',
-    backgroundColor: '#3498db',
-    paddingVertical: 10,
-    borderRadius: 8,
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 6,
-  },
-  bookButtonText: {
-    color: '#fff',
-    fontWeight: '600',
-    fontSize: 13,
-  },
-  // Status Cards Styles
-  statusCardsContainer: {
-    flexDirection: 'row',
-    paddingHorizontal: 12,
-    paddingVertical: 12,
-    gap: 10,
-    backgroundColor: '#fff',
-    borderBottomWidth: 1,
-    borderBottomColor: '#e0e0e0',
-  },
-  statusCard: {
-    flex: 1,
-    borderRadius: 12,
-    paddingVertical: 14,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 2,
-    borderColor: 'transparent',
-  },
-  statusCardActive: {
-    borderColor: '#3498db',
-    backgroundColor: '#E8F4F8',
-  },
-  completedCard: {
-    backgroundColor: '#F0FDF4',
-  },
-  pendingCard: {
-    backgroundColor: '#FEF8E8',
-  },
-  cancelledCard: {
-    backgroundColor: '#FEF2F2',
-  },
-  statusCardContent: {
-    alignItems: 'center',
-    gap: 4,
-  },
-  statusCardValue: {
-    fontSize: 18,
-    fontWeight: '700',
     color: '#000',
-    marginTop: 2,
   },
-  statusCardLabel: {
-    fontSize: 11,
-    color: '#666',
-    fontWeight: '500',
-    marginTop: 2,
+  emptyText: {
+    fontSize: 13,
+    color: '#7F8C8D',
+    textAlign: 'center',
   },
 });

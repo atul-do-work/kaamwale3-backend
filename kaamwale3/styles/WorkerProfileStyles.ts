@@ -346,5 +346,18 @@ withdrawButtonText: {
   fontWeight: '600',
   fontSize: 14,
 },
+menuButton: {
+  position: 'absolute',
+  top: 50,
+  right: 20,
+  zIndex: 10,
+  padding: 8,
+  backgroundColor: '#fff',
+  borderRadius: 8,
+  shadowColor: '#000',
+  shadowOpacity: 0.1,
+  shadowRadius: 4,
+  elevation: 3,
+},
 
 });

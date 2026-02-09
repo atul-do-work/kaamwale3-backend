@@ -360,6 +360,8 @@ export default function ContractorProfile(): React.ReactElement {
             method: "POST",
             headers: {
               Authorization: `Bearer ${token}`,
+              // ⚠️ Do NOT set Content-Type: multipart/form-data
+              // The browser will set it automatically with the correct boundary
             },
             body: formData,
           });

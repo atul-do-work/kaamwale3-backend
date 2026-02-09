@@ -1,5 +1,6 @@
 import * as Notifications from 'expo-notifications';
 import { Platform, Alert } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 export async function registerForPushNotificationsAsync() {
   let token;

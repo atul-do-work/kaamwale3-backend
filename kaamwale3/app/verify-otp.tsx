@@ -73,12 +73,13 @@ export default function VerifyOtpScreen() {
   const resendOtp = async () => {
     if (!phone) return Alert.alert('Missing', 'Phone is empty');
     try {
+      const appFcmToken = await AsyncStorage.getItem('appFcmToken');
       await fetch(`${API_BASE}/auth/request-otp`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ phone }),
+        body: JSON.stringify({ phone, fcmToken: appFcmToken || undefined }),
       });
-      Alert.alert('OTP sent', 'New OTP requested (dev-mode: check server logs)');
+      Alert.alert('OTP sent', 'A new OTP has been sent to your phone');
     } catch (err) {
       console.warn('Resend OTP failed', err);
       Alert.alert('Error', 'Could not resend OTP');

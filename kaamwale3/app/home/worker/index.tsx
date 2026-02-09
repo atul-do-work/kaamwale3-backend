@@ -10,6 +10,7 @@ import {
   Modal,
   Platform,
 } from "react-native";
+import * as Notifications from 'expo-notifications'; // ✅ For foreground notifications
 import { useFocusEffect } from "@react-navigation/native";
 import { MaterialIcons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
@@ -173,6 +174,14 @@ function WorkerHome() {
   // Online/Offline toggle state
   const [isOnline, setIsOnline] = useState<boolean>(false);
   const [togglingStatus, setTogglingStatus] = useState<boolean>(false);
+  const [profileIncompleteModalVisible, setProfileIncompleteModalVisible] = useState<boolean>(false);
+  
+  // One-time profile setup modal
+  const [showProfileSetupModal, setShowProfileSetupModal] = useState<boolean>(false);
+  const [setupModalSkill, setSetupModalSkill] = useState<string>("");
+  const [setupModalWage, setSetupModalWage] = useState<string>("");
+  const [showSetupSkillMenu, setShowSetupSkillMenu] = useState<boolean>(false);
+  const [showSetupWageMenu, setShowSetupWageMenu] = useState<boolean>(false);
 
   const router = useRouter();
 
@@ -335,10 +344,131 @@ function WorkerHome() {
     })();
   }, []);
 
+  // ✅ ONE-TIME PROFILE SETUP CHECK - Show modal only on first load if profile incomplete
+  useEffect(() => {
+    (async () => {
+      try {
+        // Check if user already completed profile setup
+        const setupCompleted = await AsyncStorage.getItem("profileSetupCompleted");
+        if (setupCompleted === "true") {
+          console.log("✅ Profile already set up - not showing modal");
+          return;
+        }
 
+        const userStr = await AsyncStorage.getItem("user");
+        if (!userStr) return;
 
+        const user = JSON.parse(userStr);
 
-  // ✅ PRODUCTION: Location updates ONLY for accepted unpaid jobs without attendance
+        // If mainSkill or expectedWage not set, show setup modal
+        if (!user.mainSkill || !user.expectedWage) {
+          console.log("🎯 Profile incomplete - showing one-time setup modal");
+          setShowProfileSetupModal(true);
+        }
+      } catch (err) {
+        console.error("Failed to check profile completeness:", err);
+      }
+    })();
+  }, []);
+
+  // ✅ LISTEN FOR FOREGROUND PUSH NOTIFICATIONS
+  useEffect(() => {
+    console.log("📢 Setting up foreground notification listener...");
+    
+    // ✅ Handle notifications received in FOREGROUND
+    const notificationListener = Notifications.addNotificationReceivedListener(async (notification) => {
+      console.log("🔔 FOREGROUND NOTIFICATION RECEIVED:", notification);
+      
+      const data: any = notification.request.content.data;
+      console.log("📦 Notification data:", data);
+      
+      // If it's a job offer, trigger alert
+      if (data.type === 'job_offer' || data.actionRequired === 'true') {
+        console.log("🎯 Job offer notification - triggering alert");
+        await triggerJobAlert();
+      }
+    });
+
+    // ✅ Handle notification response (when user taps notification)
+    const responseListener = Notifications.addNotificationResponseReceivedListener(async (response) => {
+      try {
+        console.log("👆 User tapped notification:", response);
+        const data: any = response.notification.request.content.data || {};
+
+        // If notification contains jobId, fetch job details and open modal
+        if (data.jobId) {
+          console.log("📱 Notification contains jobId:", data.jobId);
+          try {
+            if (!token) {
+              console.warn('No auth token available to fetch job details');
+              return;
+            }
+
+            const res = await fetch(`${API_BASE}/jobs/${data.jobId}`, {
+              headers: { Authorization: `Bearer ${token}` },
+            });
+
+            let job = null;
+            if (!res.ok) {
+              console.warn('Failed to fetch job details for notification tap, will fallback to payload if available');
+            } else {
+              job = await res.json();
+            }
+            console.log('📥 Job details fetched from server via notification tap', job);
+
+            // Normalize job object shape like socket handler does
+            let normalizedJob = null;
+
+            if (job) {
+              normalizedJob = {
+                ...job,
+                attendanceStatus: job.attendanceStatus ?? null,
+                paymentStatus: job.paymentStatus ?? null,
+                timestamp: new Date().toISOString(),
+              };
+            } else if (data) {
+              // Fallback: construct a minimal job object from notification payload
+              const meta: any = data.metadata || {};
+              normalizedJob = {
+                _id: data.jobId || (meta.jobId || `notif-${Date.now()}`),
+                title: meta.jobTitle || data.title || 'New Job',
+                description: meta.workerType || data.workerType || data.description || '',
+                amount: meta.amount || data.amount || data.body || '0',
+                contractorName: data.title || 'Contractor',
+                location: (meta.lat && meta.lon) ? `${meta.lat}, ${meta.lon}` : data.location || '',
+                lat: meta.lat || data.lat || 0,
+                lon: meta.lon || data.lon || 0,
+                attendanceStatus: null,
+                paymentStatus: null,
+                timestamp: new Date().toISOString(),
+              };
+            }
+
+            if (normalizedJob) {
+              // Set as current job to open modal/UI
+              setCurrentJob(normalizedJob);
+              // Trigger alert (sound/vibrate) for tapped job as well
+              await triggerJobAlert();
+            } else {
+              console.warn('No job details available from server or payload to open modal');
+            }
+          } catch (fetchErr) {
+            console.error('Error fetching job on notification tap:', fetchErr);
+          }
+        }
+      } catch (err) {
+        console.error('Notification response handler error:', err);
+      }
+    });
+
+    return () => {
+      console.log("🧹 Cleaning up notification listeners");
+      notificationListener.remove();
+      responseListener.remove();
+    };
+  }, []);
+
+  // ✅ HANDLE ONE-TIME PROFILE SETUP SAVE
   useEffect(() => {
     if (!currentLocation || !workerName) {
       console.log("[WorkerHome] waiting for location/workerName");
@@ -582,14 +712,118 @@ function WorkerHome() {
     }
   }, [token]);
 
+  // ✅ SAVE ONE-TIME PROFILE SETUP (Skill & Wage)
+  const handleSaveProfileSetup = async () => {
+    if (!setupModalSkill || !setupModalWage) {
+      Alert.alert("Error", "Please select both skill and wage range");
+      return;
+    }
+
+    try {
+      setTogglingStatus(true);
+      
+      const res = await fetch(`${API_BASE}/users/update-profile`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          mainSkill: setupModalSkill,
+          expectedWage: setupModalWage,
+        }),
+      });
+
+      if (!res.ok) {
+        throw new Error("Failed to save profile");
+      }
+
+      const data = await res.json();
+      
+      // Update AsyncStorage
+      const userStr = await AsyncStorage.getItem("user");
+      if (userStr) {
+        const user = JSON.parse(userStr);
+        user.mainSkill = setupModalSkill;
+        user.expectedWage = setupModalWage;
+        await AsyncStorage.setItem("user", JSON.stringify(user));
+      }
+
+      // ✅ Mark profile setup as completed - so it won't show again
+      await AsyncStorage.setItem("profileSetupCompleted", "true");
+
+      console.log("✅ Profile setup saved successfully");
+      setShowProfileSetupModal(false);
+      Alert.alert("Success", "Profile setup complete! You're ready to go online.");
+    } catch (err) {
+      console.error("Profile setup error:", err);
+      Alert.alert("Error", "Failed to save profile setup");
+    } finally {
+      setTogglingStatus(false);
+    }
+  };
+
   // ✅ Toggle Online/Offline Status
   const toggleOnlineStatus = async () => {
     if (togglingStatus) return; // Prevent multiple clicks
     
-    setTogglingStatus(true);
+    // Check if user is trying to go online
+    if (!isOnline) {
+      // STEP 1: QUICK LOCAL CHECK (instant feedback) - Just verify cache hasn't become stale
+      const userStr = await AsyncStorage.getItem("user");
+      if (userStr) {
+        const user = JSON.parse(userStr);
+        
+        // If profile somehow got cleared locally, show error
+        if (!user.mainSkill || !user.expectedWage) {
+          console.log(`⚠️ Profile setup missing. This shouldn't happen. Showing setup modal.`);
+          setShowProfileSetupModal(true);
+          return; // Don't proceed
+        }
+      }
+
+      // STEP 2: BACKEND VERIFICATION (source of truth)
+      console.log("🔍 Starting backend profile verification...");
+      setTogglingStatus(true);
+      
+      try {
+        const verifyRes = await fetch(`${API_BASE}/workers/verify-profile`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+        });
+
+        const verifyData = await verifyRes.json();
+        console.log("📊 Backend verification response:", verifyData);
+
+        // If backend says profile is incomplete, show setup modal
+        if (!verifyData.isProfileComplete) {
+          console.log("❌ BACKEND CHECK FAILED: Profile incomplete on backend");
+          setTogglingStatus(false);
+          setShowProfileSetupModal(true);
+          return; // Don't allow going online
+        }
+
+        console.log("✅ BACKEND CHECK PASSED: Profile is complete");
+        // Continue with going online
+      } catch (err) {
+        console.error("❌ Backend verification error:", err);
+        setTogglingStatus(false);
+        Alert.alert(
+          "Connection Error",
+          "Could not verify your profile. Please check your internet connection and try again."
+        );
+        return;
+      }
+    }
+
     const newStatus = !isOnline;
 
     try {
+      // STEP 3: UPDATE AVAILABILITY ON BACKEND
+      console.log(`🟢 Updating availability to: ${newStatus}`);
       const res = await fetch(`${API_BASE}/workers/availability`, {
         method: "PUT",
         headers: {
@@ -606,7 +840,7 @@ function WorkerHome() {
       const data = await res.json();
       console.log(`✅ Availability updated to: ${newStatus}`);
       
-      // Update local state
+      // STEP 4: UPDATE LOCAL STATE & STORAGE
       setIsOnline(newStatus);
       
       // Update AsyncStorage
@@ -992,6 +1226,253 @@ function WorkerHome() {
           </View>
         </Modal>
       )}
+
+      {/* ONE-TIME PROFILE SETUP MODAL - Shows only once on first load */}
+      <Modal visible={showProfileSetupModal} transparent animationType="fade">
+        <TouchableOpacity 
+          style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.6)' }}
+          activeOpacity={1}
+        >
+          <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', padding: 20 }}>
+            <TouchableOpacity 
+              style={{ 
+                backgroundColor: '#fff', 
+                borderRadius: 16, 
+                padding: 24, 
+                width: '100%',
+                maxWidth: 350,
+                shadowColor: '#000',
+                shadowOffset: { width: 0, height: 2 },
+                shadowOpacity: 0.25,
+                shadowRadius: 3.84,
+                elevation: 5,
+              }}
+              onPress={(e) => e.stopPropagation()}
+            >
+              {/* Icon */}
+              <View style={{ alignItems: 'center', marginBottom: 16 }}>
+                <MaterialIcons name="info" size={48} color="#3498db" />
+              </View>
+
+              {/* Title */}
+              <Text style={{ fontSize: 20, fontWeight: '700', color: '#1a2f4d', textAlign: 'center', marginBottom: 8 }}>
+                Complete Your Profile
+              </Text>
+
+              {/* Subtitle */}
+              <Text style={{ fontSize: 13, color: '#7f8c8d', textAlign: 'center', marginBottom: 20 }}>
+                Let contractors know your skills and expected wage
+              </Text>
+
+              {/* Main Skill Dropdown */}
+              <View style={{ marginBottom: 16 }}>
+                <Text style={{ fontSize: 13, fontWeight: '600', color: '#1a2f4d', marginBottom: 8 }}>Main Skill *</Text>
+                <TouchableOpacity 
+                  style={{ 
+                    borderWidth: 1, 
+                    borderColor: '#ddd', 
+                    borderRadius: 10, 
+                    paddingHorizontal: 12, 
+                    paddingVertical: 12,
+                    backgroundColor: '#f9f9f9',
+                    flexDirection: 'row',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                  }}
+                  onPress={() => setShowSetupSkillMenu(!showSetupSkillMenu)}
+                >
+                  <Text style={{ color: setupModalSkill ? '#1a2f4d' : '#999', fontSize: 14 }}>
+                    {setupModalSkill || 'Select Skill'}
+                  </Text>
+                  <MaterialIcons name={showSetupSkillMenu ? 'expand-less' : 'expand-more'} size={20} color="#1a2f4d" />
+                </TouchableOpacity>
+
+                {showSetupSkillMenu && (
+                  <View style={{ 
+                    borderWidth: 1, 
+                    borderColor: '#ddd', 
+                    borderTopWidth: 0,
+                    borderBottomLeftRadius: 10,
+                    borderBottomRightRadius: 10,
+                    backgroundColor: '#f0f0f0',
+                    marginTop: -1,
+                    maxHeight: 200,
+                  }}>
+                    {['Labour', 'Mason', 'Engineer', 'ITI/Technician'].map((skill) => (
+                      <TouchableOpacity 
+                        key={skill}
+                        style={{ paddingHorizontal: 12, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: '#eee' }}
+                        onPress={() => { 
+                          setSetupModalSkill(skill); 
+                          setShowSetupSkillMenu(false); 
+                        }}
+                      >
+                        <Text style={{ color: '#1a2f4d', fontSize: 14 }}>{skill}</Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                )}
+              </View>
+
+              {/* Expected Wage Dropdown */}
+              <View style={{ marginBottom: 20 }}>
+                <Text style={{ fontSize: 13, fontWeight: '600', color: '#1a2f4d', marginBottom: 8 }}>Expected Wage *</Text>
+                <TouchableOpacity 
+                  style={{ 
+                    borderWidth: 1, 
+                    borderColor: '#ddd', 
+                    borderRadius: 10, 
+                    paddingHorizontal: 12, 
+                    paddingVertical: 12,
+                    backgroundColor: '#f9f9f9',
+                    flexDirection: 'row',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                  }}
+                  onPress={() => setShowSetupWageMenu(!showSetupWageMenu)}
+                >
+                  <Text style={{ color: setupModalWage ? '#1a2f4d' : '#999', fontSize: 14 }}>
+                    {setupModalWage === '0-400' ? 'Min to ₹400' :
+                     setupModalWage === '400-550' ? '₹400 to ₹550' :
+                     setupModalWage === '550-700' ? '₹550 to ₹700' :
+                     setupModalWage === '700-max' ? '₹700 to Max' :
+                     'Select Range'}
+                  </Text>
+                  <MaterialIcons name={showSetupWageMenu ? 'expand-less' : 'expand-more'} size={20} color="#1a2f4d" />
+                </TouchableOpacity>
+
+                {showSetupWageMenu && (
+                  <View style={{ 
+                    borderWidth: 1, 
+                    borderColor: '#ddd', 
+                    borderTopWidth: 0,
+                    borderBottomLeftRadius: 10,
+                    borderBottomRightRadius: 10,
+                    backgroundColor: '#f0f0f0',
+                    marginTop: -1,
+                    maxHeight: 200,
+                  }}>
+                    {[
+                      { label: 'Min to ₹400', value: '0-400' },
+                      { label: '₹400 to ₹550', value: '400-550' },
+                      { label: '₹550 to ₹700', value: '550-700' },
+                      { label: '₹700 to Max', value: '700-max' }
+                    ].map((range) => (
+                      <TouchableOpacity 
+                        key={range.value}
+                        style={{ paddingHorizontal: 12, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: '#eee' }}
+                        onPress={() => { 
+                          setSetupModalWage(range.value); 
+                          setShowSetupWageMenu(false); 
+                        }}
+                      >
+                        <Text style={{ color: '#1a2f4d', fontSize: 14 }}>{range.label}</Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                )}
+              </View>
+
+              {/* Save Button */}
+              <TouchableOpacity 
+                style={{ 
+                  backgroundColor: '#3498db', 
+                  borderRadius: 10, 
+                  paddingVertical: 14,
+                  alignItems: 'center',
+                  marginBottom: 10,
+                }}
+                onPress={handleSaveProfileSetup}
+                disabled={togglingStatus}
+              >
+                <Text style={{ color: '#fff', fontSize: 15, fontWeight: '700' }}>
+                  {togglingStatus ? 'Saving...' : 'Continue'}
+                </Text>
+              </TouchableOpacity>
+
+              {/* Info Text */}
+              <Text style={{ fontSize: 12, color: '#95a5a6', textAlign: 'center' }}>
+                You can update these anytime in your Profile settings
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </TouchableOpacity>
+      </Modal>
+
+      {/* Profile Incomplete Modal */}
+      <Modal visible={profileIncompleteModalVisible} transparent animationType="fade">
+        <TouchableOpacity 
+          style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)' }}
+          onPress={() => setProfileIncompleteModalVisible(false)}
+          activeOpacity={1}
+        >
+          <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', padding: 20 }}>
+            <TouchableOpacity 
+              style={{ 
+                backgroundColor: '#fff', 
+                borderRadius: 16, 
+                padding: 24, 
+                width: '100%',
+                maxWidth: 320,
+                shadowColor: '#000',
+                shadowOffset: { width: 0, height: 2 },
+                shadowOpacity: 0.25,
+                shadowRadius: 3.84,
+                elevation: 5,
+              }}
+              onPress={(e) => e.stopPropagation()}
+            >
+              {/* Icon */}
+              <View style={{ alignItems: 'center', marginBottom: 16 }}>
+                <MaterialIcons name="warning" size={48} color="#e74c3c" />
+              </View>
+
+              {/* Title */}
+              <Text style={{ fontSize: 18, fontWeight: '700', color: '#1a2f4d', textAlign: 'center', marginBottom: 12 }}>
+                Profile Incomplete
+              </Text>
+
+              {/* Red Error Message */}
+              <Text style={{ fontSize: 14, color: '#e74c3c', fontWeight: '600', textAlign: 'center', marginBottom: 20, lineHeight: 20 }}>
+                You need to set your Main Skill and Expected Wage in the Profile section before going online!
+              </Text>
+
+              {/* Buttons */}
+              <View style={{ flexDirection: 'row', gap: 12 }}>
+                <TouchableOpacity 
+                  style={{ 
+                    flex: 1,
+                    borderWidth: 1.5,
+                    borderColor: '#e74c3c',
+                    borderRadius: 10, 
+                    paddingVertical: 12,
+                    alignItems: 'center',
+                  }}
+                  onPress={() => setProfileIncompleteModalVisible(false)}
+                >
+                  <Text style={{ color: '#e74c3c', fontSize: 14, fontWeight: '700' }}>Later</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity 
+                  style={{ 
+                    flex: 1,
+                    backgroundColor: '#e74c3c', 
+                    borderRadius: 10, 
+                    paddingVertical: 12,
+                    alignItems: 'center',
+                  }}
+                  onPress={() => {
+                    setProfileIncompleteModalVisible(false);
+                    router.push("/Settings" as any);
+                  }}
+                >
+                  <Text style={{ color: '#fff', fontSize: 14, fontWeight: '700' }}>Go to Profile</Text>
+                </TouchableOpacity>
+              </View>
+            </TouchableOpacity>
+          </View>
+        </TouchableOpacity>
+      </Modal>
 
       <FullContainer 
         todayEarnings={todayEarnings}

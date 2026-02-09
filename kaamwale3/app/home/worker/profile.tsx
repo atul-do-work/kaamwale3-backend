@@ -7,8 +7,10 @@ import {
   Alert,
   Image,
   Platform,
+  SafeAreaView,
+  Modal,
 } from "react-native";
-import { MaterialIcons } from "@expo/vector-icons";
+import { MaterialIcons, Ionicons } from "@expo/vector-icons";
 import styles from "../../../styles/WorkerProfileStyles";
 import { LinearGradient } from "expo-linear-gradient";
 import AsyncStorage from "@react-native-async-storage/async-storage";
@@ -18,6 +20,14 @@ import axios from "axios";
 import { API_BASE } from "../../../utils/config";
 import { clearAllUserData } from "../../../utils/socket";
 import ReferralModal from "../../../components/ReferralModal";
+
+const MAIN_SKILLS = ['Labour', 'Mason', 'Engineer', 'ITI/Technician'];
+const WAGE_RANGES = [
+  { label: 'Min to ₹400', value: '0-400' },
+  { label: '₹400 to ₹550', value: '400-550' },
+  { label: '₹550 to ₹700', value: '550-700' },
+  { label: '₹700 to Max', value: '700-max' },
+];
 
 export default function Profile(): React.ReactElement {
   const [userName, setUserName] = useState<string>("Worker");
@@ -31,6 +41,16 @@ export default function Profile(): React.ReactElement {
   const [totalDeductions, setTotalDeductions] = useState(245);
   const [totalBonus, setTotalBonus] = useState(500);
   const [referralBonus, setReferralBonus] = useState(500);
+  const [userToken, setUserToken] = useState<string>("");
+  
+  // Menu states
+  const [showMenu, setShowMenu] = useState(false);
+  const [showSkillMenu, setShowSkillMenu] = useState(false);
+  const [showWageMenu, setShowWageMenu] = useState(false);
+  const [selectedSkill, setSelectedSkill] = useState<string>("");
+  const [selectedWage, setSelectedWage] = useState<string>("");
+  const [menuModalVisible, setMenuModalVisible] = useState(false);
+  
   const router = useRouter();
 
   // Use central API base
@@ -40,6 +60,7 @@ export default function Profile(): React.ReactElement {
       try {
         const userStr = await AsyncStorage.getItem("user");
         const profileStr = await AsyncStorage.getItem("profilePhoto");
+        const token = await AsyncStorage.getItem("token");
 
         if (userStr) {
           const parsed = JSON.parse(userStr);
@@ -47,9 +68,12 @@ export default function Profile(): React.ReactElement {
           setWorkerId(parsed.phone || "0000");
           setWorkerName(parsed.name || "Worker");
           setWorkerPhone(parsed.phone || "0000");
+          setSelectedSkill(parsed.mainSkill || "");
+          setSelectedWage(parsed.expectedWage || "");
         }
 
         if (profileStr) setProfilePhoto(profileStr);
+        if (token) setUserToken(token);
       } catch (err) {
         console.error("Failed to load user/profile photo", err);
       }
@@ -95,7 +119,8 @@ export default function Profile(): React.ReactElement {
         console.log("📤 Uploading profile photo...");
         const response = await axios.post(`${API_BASE}/users/photo`, formData, {
           headers: {
-            "Content-Type": "multipart/form-data",
+            // ⚠️ Do NOT set Content-Type: multipart/form-data
+            // Axios will automatically set it with the correct boundary
             Authorization: `Bearer ${userToken}`,
           },
         });
@@ -150,6 +175,47 @@ export default function Profile(): React.ReactElement {
     if (path) router.push(path as any);
   };
 
+  const handleSaveProfile = async () => {
+    if (!selectedSkill || !selectedWage) {
+      Alert.alert("Error", "Please select both skill and wage range");
+      return;
+    }
+
+    try {
+      const response = await axios.post(
+        `${API_BASE}/users/update-profile`,
+        {
+          mainSkill: selectedSkill,
+          expectedWage: selectedWage,
+        },
+        {
+          headers: {
+            Authorization: `Bearer ${userToken}`,
+            "Content-Type": "application/json",
+          },
+        }
+      );
+
+      if (response.data.success) {
+        // Update local storage
+        const userStr = await AsyncStorage.getItem("user");
+        if (userStr) {
+          const user = JSON.parse(userStr);
+          user.mainSkill = selectedSkill;
+          user.expectedWage = selectedWage;
+          await AsyncStorage.setItem("user", JSON.stringify(user));
+        }
+        
+        Alert.alert("Success", "Profile updated successfully!");
+        setMenuModalVisible(false);
+        setShowMenu(false);
+      }
+    } catch (err: any) {
+      console.error("Profile update error:", err);
+      Alert.alert("Error", err?.response?.data?.message || "Failed to update profile");
+    }
+  };
+
   const infoCards = [
     {
       header: "Support",
@@ -176,29 +242,40 @@ export default function Profile(): React.ReactElement {
   ];
 
   return (
-    <ScrollView style={styles.container}>
-      <LinearGradient
-        colors={["#1a2f4d", "#1a2f4d"]}
-        start={{ x: 0, y: 0 }}
-        end={{ x: 1, y: 0 }}
-        style={styles.headerContainer}
-      >
-        <TouchableOpacity onPress={pickImage} style={styles.profileIcon}>
-          {profilePhoto ? (
-            <Image source={{ uri: profilePhoto }} style={styles.profilePhoto} />
-          ) : (
-            <MaterialIcons name="person" size={60} color="#fff" />
-          )}
-        </TouchableOpacity>
+    <SafeAreaView style={{ flex: 1, backgroundColor: "#f5f5f5" }}>
+      <ScrollView style={styles.container}>
+        {/* Header with Three-Dot Menu */}
+        <View style={{ position: 'relative' }}>
+          <TouchableOpacity 
+            style={styles.menuButton}
+            onPress={() => setMenuModalVisible(true)}
+          >
+            <MaterialIcons name="more-vert" size={28} color="#1a2f4d" />
+          </TouchableOpacity>
 
-        <View style={styles.profileInfo}>
-          <Text style={styles.nameText}>{userName}</Text>
-          <Text style={styles.workerId}>Worker ID: {workerId}</Text>
-          <Text style={styles.ratingText}>Rating: 4.5 ⭐</Text>
+          <LinearGradient
+            colors={["#1a2f4d", "#1a2f4d"]}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 0 }}
+            style={styles.headerContainer}
+          >
+            <TouchableOpacity onPress={pickImage} style={styles.profileIcon}>
+              {profilePhoto ? (
+                <Image source={{ uri: profilePhoto }} style={styles.profilePhoto} />
+              ) : (
+                <MaterialIcons name="person" size={60} color="#fff" />
+              )}
+            </TouchableOpacity>
+
+            <View style={styles.profileInfo}>
+              <Text style={styles.nameText}>{userName}</Text>
+              <Text style={styles.workerId}>Worker ID: {workerId}</Text>
+              <Text style={styles.ratingText}>Rating: 4.5 ⭐</Text>
+            </View>
+          </LinearGradient>
         </View>
-      </LinearGradient>
 
-      <View style={styles.cardsRow}>
+        <View style={styles.cardsRow}>
         {[
           { title: "Gig History", icon: "history", route: "/GigHistory" },
           { title: "Earnings", icon: "attach-money", action: () => setEarningsModalVisible(true) },
@@ -253,24 +330,24 @@ export default function Profile(): React.ReactElement {
         </View>
       ))}
 
-      <TouchableOpacity style={styles.logoutButton} onPress={handleLogout}>
+        <TouchableOpacity style={styles.logoutButton} onPress={handleLogout}>
         <MaterialIcons name="logout" size={22} color="#fff" />
         <Text style={styles.logoutText}>Logout</Text>
       </TouchableOpacity>
 
-      <ReferralModal
-        visible={referralModalVisible}
-        onClose={() => setReferralModalVisible(false)}
-        workerName={workerName}
-        workerPhone={workerPhone}
-      />
+        <ReferralModal
+          visible={referralModalVisible}
+          onClose={() => setReferralModalVisible(false)}
+          workerName={workerName}
+          workerPhone={workerPhone}
+        />
 
-      {/* Earnings Modal */}
-      <TouchableOpacity
-        style={[styles.modalBackdrop, earningsModalVisible && styles.modalBackdropActive]}
-        activeOpacity={1}
-        onPress={() => setEarningsModalVisible(false)}
-      >
+        {/* Earnings Modal */}
+        <TouchableOpacity
+          style={[styles.modalBackdrop, earningsModalVisible && styles.modalBackdropActive]}
+          activeOpacity={1}
+          onPress={() => setEarningsModalVisible(false)}
+        >
         <View style={[styles.earningsModal, earningsModalVisible && { opacity: 1 }]}>
           <View style={styles.earningsHeader}>
             <Text style={styles.earningsTitle}>Earnings Breakdown</Text>
@@ -346,7 +423,148 @@ export default function Profile(): React.ReactElement {
             </View>
           </ScrollView>
         </View>
-      </TouchableOpacity>
-    </ScrollView>
+        </TouchableOpacity>
+
+        {/* Skill & Wage Selection Modal */}
+        <Modal visible={menuModalVisible} transparent animationType="fade">
+        <TouchableOpacity 
+          style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)' }}
+          onPress={() => setMenuModalVisible(false)}
+          activeOpacity={1}
+        >
+          <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', padding: 20 }}>
+            <TouchableOpacity 
+              style={{ 
+                backgroundColor: '#fff', 
+                borderRadius: 16, 
+                padding: 24, 
+                width: '100%',
+                maxWidth: 350,
+                shadowColor: '#000',
+                shadowOffset: { width: 0, height: 2 },
+                shadowOpacity: 0.25,
+                shadowRadius: 3.84,
+                elevation: 5,
+              }}
+              onPress={(e) => e.stopPropagation()}
+            >
+              {/* Modal Header */}
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+                <Text style={{ fontSize: 18, fontWeight: '700', color: '#1a2f4d' }}>Update Profile</Text>
+                <TouchableOpacity onPress={() => setMenuModalVisible(false)}>
+                  <Ionicons name="close" size={26} color="#1a2f4d" />
+                </TouchableOpacity>
+              </View>
+
+              {/* Main Skill Dropdown */}
+              <View style={{ marginBottom: 18 }}>
+                <Text style={{ fontSize: 14, fontWeight: '600', color: '#1a2f4d', marginBottom: 8 }}>Main Skill</Text>
+                <TouchableOpacity 
+                  style={{ 
+                    borderWidth: 1, 
+                    borderColor: '#ddd', 
+                    borderRadius: 10, 
+                    paddingHorizontal: 12, 
+                    paddingVertical: 12,
+                    backgroundColor: '#f9f9f9',
+                    flexDirection: 'row',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                  }}
+                  onPress={() => setShowSkillMenu(!showSkillMenu)}
+                >
+                  <Text style={{ color: selectedSkill ? '#1a2f4d' : '#999', fontSize: 14 }}>
+                    {selectedSkill || 'Select Main Skill'}
+                  </Text>
+                  <Ionicons name={showSkillMenu ? 'chevron-up' : 'chevron-down'} size={20} color="#1a2f4d" />
+                </TouchableOpacity>
+
+                {showSkillMenu && (
+                  <View style={{ 
+                    borderWidth: 1, 
+                    borderColor: '#ddd', 
+                    borderTopWidth: 0,
+                    borderBottomLeftRadius: 10,
+                    borderBottomRightRadius: 10,
+                    backgroundColor: '#f0f0f0',
+                    marginTop: -1,
+                  }}>
+                    {MAIN_SKILLS.map((skill) => (
+                      <TouchableOpacity 
+                        key={skill}
+                        style={{ paddingHorizontal: 12, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: '#eee' }}
+                        onPress={() => { setSelectedSkill(skill); setShowSkillMenu(false); }}
+                      >
+                        <Text style={{ color: '#1a2f4d', fontSize: 14 }}>{skill}</Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                )}
+              </View>
+
+              {/* Expected Wages Dropdown */}
+              <View style={{ marginBottom: 20 }}>
+                <Text style={{ fontSize: 14, fontWeight: '600', color: '#1a2f4d', marginBottom: 8 }}>Expected Wages</Text>
+                <TouchableOpacity 
+                  style={{ 
+                    borderWidth: 1, 
+                    borderColor: '#ddd', 
+                    borderRadius: 10, 
+                    paddingHorizontal: 12, 
+                    paddingVertical: 12,
+                    backgroundColor: '#f9f9f9',
+                    flexDirection: 'row',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                  }}
+                  onPress={() => setShowWageMenu(!showWageMenu)}
+                >
+                  <Text style={{ color: selectedWage ? '#1a2f4d' : '#999', fontSize: 14 }}>
+                    {selectedWage ? WAGE_RANGES.find(w => w.value === selectedWage)?.label : 'Select Wage Range'}
+                  </Text>
+                  <Ionicons name={showWageMenu ? 'chevron-up' : 'chevron-down'} size={20} color="#1a2f4d" />
+                </TouchableOpacity>
+
+                {showWageMenu && (
+                  <View style={{ 
+                    borderWidth: 1, 
+                    borderColor: '#ddd', 
+                    borderTopWidth: 0,
+                    borderBottomLeftRadius: 10,
+                    borderBottomRightRadius: 10,
+                    backgroundColor: '#f0f0f0',
+                    marginTop: -1,
+                  }}>
+                    {WAGE_RANGES.map((range) => (
+                      <TouchableOpacity 
+                        key={range.value}
+                        style={{ paddingHorizontal: 12, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: '#eee' }}
+                        onPress={() => { setSelectedWage(range.value); setShowWageMenu(false); }}
+                      >
+                        <Text style={{ color: '#1a2f4d', fontSize: 14 }}>{range.label}</Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                )}
+              </View>
+
+              {/* Save Button */}
+              <TouchableOpacity 
+                style={{ 
+                  backgroundColor: '#1a2f4d', 
+                  borderRadius: 10, 
+                  paddingVertical: 14,
+                  alignItems: 'center',
+                }}
+                onPress={handleSaveProfile}
+              >
+                <Text style={{ color: '#fff', fontSize: 16, fontWeight: '700' }}>Save Changes</Text>
+              </TouchableOpacity>
+            </TouchableOpacity>
+          </View>
+        </TouchableOpacity>
+        </Modal>
+      </ScrollView>
+    </SafeAreaView>
   );
 }

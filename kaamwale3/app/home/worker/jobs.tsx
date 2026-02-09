@@ -24,6 +24,9 @@ interface Job {
   amount: string;
   contractorName: string;
   location?: string;
+  imageUrl?: string; // ✅ Job image URL
+  startTime?: string; // ✅ Start time like "09:00"
+  endTime?: string; // ✅ End time like "18:00"
   lat: number;
   lon: number;
   timestamp: string;
@@ -330,6 +333,16 @@ export default function Jobs(): React.ReactElement {
                         {job.description}
                       </Text>
 
+                      {/* Time Row - From/To */}
+                      {(job.startTime || job.endTime) && (
+                        <View style={{ flexDirection: "row", alignItems: "center", marginBottom: 8 }}>
+                          <MaterialIcons name="schedule" size={18} color="#FFA500" />
+                          <Text style={{ color: "#FFD700", fontSize: 12, fontWeight: "600", marginLeft: 6 }}>
+                            {job.startTime || "N/A"} - {job.endTime || "N/A"}
+                          </Text>
+                        </View>
+                      )}
+
                       {/* Location Row */}
                       <TouchableOpacity
                         style={{ flexDirection: "row", alignItems: "center", marginBottom: 8 }}
@@ -382,7 +395,7 @@ export default function Jobs(): React.ReactElement {
                     {/* Right Image */}
                     <View style={{ width: 120, height: 120, borderRadius: 10, overflow: "hidden" }}>
                       <Image
-                        source={require("../../../assets/oip2.jpg")}
+                        source={job.imageUrl ? { uri: job.imageUrl } : require("../../../assets/oip2.jpg")}
                         style={{ width: "100%", height: "100%", resizeMode: "cover" }}
                       />
                       <View style={{ 
