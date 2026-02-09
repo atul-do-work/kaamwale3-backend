@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, Text, Image, TouchableOpacity, ScrollView, Alert } from 'react-native';
+import { View, Text, Image, TouchableOpacity, ScrollView, Alert, SafeAreaView } from 'react-native';
 import { MaterialIcons, FontAwesome } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { BlurView } from 'expo-blur';
@@ -281,7 +281,7 @@ export default function ContractorHome() {
   };
 
   return (
-    <View style={styles.container}>
+    <SafeAreaView style={styles.container}>
       {/* Header with Gradient */}
       <LinearGradient 
         colors={['#1a2f4d', '#2d5a8c']} 
@@ -449,7 +449,7 @@ export default function ContractorHome() {
         onClose={() => setPremiumModalVisible(false)}
         onPlanSelected={handlePlanSelected}
       />
-    </View>
+    </SafeAreaView>
   );
 }
 

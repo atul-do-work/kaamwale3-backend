@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { View, Text, TextInput, TouchableOpacity, ScrollView, StyleSheet, Alert, Image } from 'react-native';
+import { View, Text, TextInput, TouchableOpacity, ScrollView, StyleSheet, Alert, Image, ActivityIndicator, SafeAreaView } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import * as Location from 'expo-location';
@@ -9,7 +9,6 @@ import { socket } from "../../../utils/socket";
 import { SERVER_URL } from "../../../utils/config";
 import { useFocusEffect } from '@react-navigation/native';
 import { useRouter } from "expo-router";  // ⭐ ADDED
-import LocationPickerModal from '../../../components/LocationPickerModal'; // ✅ NEW
 
 interface JobPayload {
   title: string;
@@ -46,7 +45,7 @@ export default function PostJobScreen() {
   const [currentUserPhone, setCurrentUserPhone] = useState<string | null>(null);
   const previousUserPhoneRef = useRef<string | null>(null); // ✅ Track previous user to detect changes
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
-  const [selectedLocation, setSelectedLocation] = useState<{ lat: number; lon: number; placeName?: string; isManual?: boolean } | null>(null);
+  const [selectedLocation, setSelectedLocation] = useState<{ lat: number; lon: number; placeName?: string } | null>(null);
   const [showTitleDropdown, setShowTitleDropdown] = useState(false);
   const [showSkillDropdown, setShowSkillDropdown] = useState(false);
   const [showWorkerTypeDropdown, setShowWorkerTypeDropdown] = useState(false);
@@ -54,7 +53,7 @@ export default function PostJobScreen() {
   const [hasPremium, setHasPremium] = useState(false); // ✅ Premium check
   const [bulkHiringEnabled, setBulkHiringEnabled] = useState(false); // ✅ Bulk hiring toggle
   const [requiredWorkers, setRequiredWorkers] = useState(1); // ✅ Number of workers needed
-  const [showLocationPicker, setShowLocationPicker] = useState(false); // ✅ NEW: Map picker modal state
+  const [gettingLocation, setGettingLocation] = useState(false); // ✅ Loading state for current location
 
   // SERVER_URL is loaded from central config
   const router = useRouter();   // ⭐ ADDED
@@ -180,6 +179,30 @@ export default function PostJobScreen() {
     });
     if (!result.canceled) {
       setSelectedImage(result.assets[0].uri);
+    }
+  };
+
+  // Get current location
+  const getCurrentLocation = async () => {
+    try {
+      setGettingLocation(true);
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert('Permission Denied', 'Location permission is required to use current location');
+        setGettingLocation(false);
+        return;
+      }
+      const location = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
+      setSelectedLocation({
+        lat: location.coords.latitude,
+        lon: location.coords.longitude,
+        placeName: `${location.coords.latitude.toFixed(4)}, ${location.coords.longitude.toFixed(4)}`,
+      });
+      Alert.alert('Success', 'Current location set');
+    } catch (err) {
+      Alert.alert('Error', (err as Error).message || 'Failed to get location');
+    } finally {
+      setGettingLocation(false);
     }
   };
 
@@ -323,7 +346,8 @@ export default function PostJobScreen() {
   };
 
   return (
-    <ScrollView contentContainerStyle={styles.scroll}>
+    <SafeAreaView style={{ flex: 1, backgroundColor: '#f3f3f3' }}>
+      <ScrollView contentContainerStyle={styles.scroll}>
       <View style={styles.container}>
         <Text style={styles.header}>Post a New Job</Text>
 
@@ -399,26 +423,34 @@ export default function PostJobScreen() {
         </View>
         {priceError && <Text style={styles.errorText}>⚠️ Minimum price must be ₹410</Text>}
 
-        {/* Location Selection - Ola Maps Picker Button */}
-        <TouchableOpacity
-          style={[styles.inputCard, { backgroundColor: selectedLocation ? '#1a5c3a' : '#162b49ff' }]}
-          onPress={() => setShowLocationPicker(true)}
-        >
-          <Ionicons name="map-outline" size={22} color={selectedLocation ? '#4ade80' : '#bcbec7ff'} />
-          <View style={{ flex: 1, marginLeft: 10 }}>
-            <Text style={[styles.input, { color: selectedLocation ? '#4ade80' : '#aaa' }]}>
-              {selectedLocation?.placeName 
-                ? `📍 ${selectedLocation.placeName.substring(0, 40)}${selectedLocation.placeName.length > 40 ? '...' : ''}`
-                : 'Select Location from Map'
-              }
-            </Text>
-            {selectedLocation && (
-              <Text style={{ fontSize: 11, color: selectedLocation ? '#7ed5a9' : '#999', marginTop: 3 }}>
-                Lat: {selectedLocation.lat.toFixed(4)} | Lon: {selectedLocation.lon.toFixed(4)}
-              </Text>
+        {/* Location Selection - Use Current Location Button */}
+        <View style={styles.dropdownContainer}>
+          <Text style={styles.label}>Job Location</Text>
+          <TouchableOpacity
+            style={[styles.inputCard, { backgroundColor: selectedLocation ? '#1a5c3a' : '#162b49ff' }]}
+            onPress={getCurrentLocation}
+            disabled={gettingLocation}
+          >
+            {gettingLocation ? (
+              <ActivityIndicator size="small" color="#bcbec7ff" />
+            ) : (
+              <Ionicons name="locate-outline" size={22} color={selectedLocation ? '#4ade80' : '#bcbec7ff'} />
             )}
-          </View>
-        </TouchableOpacity>
+            <View style={{ flex: 1, marginLeft: 10 }}>
+              <Text style={[styles.input, { color: selectedLocation ? '#4ade80' : '#aaa' }]}>
+                {selectedLocation?.placeName 
+                  ? `📍 ${selectedLocation.placeName}`
+                  : gettingLocation ? 'Getting location...' : 'Use Current Location'
+                }
+              </Text>
+              {selectedLocation && (
+                <Text style={{ fontSize: 11, color: '#7ed5a9', marginTop: 3 }}>
+                  Lat: {selectedLocation.lat.toFixed(4)} | Lon: {selectedLocation.lon.toFixed(4)}
+                </Text>
+              )}
+            </View>
+          </TouchableOpacity>
+        </View>
 
         {/* Image Upload */}
         <TouchableOpacity style={[styles.inputCard, { backgroundColor: selectedImage ? '#1a4c6d' : '#162b49ff' }]} onPress={pickImage}>
@@ -562,25 +594,9 @@ export default function PostJobScreen() {
         <TouchableOpacity style={styles.button} onPress={handlePostJob}>
           <Text style={styles.buttonText}>Post Job</Text>
         </TouchableOpacity>
-
-        {/* ✅ Location Picker Modal */}
-        <LocationPickerModal
-          visible={showLocationPicker}
-          onConfirm={(location) => {
-            setSelectedLocation({
-              lat: location.lat,
-              lon: location.lon,
-              placeName: location.placeName,
-              isManual: true,
-            });
-            setShowLocationPicker(false);
-          }}
-          onClose={() => setShowLocationPicker(false)}
-          initialLat={selectedLocation?.lat}
-          initialLon={selectedLocation?.lon}
-        />
       </View>
     </ScrollView>
+    </SafeAreaView>
   );
 }
 

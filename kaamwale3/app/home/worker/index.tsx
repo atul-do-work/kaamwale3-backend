@@ -70,6 +70,14 @@ class ErrorBoundary extends React.Component<
   }
 }
 
+// ✅ Helper function to get dynamic greeting based on time of day
+const getGreeting = (): string => {
+  const hour = new Date().getHours();
+  if (hour < 12) return "Good Morning";
+  if (hour < 18) return "Good Afternoon";
+  return "Good Evening";
+};
+
 
 interface Job {
   _id: string; // ✅ MongoDB ObjectId
@@ -1076,7 +1084,7 @@ function WorkerHome() {
           <View style={styles.headerContainer}>
         <View>
           <Text style={styles.dashboardText}>Dashboard</Text>
-          <Text style={styles.greetingText}>Good Morning, {workerName}</Text>
+          <Text style={styles.greetingText}>{getGreeting()}, {workerName}</Text>
         </View>
         <View style={styles.headerRightContainer}>
           {/* Online/Offline Toggle */}

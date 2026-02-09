@@ -193,20 +193,12 @@ export default function NotificationHistoryScreen(): React.ReactElement {
     return iconMap[type] || iconMap.default;
   };
 
-  // Handle notification click (navigate to related screen if deepLink exists)
+  // Handle notification click - mark as read only, no navigation
   const handleNotificationPress = (notification: Notification) => {
     if (!notification.isRead) {
       handleMarkAsRead(notification._id);
     }
-
-    if (notification.deepLink) {
-      // Navigate using the deeplink if available
-      try {
-        router.push(notification.deepLink as any);
-      } catch (error) {
-        console.log("Navigation to deeplink not available", error);
-      }
-    }
+    // Removed deepLink navigation - notifications are display only
   };
 
   // Render notification item
@@ -219,12 +211,11 @@ export default function NotificationHistoryScreen(): React.ReactElement {
     });
 
     return (
-      <TouchableOpacity
+      <View
         style={[
           styles.notificationItem,
           !item.isRead && styles.notificationItemUnread,
         ]}
-        onPress={() => handleNotificationPress(item)}
       >
         <View style={[styles.iconBg, { backgroundColor: color + "20" }]}>
           <MaterialIcons name={icon as any} size={24} color={color} />
@@ -241,7 +232,7 @@ export default function NotificationHistoryScreen(): React.ReactElement {
         </View>
 
         {!item.isRead && <View style={styles.unreadBadge} />}
-      </TouchableOpacity>
+      </View>
     );
   };
 

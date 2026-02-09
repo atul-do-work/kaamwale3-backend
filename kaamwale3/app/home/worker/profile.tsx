@@ -111,24 +111,25 @@ export default function Profile(): React.ReactElement {
 
         const formData = new FormData();
         formData.append("photo", {
-          uri: Platform.OS === "ios" ? uri.replace("file://", "") : uri,
-          name: `profile-${workerId}.jpg`,
+          uri: uri,
+          name: `profile-${workerId}-${Date.now()}.jpg`,
           type: "image/jpeg",
         } as any);
 
-        console.log("📤 Uploading profile photo...");
+        console.log("📤 Uploading profile photo to:", `${API_BASE}/users/photo`);
+        console.log("📤 Token present:", !!userToken);
+        
         const response = await axios.post(`${API_BASE}/users/photo`, formData, {
+          timeout: 30000, // 30 second timeout
           headers: {
-            // ⚠️ Do NOT set Content-Type: multipart/form-data
-            // Axios will automatically set it with the correct boundary
             Authorization: `Bearer ${userToken}`,
+            "Content-Type": "multipart/form-data",
           },
         });
 
         console.log("✅ Upload response:", response.data);
 
         if (response.data.success && response.data.profilePhoto) {
-          // URL from server is already correct (ngrok or LAN IP)
           console.log("✅ Saving profile photo URL:", response.data.profilePhoto);
           setProfilePhoto(response.data.profilePhoto);
           await AsyncStorage.setItem("profilePhoto", response.data.profilePhoto);
@@ -136,16 +137,24 @@ export default function Profile(): React.ReactElement {
         } else {
           console.log("❌ Invalid response:", response.data);
           Alert.alert("Error", "Server returned invalid response");
+          const savedPhoto = await AsyncStorage.getItem("profilePhoto");
+          if (savedPhoto) setProfilePhoto(savedPhoto);
         }
       } catch (err: any) {
-        console.error("❌ Profile photo upload error:", err.response?.data || err.message);
+        console.error("❌ Profile photo upload error:", err);
+        console.error("❌ Error response:", err.response?.data);
+        console.error("❌ Error status:", err.response?.status);
+        console.error("❌ Error message:", err.message);
+        
         Alert.alert(
           "Upload failed",
-          err?.response?.data?.message || err.message || "Could not upload profile photo."
+          err?.response?.data?.message || err.message || "Could not upload profile photo. Please check your internet connection and try again."
         );
+        
         // Revert to previously saved photo
         const savedPhoto = await AsyncStorage.getItem("profilePhoto");
         if (savedPhoto) setProfilePhoto(savedPhoto);
+        else setProfilePhoto(null);
       }
     }
   };

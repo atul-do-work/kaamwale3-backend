@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { View, Text, ScrollView, TouchableOpacity, Alert, Image, Platform , DimensionValue} from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { MaterialIcons, Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import AsyncStorage from "@react-native-async-storage/async-storage";
@@ -244,10 +245,10 @@ export default function ContractorProfile(): React.ReactElement {
         
         // Count statistics
         const posted = jobs.length;
-        // Completed: Jobs that are paid (paymentStatus = "completed")
-        const completed = jobs.filter((j: any) => j.paymentStatus === "completed").length;
-        // In Progress: Jobs accepted but not yet paid
-        const inProgress = jobs.filter((j: any) => j.acceptedBy && j.paymentStatus !== "completed").length;
+        // ✅ FIXED: Completed = Jobs with paymentStatus === "Paid"
+        const completed = jobs.filter((j: any) => j.paymentStatus === "Paid").length;
+        // ✅ FIXED: In Progress = Jobs accepted but paymentStatus is NOT "Paid"
+        const inProgress = jobs.filter((j: any) => j.acceptedBy && j.paymentStatus !== "Paid").length;
 
         setPostedCount(posted);
         setCompletedCount(completed);
@@ -427,7 +428,8 @@ export default function ContractorProfile(): React.ReactElement {
   ];
 
   return (
-    <ScrollView style={styles.container}>
+    <SafeAreaView style={styles.container}>
+      <ScrollView>
       {/* Premium Header with Decorative Bubbles */}
       <LinearGradient colors={["#1a2f4d", "#2d5a8c"]} style={styles.headerGradient}>
         {/* ✅ Decorative Bubbles */}

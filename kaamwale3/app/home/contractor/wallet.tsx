@@ -606,8 +606,20 @@ export default function ContractorWalletAttendance() {
           accountType: "savings"
         });
         setShowAddBank(false);
-        Alert.alert("Success", "Bank account added! Waiting for verification.");
-        fetchBankAccount();
+        // Show success message with custom modal instead of Alert
+        Alert.alert(
+          "✅ Success",
+          "Bank account added! Waiting for verification.",
+          [
+            {
+              text: "OK",
+              onPress: () => {
+                fetchBankAccount();
+              },
+            },
+          ],
+          { cancelable: false }
+        );
       }
     } catch (err: any) {
       Alert.alert("Error", err.response?.data?.message || "Failed to add bank account");

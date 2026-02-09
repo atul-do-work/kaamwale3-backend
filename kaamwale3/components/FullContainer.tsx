@@ -3,7 +3,6 @@ import { ScrollView, View, Text, Animated } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import styles from '../styles/FullContainerStyles';
-import BannerCarousel from './BannerCarousel';
 
 interface FullContainerProps {
   todayEarnings?: number;
@@ -160,9 +159,6 @@ export default function FullContainer({
         <Text style={styles.tipText}>⏱️ Complete jobs on time for bonus rewards</Text>
         <Text style={styles.tipText}>⭐ Maintain high ratings for premium job offers</Text>
       </View>
-
-      {/* Banner Carousel */}
-      <BannerCarousel />
     </ScrollView>
   );
 }
