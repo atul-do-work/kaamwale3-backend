@@ -1,0 +1,436 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ola Maps Picker</title>
+    <link rel="stylesheet" href="https://maps.olakrutrim.com/maps-api/v1/styles/default-style.css" />
+    <script src="https://maps.olakrutrim.com/maps-api/v1/ola-maps.js" charset="UTF-8"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            overflow: hidden;
+            height: 100vh;
+            background: #f0f0f0;
+        }
+
+        #map {
+            width: 100%;
+            height: 100%;
+        }
+
+        .info-panel {
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            background: #fff;
+            padding: 20px;
+            border-top: 1px solid #ddd;
+            box-shadow: 0 -2px 8px rgba(0, 0, 0, 0.1);
+            z-index: 100;
+        }
+
+        .location-info {
+            margin-bottom: 15px;
+        }
+
+        .location-info label {
+            font-size: 12px;
+            color: #999;
+            display: block;
+            margin-bottom: 5px;
+            font-weight: 600;
+        }
+
+        .location-info p {
+            font-size: 14px;
+            color: #333;
+            font-weight: 500;
+            word-break: break-word;
+        }
+
+        .location-coords {
+            font-size: 12px;
+            color: #666;
+            margin-top: 5px;
+        }
+
+        .button-group {
+            display: flex;
+            gap: 10px;
+        }
+
+        button {
+            flex: 1;
+            padding: 14px;
+            border: none;
+            border-radius: 10px;
+            font-size: 16px;
+            font-weight: 700;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .confirm-btn {
+            background: #1f3a5f;
+            color: #fff;
+        }
+
+        .confirm-btn:active {
+            background: #152844;
+        }
+
+        .cancel-btn {
+            background: #f0f0f0;
+            color: #333;
+            border: 1px solid #ddd;
+        }
+
+        .cancel-btn:active {
+            background: #e8e8e8;
+        }
+
+        .search-box {
+            position: fixed;
+            top: 10px;
+            left: 10px;
+            right: 10px;
+            z-index: 50;
+            background: #fff;
+            border-radius: 10px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+            padding: 0;
+            overflow: hidden;
+        }
+
+        .search-input-wrapper {
+            display: flex;
+            align-items: center;
+            padding: 10px 12px;
+            gap: 8px;
+        }
+
+        .search-icon {
+            font-size: 18px;
+            color: #999;
+        }
+
+        .search-input {
+            flex: 1;
+            border: none;
+            outline: none;
+            font-size: 14px;
+            padding: 8px 0;
+            font-family: inherit;
+        }
+
+        .search-results {
+            max-height: 250px;
+            overflow-y: auto;
+            border-top: 1px solid #eee;
+        }
+
+        .search-result-item {
+            padding: 12px 12px;
+            border-bottom: 1px solid #eee;
+            font-size: 13px;
+            color: #333;
+            cursor: pointer;
+            transition: background 0.15s;
+        }
+
+        .search-result-item:hover {
+            background: #f5f5f5;
+        }
+
+        .search-result-item:last-child {
+            border-bottom: none;
+        }
+
+        .clear-search {
+            font-size: 18px;
+            color: #999;
+            background: none;
+            border: none;
+            cursor: pointer;
+            padding: 0;
+            width: 24px;
+            height: 24px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .clear-search:active {
+            color: #666;
+        }
+
+        .marker {
+            width: 50px;
+            height: 60px;
+            background: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 50 60" width="50" height="60"><path d="M25 0C11.2 0 0 11.2 0 25c0 13.8 25 35 25 35s25-21.2 25-35C50 11.2 38.8 0 25 0z" fill="%23d32f2f"/><circle cx="25" cy="24" r="8" fill="%23fff"/></svg>') no-repeat center;
+            background-size: contain;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 12px;
+            color: #999;
+            font-size: 12px;
+        }
+    </style>
+</head>
+<body>
+    <div id="map"></div>
+
+    <div class="search-box" id="searchBox">
+        <div class="search-input-wrapper">
+            <span class="search-icon">🔍</span>
+            <input 
+                type="text" 
+                id="searchInput" 
+                class="search-input" 
+                placeholder="Search place or address..."
+            >
+            <button class="clear-search" id="clearBtn" style="display: none;">✕</button>
+        </div>
+        <div class="search-results" id="searchResults"></div>
+    </div>
+
+    <div class="info-panel">
+        <div class="location-info">
+            <label>📍 Selected Location</label>
+            <p id="placeName">-</p>
+            <div class="location-coords" id="coords">Lat: -, Lon: -</div>
+        </div>
+        <div class="button-group">
+            <button class="confirm-btn" onclick="confirmLocation()">✓ Confirm Location</button>
+            <button class="cancel-btn" onclick="cancelSelection()">Cancel</button>
+        </div>
+    </div>
+
+    <script>
+        let map = null;
+        let marker = null;
+        let selectedLat = 28.6139;
+        let selectedLon = 77.2090;
+        let selectedPlaceName = '';
+        let searchTimeout = null;
+
+        // Initialize map with Ola Maps
+        function initMap() {
+            const mapContainer = document.getElementById('map');
+            
+            try {
+                map = new OlaMaps.Map({
+                    container: mapContainer,
+                    center: [selectedLon, selectedLat],
+                    zoom: 15,
+                    style: 'https://api.olamaps.io/tiles/styles/default/style.json?key=' + window.OLA_API_KEY,
+                });
+
+                // Add click listener to map
+                map.on('click', (event) => {
+                    const { lng, lat } = event.lngLat;
+                    placeMarker(lat, lng);
+                    reverseGeocode(lat, lng);
+                });
+
+                // Create initial marker
+                addMarker(selectedLat, selectedLon);
+
+                // Update location info
+                updateLocationInfo();
+            } catch (err) {
+                console.error('Map init error:', err);
+                alert('Failed to initialize map. Please check API key.');
+            }
+        }
+
+        // Place marker at location
+        function placeMarker(lat, lon) {
+            selectedLat = lat;
+            selectedLon = lon;
+            
+            // Remove old marker
+            if (marker) {
+                marker.remove();
+            }
+            
+            // Add new marker
+            addMarker(lat, lon);
+            
+            // Center map on marker
+            if (map) {
+                map.flyTo({
+                    center: [lon, lat],
+                    zoom: 15,
+                });
+            }
+        }
+
+        // Add marker to map
+        function addMarker(lat, lon) {
+            if (!map) return;
+            
+            const el = document.createElement('div');
+            el.className = 'marker';
+            
+            marker = new OlaMaps.Marker({
+                element: el,
+                lngLat: [lon, lat],
+                draggable: true,
+            });
+            
+            marker.addTo(map);
+            
+            // Listen to drag events
+            marker.on('dragend', () => {
+                const lngLat = marker.getLngLat();
+                selectedLat = lngLat.lat;
+                selectedLon = lngLat.lng;
+                reverseGeocode(selectedLat, selectedLon);
+            });
+        }
+
+        // Reverse geocode (coords → address)
+        function reverseGeocode(lat, lon) {
+            // Use backend proxy
+            const backendUrl = window.BACKEND_URL || 'http://localhost:3000';
+            fetch(`${backendUrl}/ola/reverse-geocode?lat=${lat}&lon=${lon}`)
+                .then(r => r.json())
+                .then(data => {
+                    if (data.results && data.results.length > 0) {
+                        selectedPlaceName = data.results[0].formatted_address || '';
+                    } else {
+                        selectedPlaceName = `${lat.toFixed(4)}, ${lon.toFixed(4)}`;
+                    }
+                    updateLocationInfo();
+                })
+                .catch(err => {
+                    console.error('Reverse geocode error:', err);
+                    selectedPlaceName = `${lat.toFixed(4)}, ${lon.toFixed(4)}`;
+                    updateLocationInfo();
+                });
+        }
+
+        // Search for places
+        function searchPlaces(query) {
+            if (!query.trim()) {
+                document.getElementById('searchResults').innerHTML = '';
+                return;
+            }
+
+            document.getElementById('searchResults').innerHTML = '<div class="loading">Searching...</div>';
+
+            const backendUrl = window.BACKEND_URL || 'http://localhost:3000';
+            fetch(`${backendUrl}/ola/places?input=${encodeURIComponent(query)}`)
+                .then(r => r.json())
+                .then(data => {
+                    displaySearchResults(data.predictions || []);
+                })
+                .catch(err => {
+                    console.error('Search error:', err);
+                    document.getElementById('searchResults').innerHTML = '<div class="loading">Search failed</div>';
+                });
+        }
+
+        // Display search results
+        function displaySearchResults(predictions) {
+            const resultsDiv = document.getElementById('searchResults');
+            
+            if (predictions.length === 0) {
+                resultsDiv.innerHTML = '<div class="loading">No results found</div>';
+                return;
+            }
+
+            resultsDiv.innerHTML = predictions.map((place, idx) => `
+                <div class="search-result-item" onclick="selectSearchResult(${idx})">
+                    ${place.display_address || 'Unknown'}
+                </div>
+            `).join('');
+
+            // Store predictions globally for reference
+            window.currentPredictions = predictions;
+        }
+
+        // Select a search result
+        function selectSearchResult(idx) {
+            const place = window.currentPredictions[idx];
+            if (place.geometry && place.geometry.lat && place.geometry.lng) {
+                placeMarker(place.geometry.lat, place.geometry.lng);
+                selectedPlaceName = place.display_address || '';
+                updateLocationInfo();
+                
+                // Clear search
+                document.getElementById('searchInput').value = '';
+                document.getElementById('searchResults').innerHTML = '';
+                document.getElementById('clearBtn').style.display = 'none';
+            }
+        }
+
+        // Update displayed location info
+        function updateLocationInfo() {
+            document.getElementById('placeName').textContent = selectedPlaceName || '-';
+            document.getElementById('coords').textContent = 
+                `Lat: ${selectedLat.toFixed(4)} | Lon: ${selectedLon.toFixed(4)}`;
+        }
+
+        // Confirm location selection
+        function confirmLocation() {
+            if (!selectedPlaceName) {
+                alert('Please select a location');
+                return;
+            }
+
+            // Send result back to React Native
+            window.ReactNativeWebView.postMessage(JSON.stringify({
+                type: 'location_selected',
+                lat: selectedLat,
+                lon: selectedLon,
+                placeName: selectedPlaceName,
+            }));
+        }
+
+        // Cancel selection
+        function cancelSelection() {
+            window.ReactNativeWebView.postMessage(JSON.stringify({
+                type: 'cancelled',
+            }));
+        }
+
+        // Search input handler
+        document.getElementById('searchInput').addEventListener('input', (e) => {
+            const query = e.target.value;
+            
+            if (query.trim()) {
+                document.getElementById('clearBtn').style.display = 'flex';
+            } else {
+                document.getElementById('clearBtn').style.display = 'none';
+            }
+
+            clearTimeout(searchTimeout);
+            searchTimeout = setTimeout(() => {
+                searchPlaces(query);
+            }, 300);
+        });
+
+        // Clear search input
+        document.getElementById('clearBtn').addEventListener('click', () => {
+            document.getElementById('searchInput').value = '';
+            document.getElementById('searchResults').innerHTML = '';
+            document.getElementById('clearBtn').style.display = 'none';
+        });
+
+        // Initialize on page load
+        window.addEventListener('DOMContentLoaded', initMap);
+    </script>
+</body>
+</html>
