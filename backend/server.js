@@ -137,6 +137,27 @@ app.post("/ola/token", async (req, res) => {
   }
 });
 
+// GET /ola/api-key - Get API key for frontend (required for map initialization)
+app.get("/ola/api-key", (req, res) => {
+  try {
+    if (!OLA_API_KEY) {
+      console.error("❌ OLA_API_KEY is not configured");
+      return res.status(500).json({ 
+        success: false, 
+        message: "OLA Maps API key not configured on server" 
+      });
+    }
+    return res.json({ 
+      success: true, 
+      apiKey: OLA_API_KEY,
+      message: "Use this key to initialize Ola Maps" 
+    });
+  } catch (err) {
+    console.error("❌ OLA API key error:", err.message);
+    return res.status(500).json({ success: false, message: "Failed to get API key" });
+  }
+});
+
 // GET /ola/places - Places autocomplete (search for locations)
 app.get("/ola/places", async (req, res) => {
   try {
