@@ -586,7 +586,7 @@ io.use(async (socket, next) => {
       // Re-associate previous session if any (persisted in Worker model)
       if (user && user.phone) {
         try {
-          const existing = await WorkerModel.findOne({ phone: user.phone });
+              const existing = await WorkerModel.findOne({ phone: user.phone });
           if (existing) {
             existing.socketId = socket.id;
             // ✅ IMPORTANT: When worker reconnects, mark them as available
@@ -621,6 +621,10 @@ io.use(async (socket, next) => {
               expectedWage: expectedWage, // ✅ Fetch from User model
               socketId: socket.id,
               isAvailable: existing.isAvailable, // ✅ Now it's true from reconnection
+              // Include gigsData summary to help matching service prioritize
+              consecutiveDays: existing.gigsData?.consecutiveDays || 0,
+              eligibleFor5Days: existing.gigsData?.eligibleFor5Days || false,
+              eligibleFor10Days: existing.gigsData?.eligibleFor10Days || false,
             });
             console.log(`🔁 Re-associated existing worker session for ${user.phone}`);
           }
@@ -720,6 +724,9 @@ io.on("connection", (socket) => {
           expectedWage: expectedWage, // ✅ Fetch from User model
           socketId: socket.id,
           isAvailable: updated.isAvailable || false, // ✅ Use worker's current availability status from toggle endpoint
+          consecutiveDays: updated.gigsData?.consecutiveDays || 0,
+          eligibleFor5Days: updated.gigsData?.eligibleFor5Days || false,
+          eligibleFor10Days: updated.gigsData?.eligibleFor10Days || false,
         });
 
         socket.workerName = name;
@@ -2111,6 +2118,17 @@ app.post("/jobs/decline/:id", authenticateToken, async (req, res) => {
         } catch (e) {
           console.error("❌ Error updating gigs data on cancellation:", e);
         }
+        // Also record a cancelled workday entry for milestone tracking
+        try {
+          const worker = await WorkerModel.findOne({ phone: workerPhone });
+          if (worker && typeof worker.recordWork === 'function') {
+            worker.recordWork(new Date(), 0, true);
+            await worker.save();
+            console.log(`📉 Recorded cancellation for ${workerPhone} in workHistory`);
+          }
+        } catch (recErr) {
+          console.error('Error recording work cancellation on decline:', recErr);
+        }
       }
     } else {
       // Single accept flow
@@ -2136,6 +2154,17 @@ app.post("/jobs/decline/:id", authenticateToken, async (req, res) => {
         } catch (e) {
           console.error("❌ Error updating gigs data on cancellation:", e);
           // Don't fail the request if tracking fails
+        }
+        // Record cancellation for milestone tracking
+        try {
+          const worker = await WorkerModel.findOne({ phone: workerPhone });
+          if (worker && typeof worker.recordWork === 'function') {
+            worker.recordWork(new Date(), 0, true);
+            await worker.save();
+            console.log(`📉 Recorded cancellation for ${workerPhone} in workHistory`);
+          }
+        } catch (recErr) {
+          console.error('Error recording work cancellation on decline (single):', recErr);
         }
       }
     }
@@ -2358,6 +2387,21 @@ app.post("/jobs/pay/:id", authenticateToken, async (req, res) => {
     }
     
     await job.save();
+
+    // ✅ RECORD WORK for milestones: convert minutes -> hours
+    try {
+      if (job.acceptedBy) {
+        const worker = await WorkerModel.findOne({ phone: job.acceptedBy });
+        if (worker && typeof worker.recordWork === 'function') {
+          const hoursWorked = (job.timeSpentMinutes || 0) / 60;
+          worker.recordWork(job.paymentTime || new Date(), hoursWorked, false);
+          await worker.save();
+          console.log(`📈 Recorded work for ${job.acceptedBy}: ${hoursWorked.toFixed(2)} hours`);
+        }
+      }
+    } catch (recErr) {
+      console.error('Error recording worker work on payment:', recErr);
+    }
 
     // ✅ CREATE NOTIFICATION FOR WORKER - PAYMENT SENT (only to the accepted worker)
     try {
@@ -3096,6 +3140,19 @@ app.post('/jobs/cancel/:id', authenticateToken, async (req, res) => {
       metadata: { reason, refundAmount, cancellationFee },
     });
 
+    // If worker cancelled, record cancellation in worker's workHistory for milestone tracking
+    try {
+      if (cancelledBy === 'worker' && job.acceptedBy) {
+        const worker = await WorkerModel.findOne({ phone: job.acceptedBy });
+        if (worker && typeof worker.recordWork === 'function') {
+          worker.recordWork(new Date(), 0, true);
+          await worker.save();
+          console.log(`📉 Recorded cancellation for ${job.acceptedBy} due to job cancel`);
+        }
+      }
+    } catch (recErr) {
+      console.error('Error recording work cancellation on job cancel endpoint:', recErr);
+    }
     console.log(`❌ Job ${jobId} cancelled by ${cancelledBy}. Refunded: ₹${refundAmount}`);
     res.json({ success: true, cancellation, message: 'Job cancelled successfully' });
   } catch (err) {

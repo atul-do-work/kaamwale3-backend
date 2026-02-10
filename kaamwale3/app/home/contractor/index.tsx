@@ -27,6 +27,9 @@ export default function ContractorHome() {
   const [jobs, setJobs] = React.useState<any[]>([]);
   const [activeWorkerCount, setActiveWorkerCount] = React.useState(0);
   const [jobsDoneCount, setJobsDoneCount] = React.useState(0);
+  const [postedCount, setPostedCount] = React.useState(0);
+  const [totalSpending, setTotalSpending] = React.useState(0);
+  const [workersEngaged, setWorkersEngaged] = React.useState(0);
 
   // Initialize socket connection on focus
   useFocusEffect(
@@ -168,8 +171,10 @@ export default function ContractorHome() {
   );
 
   const topCards = [
-    { id: 1, icon: 'people', amount: activeWorkerCount.toString(), label: 'Active Workers' },
-    { id: 2, icon: 'history', amount: jobsDoneCount.toString(), label: 'Jobs Done' },
+    { id: 1, icon: 'work', amount: postedCount.toString(), label: 'Jobs Posted' },
+    { id: 2, icon: 'check-circle', amount: jobsDoneCount.toString(), label: 'Completed' },
+    { id: 3, icon: 'people', amount: workersEngaged.toString(), label: 'Workers' },
+    { id: 4, icon: 'attach-money', amount: `₹${totalSpending}`, label: 'Spending' },
   ];
 
   const bottomCard = { id: 3, icon: 'dashboard', amount: '', label: 'Dashboard' };
@@ -227,14 +232,23 @@ export default function ContractorHome() {
       const data = await res.json();
       setJobs(data);
 
-      // Count active workers (unpaid jobs with accepted workers)
-      const unpaidJobs = data.filter((job: any) => job.paymentStatus !== 'Paid' && job.acceptedBy);
-      const uniqueUnpaidWorkers = new Set(unpaidJobs.map((job: any) => job.acceptedBy));
-      setActiveWorkerCount(uniqueUnpaidWorkers.size);
+      // Filter jobs posted by this contractor
+      const myJobs = data.filter((job: any) => job.contractorName === userName);
+      setPostedCount(myJobs.length);
 
-      // Count jobs done (paid jobs)
-      const paidJobs = data.filter((job: any) => job.paymentStatus === 'Paid');
+      // Count active/unpaid workers for contractor jobs
+      const unpaidJobs = myJobs.filter((job: any) => job.paymentStatus !== 'Paid' && (job.acceptedBy || (job.acceptedWorkers && job.acceptedWorkers.length > 0)));
+      const uniqueUnpaidWorkers = new Set(unpaidJobs.flatMap((job: any) => job.acceptedWorkers && job.acceptedWorkers.length ? job.acceptedWorkers.map((w: any) => w.phone || w) : (job.acceptedBy ? [job.acceptedBy] : [])));
+      setActiveWorkerCount(uniqueUnpaidWorkers.size);
+      setWorkersEngaged(uniqueUnpaidWorkers.size);
+
+      // Count jobs done (paid jobs for this contractor)
+      const paidJobs = myJobs.filter((job: any) => job.paymentStatus === 'Paid');
       setJobsDoneCount(paidJobs.length);
+
+      // Total spending by contractor (sum of amounts for paid jobs)
+      const spending = paidJobs.reduce((sum: number, j: any) => sum + (Number(j.amount) || 0), 0);
+      setTotalSpending(spending);
     } catch (err) {
       console.error('Job fetch error:', err);
     }

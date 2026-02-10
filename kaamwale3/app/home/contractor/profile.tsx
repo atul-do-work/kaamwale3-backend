@@ -504,8 +504,7 @@ export default function ContractorProfile(): React.ReactElement {
         <MaterialIcons name="logout" size={20} color="#fff" />
         <Text style={styles.logoutText}>Logout</Text>
       </TouchableOpacity>
-
-      <View style={styles.spacer} />
     </ScrollView>
+    </SafeAreaView>
   );
 }

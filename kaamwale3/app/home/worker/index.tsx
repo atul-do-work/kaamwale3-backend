@@ -1340,8 +1340,7 @@ function WorkerHome() {
                   onPress={() => setShowSetupWageMenu(!showSetupWageMenu)}
                 >
                   <Text style={{ color: setupModalWage ? '#1a2f4d' : '#999', fontSize: 14 }}>
-                    {setupModalWage === '0-400' ? 'Min to ₹400' :
-                     setupModalWage === '400-550' ? '₹400 to ₹550' :
+                    {setupModalWage === '400-550' ? '₹400 to ₹550' :
                      setupModalWage === '550-700' ? '₹550 to ₹700' :
                      setupModalWage === '700-max' ? '₹700 to Max' :
                      'Select Range'}
@@ -1361,7 +1360,6 @@ function WorkerHome() {
                     maxHeight: 200,
                   }}>
                     {[
-                      { label: 'Min to ₹400', value: '0-400' },
                       { label: '₹400 to ₹550', value: '400-550' },
                       { label: '₹550 to ₹700', value: '550-700' },
                       { label: '₹700 to Max', value: '700-max' }

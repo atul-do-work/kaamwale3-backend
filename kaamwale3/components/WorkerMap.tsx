@@ -8,9 +8,13 @@ import {
 import * as Location from "expo-location";
 import styles from "../styles/WorkerMapStyles";
 
-// ✅ MapTiler Streets Map with API Key
-const MAP_STYLE =
-  "https://api.maptiler.com/maps/streets-v4/style.json?key=rmEy5CtIKMlSfVx4fckr";
+// NOTE:
+// The original MapTiler style is commented out below. We're replacing it
+// with an Ola Maps Vector Tiles style fetched using the backend endpoint
+// `/ola/api-key`. MapLibre can consume a style.json URL from Ola Maps.
+
+// const MAP_STYLE =
+//   "https://api.maptiler.com/maps/streets-v4/style.json?key=rmEy5CtIKMlSfVx4fckr";
 
 type Props = {
   style?: StyleProp<ViewStyle>;
@@ -21,6 +25,7 @@ export default function WorkerMap({ style }: Props) {
     latitude: number;
     longitude: number;
   } | null>(null);
+  const [olaStyleUrl, setOlaStyleUrl] = useState<string | null>(null);
   const pulseAnim = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
@@ -56,14 +61,41 @@ export default function WorkerMap({ style }: Props) {
         longitude: currentLocation.coords.longitude,
       });
     })();
+
+    // Fetch Ola Maps API key from backend and build style URL
+    (async () => {
+      try {
+        // Adjust this base URL if your app uses a different backend origin
+        const backend = (global as any)?.BACKEND_URL || "https://kaamwale3-backend.onrender.com";
+        const resp = await fetch(`${backend}/ola/api-key`);
+        if (!resp.ok) {
+          console.warn('Failed to fetch Ola API key from backend:', resp.status);
+          return;
+        }
+        const data = await resp.json();
+        if (data && data.apiKey) {
+          const apiKey = data.apiKey;
+          const styleUrl = `https://api.olamaps.io/tiles/vector/v1/styles/default-light-standard/style.json?api_key=${apiKey}`;
+          setOlaStyleUrl(styleUrl);
+          console.log('✅ Using Ola Maps style URL');
+        } else {
+          console.warn('Ola API key not present in response', data);
+        }
+      } catch (e) {
+        console.warn('Error fetching Ola API key:', e);
+      }
+    })();
   }, []);
+
+  // Use Ola style if available; otherwise MapLibre will try a fallback
+  const mapStyleToUse = olaStyleUrl || undefined;
 
   return (
     <View style={styles.mapContainer}>
       {location && (
         <MapView
           style={[styles.map, style]}
-          mapStyle={MAP_STYLE}
+          mapStyle={mapStyleToUse}
           logoEnabled={false}
           attributionEnabled={false}
         >

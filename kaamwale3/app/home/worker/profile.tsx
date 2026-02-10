@@ -23,7 +23,6 @@ import ReferralModal from "../../../components/ReferralModal";
 
 const MAIN_SKILLS = ['Labour', 'Mason', 'Engineer', 'ITI/Technician'];
 const WAGE_RANGES = [
-  { label: 'Min to ₹400', value: '0-400' },
   { label: '₹400 to ₹550', value: '400-550' },
   { label: '₹550 to ₹700', value: '550-700' },
   { label: '₹700 to Max', value: '700-max' },
