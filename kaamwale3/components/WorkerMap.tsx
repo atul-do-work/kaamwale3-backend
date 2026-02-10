@@ -7,6 +7,7 @@ import {
 } from '@maplibre/maplibre-react-native';
 import * as Location from "expo-location";
 import styles from "../styles/WorkerMapStyles";
+import { API_BASE } from "../utils/config";
 
 // NOTE:
 // The original MapTiler style is commented out below. We're replacing it
@@ -65,30 +66,76 @@ export default function WorkerMap({ style }: Props) {
     // Fetch Ola Maps API key from backend and build style URL
     (async () => {
       try {
-        // Adjust this base URL if your app uses a different backend origin
-        const backend = (global as any)?.BACKEND_URL || "https://kaamwale3-backend.onrender.com";
-        const resp = await fetch(`${backend}/ola/api-key`);
+        console.log(`🗺️  [WorkerMap] Fetching Ola API key from: ${API_BASE}/ola/api-key`);
+        
+        const resp = await fetch(`${API_BASE}/ola/api-key`);
         if (!resp.ok) {
-          console.warn('Failed to fetch Ola API key from backend:', resp.status);
+          console.error(`❌ [WorkerMap] Failed to fetch Ola API key from backend: HTTP ${resp.status}`);
+          console.log('📍 [WorkerMap] Falling back to fallback style');
           return;
         }
+        
         const data = await resp.json();
+        console.log(`📡 [WorkerMap] Backend response:`, data);
+        
         if (data && data.apiKey) {
           const apiKey = data.apiKey;
+          console.log(`🔑 [WorkerMap] Got API key: ${apiKey.substring(0, 10)}...`);
+          
           const styleUrl = `https://api.olamaps.io/tiles/vector/v1/styles/default-light-standard/style.json?api_key=${apiKey}`;
+          console.log(`🎨 [WorkerMap] Built style URL:`, styleUrl);
+          
           setOlaStyleUrl(styleUrl);
-          console.log('✅ Using Ola Maps style URL');
+          console.log('✅ [WorkerMap] Using Ola Maps style URL');
         } else {
-          console.warn('Ola API key not present in response', data);
+          console.warn('❌ [WorkerMap] Ola API key not present in response', data);
+          console.log('📍 [WorkerMap] Falling back to fallback style');
         }
       } catch (e) {
-        console.warn('Error fetching Ola API key:', e);
+        console.error('❌ [WorkerMap] Error fetching Ola API key:', e);
+        console.log('📍 [WorkerMap] Falling back to fallback style');
       }
     })();
+    
+    // Set a fallback style in case Ola fails (uses a simple OSM-based style)
+    setTimeout(() => {
+      if (!olaStyleUrl) {
+        console.log('⏱️  [WorkerMap] Ola style not loaded after 5s, using cached fallback');
+        // Use a simple MapLibre style that doesn't require external APIs
+        const fallbackStyle = {
+          version: 8,
+          name: "Fallback Style",
+          sources: {
+            "raster-tiles": {
+              type: "raster",
+              url: "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+              tileSize: 256
+            }
+          },
+          layers: [
+            {
+              id: "raster-layer",
+              type: "raster",
+              source: "raster-tiles",
+              minzoom: 0,
+              maxzoom: 18
+            }
+          ]
+        };
+        setOlaStyleUrl(JSON.stringify(fallbackStyle));
+        console.log('✅ [WorkerMap] Using fallback OpenStreetMap raster style');
+      }
+    }, 5000);
   }, []);
 
-  // Use Ola style if available; otherwise MapLibre will try a fallback
-  const mapStyleToUse = olaStyleUrl || undefined;
+  // Use Ola style if available; otherwise fallback will load after 5s
+  // olaStyleUrl can be either a URL string or a JSON style object string
+  const mapStyleToUse = olaStyleUrl ? (
+    // If it's a URL (starts with http), use as-is; if it's JSON, parse it
+    olaStyleUrl.startsWith('{') 
+      ? JSON.parse(olaStyleUrl) 
+      : olaStyleUrl
+  ) : undefined;
 
   return (
     <View style={styles.mapContainer}>

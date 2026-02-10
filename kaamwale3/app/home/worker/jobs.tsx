@@ -305,122 +305,147 @@ export default function Jobs(): React.ReactElement {
         ) : acceptedJobs.length === 0 ? (
           <Text style={styles.noJobsText}>No accepted jobs yet.</Text>
         ) : (
-          acceptedJobs.map((job) => {            return (
-              <View key={job._id} style={{  marginBottom: 14 }}>
-                <LinearGradient
-                  colors={["#1a2f4d", "#2b4972ff"]}
-                  start={{ x: 0, y: 0 }}
-                  end={{ x: 1, y: 1 }}
+          acceptedJobs.map((job) => {
+            return (
+              <View key={job._id} style={{ marginBottom: 16 }}>
+                <View
                   style={{
                     borderRadius: 12,
                     overflow: "hidden",
-                    borderLeftWidth: 5,
-                    borderLeftColor: "#1bcf1bff",
+                    backgroundColor: "#FFF",
+                    shadowColor: "#000",
+                    shadowOffset: { width: 0, height: 2 },
+                    shadowOpacity: 0.1,
+                    shadowRadius: 8,
+                    elevation: 4,
                   }}
                 >
-                  {/* Image Section - 40% */}
-                  <View style={{ height: 140, overflow: "hidden" }}>
+                  {/* Top Image */}
+                  <View style={{ height: 180, overflow: "hidden", backgroundColor: "#EEE" }}>
                     <Image
                       source={job.imageUrl ? { uri: job.imageUrl } : require("../../../assets/oip2.jpg")}
                       style={{ width: "100%", height: "100%", resizeMode: "cover" }}
                     />
-                    {/* Contractor Name Overlay */}
-                    <View style={{ 
-                      position: "absolute", 
-                      bottom: 0, 
-                      left: 0, 
-                      right: 0, 
-                      backgroundColor: "rgba(0, 0, 0, 0.6)", 
-                      padding: 8 
-                    }}>
-                      <Text style={{ color: "#FFF", fontSize: 11, fontWeight: "700" }}>
-                        👤 {job.contractorName}
-                      </Text>
-                    </View>
                   </View>
 
-                  {/* Data Section */}
-                  <View style={{ paddingHorizontal: 14, paddingVertical: 12 }}>
-                    {/* Title & Amount */}
-                    <View style={{ marginBottom: 10 }}>
-                      <Text style={{ color: "#FFF", fontSize: 16, fontWeight: "700", marginBottom: 4 }}>
-                        {job.title}
-                      </Text>
-                      <Text style={{ color: "#FFD700", fontSize: 18, fontWeight: "900" }}>
-                        ₹{job.amount}
-                      </Text>
-                    </View>
+                  {/* Content Section */}
+                  <View style={{ paddingHorizontal: 16, paddingVertical: 14 }}>
+                    {/* Contractor Name - Prominent */}
+                    <Text style={{ color: "#333", fontSize: 16, fontWeight: "700", marginBottom: 4 }}>
+                      👤 {job.contractorName}
+                    </Text>
 
-                    {/* Description */}
+                    {/* Main Skill / Description */}
                     {job.description && (
-                      <Text style={{ color: "#CCC", fontSize: 13, marginBottom: 10, lineHeight: 16 }}>
+                      <Text style={{ color: "#666", fontSize: 13, marginBottom: 10 }}>
                         {job.description}
                       </Text>
                     )}
 
-                    {/* 2-Column Grid */}
-                    <View style={{ flexDirection: "row", justifyContent: "space-between", marginBottom: 10 }}>
-                      {/* Left Column */}
-                      <View style={{ flex: 1, marginRight: 8 }}>
-                        {/* Time */}
-                        {(job.startTime || job.endTime) && (
-                          <View style={{ flexDirection: "row", alignItems: "center", marginBottom: 8 }}>
-                            <MaterialIcons name="schedule" size={16} color="#FFA500" />
-                            <Text style={{ color: "#FFD700", fontSize: 12, fontWeight: "600", marginLeft: 6, flex: 1 }}>
-                              {job.startTime || "N/A"} - {job.endTime || "N/A"}
-                            </Text>
-                          </View>
-                        )}
+                    {/* Expected Wages */}
+                    <Text style={{ color: "#2ecc71", fontSize: 18, fontWeight: "900", marginBottom: 12 }}>
+                      ₹{job.amount}
+                    </Text>
 
-                        {/* Location */}
-                        <TouchableOpacity
-                          style={{ flexDirection: "row", alignItems: "flex-start" }}
-                          onPress={() => {
-                            setSelectedJobForMap(job);
-                            setMapModalVisible(true);
-                          }}
-                        >
-                          <MaterialIcons name="location-on" size={16} color="#FF6B6B" style={{ marginTop: 2 }} />
-                          <Text style={{ color: "#ffffffff", fontSize: 12, marginLeft: 6, flex: 1 }}>
-                            {job.location}
+                    {/* Date & Time Row */}
+                    <View style={{ flexDirection: "row", marginBottom: 10 }}>
+                      {/* Date */}
+                      <View style={{ flexDirection: "row", alignItems: "center", flex: 1 }}>
+                        <MaterialIcons name="event" size={14} color="#999" />
+                        <Text style={{ color: "#666", fontSize: 12, marginLeft: 6 }}>
+                          {job.timestamp ? new Date(job.timestamp).toLocaleDateString() : "N/A"}
+                        </Text>
+                      </View>
+
+                      {/* Time */}
+                      {(job.startTime || job.endTime) && (
+                        <View style={{ flexDirection: "row", alignItems: "center", flex: 1, marginLeft: 10 }}>
+                          <MaterialIcons name="schedule" size={14} color="#999" />
+                          <Text style={{ color: "#666", fontSize: 12, marginLeft: 6 }}>
+                            {job.startTime || "N/A"} - {job.endTime || "N/A"}
                           </Text>
-                        </TouchableOpacity>
-                      </View>
-
-                      {/* Right Column */}
-                      <View style={{ flex: 1, marginLeft: 8 }}>
-                        {/* Payment Status */}
-                        {job.paymentStatus === "Paid" && (
-                          <View style={{ flexDirection: "row", alignItems: "center", marginBottom: 8 }}>
-                            <MaterialIcons name="verified" size={16} color="#2ecc71" />
-                            <Text style={{ color: "#2ecc71", fontSize: 12, fontWeight: "600", marginLeft: 6 }}>
-                              Paid
-                            </Text>
-                          </View>
-                        )}
-
-                        {/* Rating */}
-                        {job.rating?.stars && (
-                          <View style={{ flexDirection: "row", alignItems: "center" }}>
-                            <MaterialIcons name="star" size={16} color="#FFD700" />
-                            <Text style={{ color: "#FFD700", fontWeight: "700", marginLeft: 6, fontSize: 12 }}>
-                              {job.rating.stars}/5
-                            </Text>
-                          </View>
-                        )}
-                      </View>
+                        </View>
+                      )}
                     </View>
 
-                    {/* Feedback */}
+                    {/* Location */}
+                    <TouchableOpacity
+                      style={{ flexDirection: "row", alignItems: "flex-start", marginBottom: 12 }}
+                      onPress={() => {
+                        setSelectedJobForMap(job);
+                        setMapModalVisible(true);
+                      }}
+                    >
+                      <MaterialIcons name="location-on" size={14} color="#FF6B6B" style={{ marginTop: 1 }} />
+                      <Text style={{ color: "#666", fontSize: 12, marginLeft: 6, flex: 1 }}>
+                        {job.location}
+                      </Text>
+                    </TouchableOpacity>
+
+                    {/* Bottom Row: [Paid] Badge & Rating */}
+                    <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
+                      {/* Paid Badge */}
+                      {job.paymentStatus === "Paid" ? (
+                        <View style={{ 
+                          flexDirection: "row", 
+                          alignItems: "center",
+                          backgroundColor: "#E8F5E9",
+                          paddingHorizontal: 10,
+                          paddingVertical: 6,
+                          borderRadius: 20,
+                        }}>
+                          <MaterialIcons name="check-circle" size={14} color="#2ecc71" />
+                          <Text style={{ color: "#2ecc71", fontSize: 12, fontWeight: "600", marginLeft: 6 }}>
+                            Paid
+                          </Text>
+                        </View>
+                      ) : (
+                        <View style={{ 
+                          flexDirection: "row", 
+                          alignItems: "center",
+                          backgroundColor: "#FFF3E0",
+                          paddingHorizontal: 10,
+                          paddingVertical: 6,
+                          borderRadius: 20,
+                        }}>
+                          <MaterialIcons name="schedule" size={14} color="#FF9800" />
+                          <Text style={{ color: "#FF9800", fontSize: 12, fontWeight: "600", marginLeft: 6 }}>
+                            Pending
+                          </Text>
+                        </View>
+                      )}
+
+                      {/* Rating */}
+                      {job.rating?.stars ? (
+                        <View style={{ flexDirection: "row", alignItems: "center" }}>
+                          <MaterialIcons name="star" size={16} color="#FFD700" />
+                          <Text style={{ color: "#333", fontSize: 13, fontWeight: "700", marginLeft: 6 }}>
+                            {job.rating.stars}/5
+                          </Text>
+                        </View>
+                      ) : (
+                        <Text style={{ color: "#999", fontSize: 12 }}>No rating yet</Text>
+                      )}
+                    </View>
+
+                    {/* Feedback (if available) */}
                     {job.rating?.feedback && (
-                      <View style={{ backgroundColor: "rgba(255, 215, 0, 0.1)", borderLeftWidth: 3, borderLeftColor: "#FFD700", paddingHorizontal: 10, paddingVertical: 8, borderRadius: 4 }}>
-                        <Text style={{ color: "#AAA", fontSize: 11, fontStyle: "italic", lineHeight: 14 }}>
-                          💬 {job.rating.feedback}
+                      <View style={{ 
+                        backgroundColor: "#F5F5F5", 
+                        borderLeftWidth: 3, 
+                        borderLeftColor: "#FFD700", 
+                        paddingHorizontal: 10, 
+                        paddingVertical: 8, 
+                        borderRadius: 4,
+                        marginTop: 10
+                      }}>
+                        <Text style={{ color: "#666", fontSize: 12, fontStyle: "italic", lineHeight: 14 }}>
+                          💬 "{job.rating.feedback}"
                         </Text>
                       </View>
                     )}
                   </View>
-                </LinearGradient>
+                </View>
               </View>
             );
           })

@@ -1,7 +1,7 @@
 {
   "expo": {
-    "name": "DoWork",
-    "slug": "do-workkumar",
+    "name": "indianworker",
+    "slug": "indianworker",
     "version": "1.0.0",
     "orientation": "portrait",
     "scheme": "kaamwale3",
@@ -50,10 +50,10 @@
 
     "extra": {
       "eas": {
-        "projectId": "0f4d40d8-f843-45be-a3da-f26430d07160"
+        "projectId": "dff2151c-5fd2-47f4-a8c3-3ffd925d8e99"
       }
     },
 
-    "owner": "atulkumar098765"
+    "owner": "indianworker38s-organization"
   }
 }
