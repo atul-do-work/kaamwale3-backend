@@ -305,25 +305,23 @@ app.get("/ola/tiles/:z/:x/:y.pbf", async (req, res) => {
   }
 });
 
-// ✅ PROXY: Sprites - correctly handle sprite.png, sprite@2x.png, sprite.json, sprite@2x.json
-app.get('/ola/sprite:scale(.json|.png)', async (req, res) => {
+// ✅ PROXY: Sprites - accept all MapLibre sprite requests (/ola/sprite, /ola/sprite.png, /ola/sprite@2x.png, /ola/sprite.json, /ola/sprite@2x.json)
+app.get('/ola/sprite*', async (req, res) => {
   try {
-    const scale = req.params.scale || '';
-    // scale will be: ".png", "@2x.png", ".json", or "@2x.json"
-    
-    const target = `https://api.olamaps.io/tiles/vector/v1/sprites/default-light-standard/sprite${scale}?api_key=${OLA_API_KEY}`;
-    console.log(`🎨 [Sprite] → ${scale || 'default'}`);
-    
+    // Determine the requested suffix (e.g. '', '.png', '@2x.png', '.json', '@2x.json')
+    const suffix = req.path.replace('/ola/sprite', '') || '';
+    // Build target URL expected by Ola
+    const target = `https://api.olamaps.io/tiles/vector/v1/sprites/default-light-standard/sprite${suffix}?api_key=${OLA_API_KEY}`;
+    console.log(`🎨 [Sprite] Proxying request for sprite${suffix || ''}`);
+
     const olaRes = await fetch(target);
     if (!olaRes.ok) {
-      console.warn(`⚠️ [Sprite] HTTP ${olaRes.status} from Ola`);
+      console.warn(`⚠️ [Sprite] HTTP ${olaRes.status} from Ola for ${target.split('?')[0]}`);
       return res.sendStatus(olaRes.status);
     }
 
-    res.setHeader(
-      "Content-Type",
-      scale.endsWith('.png') ? "image/png" : "application/json"
-    );
+    const isPng = suffix.endsWith('.png');
+    res.setHeader("Content-Type", isPng ? "image/png" : "application/json");
     res.setHeader("Cache-Control", "public, max-age=86400");
     olaRes.body.pipe(res);
   } catch (err) {
