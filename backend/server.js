@@ -327,6 +327,16 @@ const proxySprite = async (scaleSuffix, res) => {
   }
 };
 
+// DEBUG: Log incoming requests to /ola for easier diagnosis (prints originalUrl and path)
+app.use('/ola', (req, res, next) => {
+  try {
+    console.log(`🔔 [OLA] Incoming request: ${req.method} ${req.originalUrl} (path: ${req.path})`);
+  } catch (e) {
+    // ignore logging errors
+  }
+  next();
+});
+
 app.get('/ola/sprite.png', async (req, res) => proxySprite('.png', res));
 app.get('/ola/sprite@2x.png', async (req, res) => proxySprite('@2x.png', res));
 app.get('/ola/sprite.json', async (req, res) => proxySprite('.json', res));
@@ -334,6 +344,26 @@ app.get('/ola/sprite@2x.json', async (req, res) => proxySprite('@2x.json', res))
 
 // Fallback: if the base path is requested without extension, return the JSON index
 app.get('/ola/sprite', async (req, res) => proxySprite('.json', res));
+
+// Diagnostic: list expected /ola routes (useful to verify which routes are active)
+app.get('/ola/_routes', (req, res) => {
+  return res.json({
+    routes: [
+      '/ola/style.json',
+      '/ola/tiles/{z}/{x}/{y}.pbf',
+      '/ola/sprite',
+      '/ola/sprite.png',
+      '/ola/sprite@2x.png',
+      '/ola/sprite.json',
+      '/ola/sprite@2x.json',
+      '/ola/fonts/{fontstack}/{range}',
+      '/ola/api-key',
+      '/ola/places',
+      '/ola/geocode',
+      '/ola/reverse-geocode'
+    ]
+  });
+});
 
 // ✅ PROXY: Glyphs (Font files) - handle /ola/fonts/{fontstack}/{range}
 app.get("/ola/fonts/:fontstack/:range", async (req, res) => {
