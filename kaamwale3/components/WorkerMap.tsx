@@ -26,7 +26,11 @@ export default function WorkerMap({ style }: Props) {
     latitude: number;
     longitude: number;
   } | null>(null);
-  const [olaStyleUrl, setOlaStyleUrl] = useState<string | null>(null);
+  // store parsed style object (or URL string) directly to avoid JSON parse/string edge cases
+  const [mapStyle, setMapStyle] = useState<any>(null);
+  const fallbackTimerRef = useRef<any>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
+  const mountedRef = useRef<boolean>(true);
   const pulseAnim = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
@@ -63,79 +67,84 @@ export default function WorkerMap({ style }: Props) {
       });
     })();
 
-    // Fetch Ola Maps API key from backend and build style URL
+    // Fetch Ola Maps style from backend proxy (which handles API key authentication)
     (async () => {
       try {
-        console.log(`🗺️  [WorkerMap] Fetching Ola API key from: ${API_BASE}/ola/api-key`);
-        
-        const resp = await fetch(`${API_BASE}/ola/api-key`);
+        console.log(`🗺️  [WorkerMap] Fetching proxied Ola style from: ${API_BASE}/ola/style.json`);
+        abortControllerRef.current = new AbortController();
+        const resp = await fetch(`${API_BASE}/ola/style.json`, { signal: abortControllerRef.current.signal });
         if (!resp.ok) {
-          console.error(`❌ [WorkerMap] Failed to fetch Ola API key from backend: HTTP ${resp.status}`);
-          console.log('📍 [WorkerMap] Falling back to fallback style');
+          console.error(`❌ [WorkerMap] Failed to fetch proxied Ola style: HTTP ${resp.status}`);
           return;
         }
-        
-        const data = await resp.json();
-        console.log(`📡 [WorkerMap] Backend response:`, data);
-        
-        if (data && data.apiKey) {
-          const apiKey = data.apiKey;
-          console.log(`🔑 [WorkerMap] Got API key: ${apiKey.substring(0, 10)}...`);
-          
-          const styleUrl = `https://api.olamaps.io/tiles/vector/v1/styles/default-light-standard/style.json?api_key=${apiKey}`;
-          console.log(`🎨 [WorkerMap] Built style URL:`, styleUrl);
-          
-          setOlaStyleUrl(styleUrl);
-          console.log('✅ [WorkerMap] Using Ola Maps style URL');
-        } else {
-          console.warn('❌ [WorkerMap] Ola API key not present in response', data);
-          console.log('📍 [WorkerMap] Falling back to fallback style');
+
+        const style = await resp.json();
+        console.log(`📡 [WorkerMap] Received proxied Ola style successfully`);
+        console.log(`🎨 [WorkerMap] Tile sources rewritten to go through backend proxy`);
+
+        // store the parsed style object directly
+        if (mountedRef.current) {
+          setMapStyle(style);
+          // clear fallback timer if style arrives before fallback
+          if (fallbackTimerRef.current) {
+            clearTimeout(fallbackTimerRef.current);
+            fallbackTimerRef.current = null;
+          }
         }
-      } catch (e) {
-        console.error('❌ [WorkerMap] Error fetching Ola API key:', e);
-        console.log('📍 [WorkerMap] Falling back to fallback style');
+      } catch (e: any) {
+        if (e.name === 'AbortError') {
+          console.log('❌ [WorkerMap] Style fetch aborted');
+        } else {
+          console.error('❌ [WorkerMap] Error fetching proxied Ola style:', e);
+        }
       }
     })();
     
-    // Set a fallback style in case Ola fails (uses a simple OSM-based style)
-    setTimeout(() => {
-      if (!olaStyleUrl) {
-        console.log('⏱️  [WorkerMap] Ola style not loaded after 5s, using cached fallback');
-        // Use a simple MapLibre style that doesn't require external APIs
+    // Set a fallback style in case Ola fails (uses simple OSM raster tiles)
+    fallbackTimerRef.current = setTimeout(() => {
+      // only set fallback if no style is set yet
+      if (!mapStyle) {
+        console.log('⏱️  [WorkerMap] Ola style not loaded after 5s, using OSM fallback');
         const fallbackStyle = {
           version: 8,
-          name: "Fallback Style",
+          name: "OpenStreetMap Fallback",
           sources: {
-            "raster-tiles": {
+            osm: {
               type: "raster",
-              url: "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+              tiles: [
+                "https://tile.openstreetmap.org/{z}/{x}/{y}.png"
+              ],
               tileSize: 256
             }
           },
           layers: [
             {
-              id: "raster-layer",
+              id: "osm",
               type: "raster",
-              source: "raster-tiles",
-              minzoom: 0,
-              maxzoom: 18
+              source: "osm"
             }
           ]
         };
-        setOlaStyleUrl(JSON.stringify(fallbackStyle));
-        console.log('✅ [WorkerMap] Using fallback OpenStreetMap raster style');
+        if (mountedRef.current) setMapStyle(fallbackStyle);
+        console.log('✅ [WorkerMap] Using OSM raster fallback style');
       }
     }, 5000);
+
+    return () => {
+      // cleanup: abort fetch and clear fallback timer
+      mountedRef.current = false;
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
+      }
+      if (fallbackTimerRef.current) {
+        clearTimeout(fallbackTimerRef.current);
+        fallbackTimerRef.current = null;
+      }
+    };
   }, []);
 
-  // Use Ola style if available; otherwise fallback will load after 5s
-  // olaStyleUrl can be either a URL string or a JSON style object string
-  const mapStyleToUse = olaStyleUrl ? (
-    // If it's a URL (starts with http), use as-is; if it's JSON, parse it
-    olaStyleUrl.startsWith('{') 
-      ? JSON.parse(olaStyleUrl) 
-      : olaStyleUrl
-  ) : undefined;
+  // mapStyle is stored directly as an object (or URL string) to avoid parse/string edge cases
+  const mapStyleToUse = mapStyle || undefined;
 
   return (
     <View style={styles.mapContainer}>

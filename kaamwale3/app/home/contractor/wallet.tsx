@@ -87,6 +87,7 @@ export default function ContractorWalletAttendance() {
   // ✅ Bank account states
   const [bankAccount, setBankAccount] = useState<any>(null);
   const [showAddBank, setShowAddBank] = useState(false);
+  const [showBankInfo, setShowBankInfo] = useState(true);
   const [bankDetails, setBankDetails] = useState({
     accountHolderName: "",
     accountNumber: "",
@@ -606,6 +607,7 @@ export default function ContractorWalletAttendance() {
           accountType: "savings"
         });
         setShowAddBank(false);
+        setShowBankInfo(true);
         // Show success message with custom modal instead of Alert
         Alert.alert(
           "✅ Success",
@@ -1300,11 +1302,11 @@ export default function ContractorWalletAttendance() {
       </Modal>
 
       {/* ✅ Bank Account Info Display */}
-      {bankAccount && (
+      {bankAccount && showBankInfo && (
         <View style={{ padding: 16, backgroundColor: "#f0f8ff", marginTop: 16, marginHorizontal: 16, borderRadius: 8, borderLeftWidth: 4, borderLeftColor: "#1a2f4d" }}>
           <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
             <Text style={{ fontSize: 14, fontWeight: "600", color: "#333" }}>💳 Linked Bank Account</Text>
-            <TouchableOpacity onPress={() => { /* dismiss bank info area (no-op) */ }}>
+            <TouchableOpacity onPress={() => setShowBankInfo(false)}>
               <MaterialIcons name="close" size={20} color="#333" />
             </TouchableOpacity>
           </View>

@@ -294,6 +294,13 @@ export default function ContractorHome() {
     }
   };
 
+  const getGreeting = () => {
+    const hour = new Date().getHours();
+    if (hour < 12) return "Good Morning";
+    if (hour < 17) return "Good Afternoon";
+    return "Good Evening";
+  };
+
   return (
     <SafeAreaView style={styles.container}>
       {/* Header with Gradient */}
@@ -306,7 +313,7 @@ export default function ContractorHome() {
         <View style={styles.headerContent}>
           <View>
             <Text style={styles.dashboardText}>Dashboard</Text>
-            <Text style={styles.greetingText}>Good Morning, {userName}</Text>
+            <Text style={styles.greetingText}>{getGreeting()}, {userName}</Text>
           </View>
           <TouchableOpacity 
             style={styles.bellContainer}
@@ -317,9 +324,9 @@ export default function ContractorHome() {
         </View>
       </LinearGradient>
 
-      {/* Top cards */}
+      {/* Top cards (show only Jobs Posted + Completed on home screen) */}
       <View style={styles.topRow}>
-        {topCards.map((card) => (
+        {topCards.slice(0, 2).map((card) => (
           <TouchableOpacity key={card.id} style={styles.card}>
             <LinearGradient 
               colors={card.id === 1 ? ['#1f3a5f', '#1f3a5f'] : ['#1f3a5f', '#1f3a5f']} 

@@ -240,9 +240,17 @@ export default function PostJobScreen() {
     if (walletBalance < 25)
       return Alert.alert("Insufficient Balance", "Minimum balance ₹25 required to post a job");
 
-    // Format times as HH:MM
-    const startTimeStr = startTime.getHours().toString().padStart(2, '0') + ':' + startTime.getMinutes().toString().padStart(2, '0');
-    const endTimeStr = endTime.getHours().toString().padStart(2, '0') + ':' + endTime.getMinutes().toString().padStart(2, '0');
+    // Helper function to format time in 12-hour format with AM/PM
+    const formatTime12Hour = (date: Date): string => {
+      let hours = date.getHours() % 12 || 12;
+      const mins = date.getMinutes().toString().padStart(2, '0');
+      const ampm = date.getHours() >= 12 ? 'PM' : 'AM';
+      return `${hours}:${mins} ${ampm}`;
+    };
+
+    // Format times as HH:MM AM/PM
+    const startTimeStr = formatTime12Hour(startTime);
+    const endTimeStr = formatTime12Hour(endTime);
 
     try {
       // STEP 1: Upload image if provided (optional)

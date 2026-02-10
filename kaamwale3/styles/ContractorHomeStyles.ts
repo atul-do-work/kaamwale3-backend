@@ -76,12 +76,13 @@ export default StyleSheet.create({
   topRow: { 
     flexDirection: 'row', 
     justifyContent: 'space-between', 
-    paddingHorizontal: 16, 
-    marginBottom: 22,
+    paddingHorizontal: 16,
+    marginBottom: 18,
     marginTop: 18,
   },
   card: { 
-    width: (width - 48) / 2, 
+    // Calculate width to leave consistent side padding (16px) and a 12px gap between cards
+    width: (width - 32 - 12) / 2,
     borderRadius: 24, 
     overflow: 'hidden',
     elevation: 8,
@@ -89,6 +90,7 @@ export default StyleSheet.create({
     shadowOpacity: 0.16,
     shadowOffset: { width: 0, height: 6 },
     shadowRadius: 12,
+    marginBottom: 12,
   },
   fullWidthCard: { 
     width: width - 32, 
