@@ -7,15 +7,11 @@ import {
 } from '@maplibre/maplibre-react-native';
 import * as Location from "expo-location";
 import styles from "../styles/WorkerMapStyles";
-import { API_BASE } from "../utils/config";
 
-// NOTE:
-// The original MapTiler style is commented out below. We're replacing it
-// with an Ola Maps Vector Tiles style fetched using the backend endpoint
-// `/ola/api-key`. MapLibre can consume a style.json URL from Ola Maps.
-
-// const MAP_STYLE =
-//   "https://api.maptiler.com/maps/streets-v4/style.json?key=rmEy5CtIKMlSfVx4fckr";
+// MapTiler style - using free/demo key
+// For production, set MAPTILER_API_KEY environment variable
+const MAPTILER_API_KEY = "rmEy5CtIKMlSfVx4fckr"; // Free demo key
+const MAP_STYLE_URL = `https://api.maptiler.com/maps/streets-v4/style.json?key=${MAPTILER_API_KEY}`;
 
 type Props = {
   style?: StyleProp<ViewStyle>;
@@ -67,20 +63,19 @@ export default function WorkerMap({ style }: Props) {
       });
     })();
 
-    // Fetch Ola Maps style from backend proxy (which handles API key authentication)
+    // Fetch MapTiler style directly (no backend proxy needed)
     (async () => {
       try {
-        console.log(`🗺️  [WorkerMap] Fetching proxied Ola style from: ${API_BASE}/ola/style.json`);
+        console.log(`🗺️  [WorkerMap] Fetching MapTiler style from: ${MAP_STYLE_URL}`);
         abortControllerRef.current = new AbortController();
-        const resp = await fetch(`${API_BASE}/ola/style.json`, { signal: abortControllerRef.current.signal });
+        const resp = await fetch(MAP_STYLE_URL, { signal: abortControllerRef.current.signal });
         if (!resp.ok) {
-          console.error(`❌ [WorkerMap] Failed to fetch proxied Ola style: HTTP ${resp.status}`);
+          console.error(`❌ [WorkerMap] Failed to fetch MapTiler style: HTTP ${resp.status}`);
           return;
         }
 
         const style = await resp.json();
-        console.log(`📡 [WorkerMap] Received proxied Ola style successfully`);
-        console.log(`🎨 [WorkerMap] Tile sources rewritten to go through backend proxy`);
+        console.log(`📡 [WorkerMap] Received MapTiler style successfully`);
 
         // store the parsed style object directly
         if (mountedRef.current) {
@@ -95,16 +90,16 @@ export default function WorkerMap({ style }: Props) {
         if (e.name === 'AbortError') {
           console.log('❌ [WorkerMap] Style fetch aborted');
         } else {
-          console.error('❌ [WorkerMap] Error fetching proxied Ola style:', e);
+          console.error('❌ [WorkerMap] Error fetching MapTiler style:', e);
         }
       }
     })();
     
-    // Set a fallback style in case Ola fails (uses simple OSM raster tiles)
+    // Set a fallback style in case MapTiler fails (uses simple OSM raster tiles)
     fallbackTimerRef.current = setTimeout(() => {
       // only set fallback if no style is set yet
       if (!mapStyle) {
-        console.log('⏱️  [WorkerMap] Ola style not loaded after 5s, using OSM fallback');
+        console.log('⏱️  [WorkerMap] MapTiler style not loaded after 5s, using OSM fallback');
         const fallbackStyle = {
           version: 8,
           name: "OpenStreetMap Fallback",
