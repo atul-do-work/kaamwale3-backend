@@ -305,13 +305,11 @@ app.get("/ola/tiles/:z/:x/:y.pbf", async (req, res) => {
   }
 });
 
-// ✅ PROXY: Sprites - accept all MapLibre sprite requests (/ola/sprite, /ola/sprite.png, /ola/sprite@2x.png, /ola/sprite.json, /ola/sprite@2x.json)
-app.get('/ola/sprite:scale(.json|.png)', async (req, res) => {
+// ✅ PROXY: Sprites - explicit routes for MapLibre variants to avoid path-to-regexp issues
+const proxySprite = async (scaleSuffix, res) => {
   try {
-    // req.params.scale will be one of: '.png', '@2x.png', '.json', '@2x.json' or undefined
-    const scale = req.params.scale || '';
-    const target = `https://api.olamaps.io/tiles/vector/v1/sprites/default-light-standard/sprite${scale}?api_key=${OLA_API_KEY}`;
-    console.log(`🎨 [Sprite] Proxying request for sprite${scale || ''}`);
+    const target = `https://api.olamaps.io/tiles/vector/v1/sprites/default-light-standard/sprite${scaleSuffix}?api_key=${OLA_API_KEY}`;
+    console.log(`🎨 [Sprite] Proxying request for sprite${scaleSuffix}`);
 
     const olaRes = await fetch(target);
     if (!olaRes.ok) {
@@ -319,7 +317,7 @@ app.get('/ola/sprite:scale(.json|.png)', async (req, res) => {
       return res.sendStatus(olaRes.status);
     }
 
-    const isPng = scale.endsWith('.png');
+    const isPng = scaleSuffix.endsWith('.png');
     res.setHeader("Content-Type", isPng ? "image/png" : "application/json");
     res.setHeader("Cache-Control", "public, max-age=86400");
     olaRes.body.pipe(res);
@@ -327,7 +325,15 @@ app.get('/ola/sprite:scale(.json|.png)', async (req, res) => {
     console.error("❌ [Sprite] Proxy error:", err.message);
     res.status(500).send("Sprite fetch failed");
   }
-});
+};
+
+app.get('/ola/sprite.png', async (req, res) => proxySprite('.png', res));
+app.get('/ola/sprite@2x.png', async (req, res) => proxySprite('@2x.png', res));
+app.get('/ola/sprite.json', async (req, res) => proxySprite('.json', res));
+app.get('/ola/sprite@2x.json', async (req, res) => proxySprite('@2x.json', res));
+
+// Fallback: if the base path is requested without extension, return the JSON index
+app.get('/ola/sprite', async (req, res) => proxySprite('.json', res));
 
 // ✅ PROXY: Glyphs (Font files) - handle /ola/fonts/{fontstack}/{range}
 app.get("/ola/fonts/:fontstack/:range", async (req, res) => {
