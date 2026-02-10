@@ -337,13 +337,32 @@ app.use('/ola', (req, res, next) => {
   next();
 });
 
-app.get('/ola/sprite.png', async (req, res) => proxySprite('.png', res));
-app.get('/ola/sprite@2x.png', async (req, res) => proxySprite('@2x.png', res));
-app.get('/ola/sprite.json', async (req, res) => proxySprite('.json', res));
-app.get('/ola/sprite@2x.json', async (req, res) => proxySprite('@2x.json', res));
+// ✅ ROBUST: Handle all sprite variants with array of paths
+const spriteVariants = [
+  '/ola/sprite.png',
+  '/ola/sprite@2x.png',
+  '/ola/sprite.json',
+  '/ola/sprite@2x.json',
+  '/ola/sprite'
+];
 
-// Fallback: if the base path is requested without extension, return the JSON index
-app.get('/ola/sprite', async (req, res) => proxySprite('.json', res));
+app.get(spriteVariants, async (req, res) => {
+  try {
+    const url = req.originalUrl;
+    let scale = '.json';
+    
+    if (url.includes('@2x.png')) scale = '@2x.png';
+    else if (url.includes('.png')) scale = '.png';
+    else if (url.includes('@2x.json')) scale = '@2x.json';
+    else if (url.includes('.json')) scale = '.json';
+    
+    console.log(`🎨 [Sprite] Route matched for ${url} → fetching sprite${scale}`);
+    await proxySprite(scale, res);
+  } catch (err) {
+    console.error("❌ [Sprite] Handler error:", err.message);
+    res.status(500).send("Sprite fetch failed");
+  }
+});
 
 // Diagnostic: list expected /ola routes (useful to verify which routes are active)
 app.get('/ola/_routes', (req, res) => {
