@@ -222,6 +222,8 @@ app.get("/ola/reverse-geocode", async (req, res) => {
 app.get("/ola/style.json", async (req, res) => {
   try {
     const styleUrl = `https://api.olamaps.io/tiles/vector/v1/styles/default-light-standard/style.json?api_key=${OLA_API_KEY}`;
+    console.log(`📥 Fetching Ola style from: ${styleUrl.split('?')[0]}`);
+    
     const styleRes = await fetch(styleUrl);
     
     if (!styleRes.ok) {
@@ -230,37 +232,49 @@ app.get("/ola/style.json", async (req, res) => {
     }
 
     const style = await styleRes.json();
+    console.log(`✅ Received Ola style, sources count: ${style.sources ? Object.keys(style.sources).length : 0}`);
     
     // Get base URL for proxying (use SERVER_URL_DOMAIN if set, otherwise construct from request)
     const baseUrl = process.env.SERVER_URL_DOMAIN || `${req.protocol}://${req.headers.host}`;
+    console.log(`🔗 Using base URL for proxy rewrite: ${baseUrl}`);
     
-    // Rewrite tile URLs to go through backend proxy
+    // Rewrite ALL vector tile sources to go through backend proxy (CRITICAL FIX)
+    // This handles sources that use 'url' and sources that use 'tiles'
     if (style.sources) {
-      Object.keys(style.sources).forEach((sourceName) => {
-        const source = style.sources[sourceName];
-        if (source.type === 'vector' && Array.isArray(source.tiles)) {
-          source.tiles = source.tiles.map(() => `${baseUrl}/ola/tiles/{z}/{x}/{y}.pbf`);
-          console.log(`✅ Rewritten vector source "${sourceName}" to use backend proxy`);
-        } else if (source.type === 'raster' && Array.isArray(source.tiles)) {
-          source.tiles = source.tiles.map(() => `${baseUrl}/ola/raster/{z}/{x}/{y}.png`);
+      Object.entries(style.sources).forEach(([key, source]) => {
+        if (source.type === 'vector') {
+          // Remove original URLs (whether they came from 'url' or 'tiles')
+          delete source.url;
+          
+          // Force all vector sources to use proxy
+          source.tiles = [
+            `${baseUrl}/ola/tiles/{z}/{x}/{y}.pbf`
+          ];
+          
+          console.log(`🧱 Vector source rewritten: ${key}`);
         }
       });
+      console.log(`📍 Total sources processed: ${Object.keys(style.sources).length}`);
+    } else {
+      console.warn(`⚠️ No sources found in style.json`);
     }
     
     // Rewrite sprite URL
     if (style.sprite) {
+      const originalSprite = style.sprite;
       style.sprite = `${baseUrl}/ola/sprite`;
-      console.log(`✅ Rewritten sprite to use backend proxy`);
+      console.log(`✅ Rewritten sprite: ${originalSprite} → ${style.sprite}`);
     }
     
     // Rewrite glyphs URL
     if (style.glyphs) {
-      style.glyphs = `${baseUrl}/ola/fonts/{fontstack}/{range}.pbf`;
-      console.log(`✅ Rewritten glyphs to use backend proxy`);
+      const originalGlyphs = style.glyphs;
+      style.glyphs = `${baseUrl}/ola/fonts/{fontstack}/{range}`;
+      console.log(`✅ Rewritten glyphs: ${originalGlyphs} → ${style.glyphs}`);
     }
     
     res.json(style);
-    console.log('✅ Served proxied Ola style');
+    console.log('✅ Served proxied Ola style with rewritten URLs');
   } catch (err) {
     console.error("❌ Ola style proxy error:", err.message);
     res.status(500).json({ success: false, message: "Failed to proxy Ola style" });
@@ -291,64 +305,51 @@ app.get("/ola/tiles/:z/:x/:y.pbf", async (req, res) => {
   }
 });
 
-// ✅ PROXY: Sprites (PNG images)
-app.get("/ola/sprite", async (req, res) => {
+// ✅ PROXY: Sprites - correctly handle sprite.png, sprite@2x.png, sprite.json, sprite@2x.json
+app.get('/ola/sprite:scale(.json|.png)', async (req, res) => {
   try {
-    const spriteUrl = `https://api.olamaps.io/tiles/vector/v1/sprites/default-light-standard?api_key=${OLA_API_KEY}`;
+    const scale = req.params.scale || '';
+    // scale will be: ".png", "@2x.png", ".json", or "@2x.json"
     
-    const spriteRes = await fetch(spriteUrl);
-    if (!spriteRes.ok) {
-      console.warn(`⚠️ Sprite returned HTTP ${spriteRes.status}`);
-      return res.status(spriteRes.status).send('Sprite not available');
+    const target = `https://api.olamaps.io/tiles/vector/v1/sprites/default-light-standard/sprite${scale}?api_key=${OLA_API_KEY}`;
+    console.log(`🎨 [Sprite] → ${scale || 'default'}`);
+    
+    const olaRes = await fetch(target);
+    if (!olaRes.ok) {
+      console.warn(`⚠️ [Sprite] HTTP ${olaRes.status} from Ola`);
+      return res.sendStatus(olaRes.status);
     }
 
-    res.setHeader("Content-Type", "image/png");
+    res.setHeader(
+      "Content-Type",
+      scale.endsWith('.png') ? "image/png" : "application/json"
+    );
     res.setHeader("Cache-Control", "public, max-age=86400");
-    spriteRes.body.pipe(res);
+    olaRes.body.pipe(res);
   } catch (err) {
-    console.error("❌ Sprite proxy error:", err.message);
+    console.error("❌ [Sprite] Proxy error:", err.message);
     res.status(500).send("Sprite fetch failed");
   }
 });
 
-// ✅ PROXY: Sprite JSON (metadata)
-app.get("/ola/sprite.json", async (req, res) => {
-  try {
-    const spriteJsonUrl = `https://api.olamaps.io/tiles/vector/v1/sprites/default-light-standard.json?api_key=${OLA_API_KEY}`;
-    
-    const spriteJsonRes = await fetch(spriteJsonUrl);
-    if (!spriteJsonRes.ok) {
-      console.warn(`⚠️ Sprite JSON returned HTTP ${spriteJsonRes.status}`);
-      return res.status(spriteJsonRes.status).json({ error: 'Sprite JSON not available' });
-    }
-
-    res.setHeader("Content-Type", "application/json");
-    res.setHeader("Cache-Control", "public, max-age=86400");
-    const data = await spriteJsonRes.json();
-    res.json(data);
-  } catch (err) {
-    console.error("❌ Sprite JSON proxy error:", err.message);
-    res.status(500).json({ error: "Sprite JSON fetch failed" });
-  }
-});
-
-// ✅ PROXY: Glyphs (Font files)
-app.get("/ola/fonts/:fontstack/:range.pbf", async (req, res) => {
+// ✅ PROXY: Glyphs (Font files) - handle /ola/fonts/{fontstack}/{range}
+app.get("/ola/fonts/:fontstack/:range", async (req, res) => {
   try {
     const { fontstack, range } = req.params;
-    const glyphUrl = `https://api.olamaps.io/tiles/vector/v1/fonts/${fontstack}/${range}.pbf?api_key=${OLA_API_KEY}`;
+    const target = `https://api.olamaps.io/tiles/vector/v1/fonts/${fontstack}/${range}?api_key=${OLA_API_KEY}`;
+    console.log(`📝 [Glyph] Proxying: ${fontstack}/${range}`);
     
-    const glyphRes = await fetch(glyphUrl);
-    if (!glyphRes.ok) {
-      console.warn(`⚠️ Glyph ${fontstack}/${range} returned HTTP ${glyphRes.status}`);
-      return res.status(glyphRes.status).send('Glyph not available');
+    const olaRes = await fetch(target);
+    if (!olaRes.ok) {
+      console.warn(`⚠️ [Glyph] HTTP ${olaRes.status}`);
+      return res.sendStatus(olaRes.status);
     }
 
     res.setHeader("Content-Type", "application/x-protobuf");
     res.setHeader("Cache-Control", "public, max-age=86400");
-    glyphRes.body.pipe(res);
+    olaRes.body.pipe(res);
   } catch (err) {
-    console.error("❌ Glyph proxy error:", err.message);
+    console.error("❌ [Glyph] Proxy error:", err.message);
     res.status(500).send("Glyph fetch failed");
   }
 });
