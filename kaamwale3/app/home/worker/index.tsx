@@ -276,6 +276,24 @@ function WorkerHome() {
         if (storedToken) {
           setToken(storedToken);
           
+          // ✅ Fetch notification count after token is set
+          try {
+            const notifRes = await fetch(`${API_BASE}/notifications`, {
+              headers: { Authorization: `Bearer ${storedToken}` },
+            });
+            if (notifRes.ok) {
+              const notifData = await notifRes.json();
+              if (notifData.unreadCount !== undefined) {
+                setNotificationCount(notifData.unreadCount);
+              } else if (Array.isArray(notifData.notifications)) {
+                const unreadCount = notifData.notifications.filter((n: any) => !n.isRead).length;
+                setNotificationCount(unreadCount);
+              }
+            }
+          } catch (err) {
+            console.error('Error fetching notification count at init:', err);
+          }
+          
           // ✅ Only disconnect/reconnect if user CHANGED (not on every component mount)
           const userStr2 = await AsyncStorage.getItem("user");
           const userPhone = userStr2 ? JSON.parse(userStr2).phone : null;

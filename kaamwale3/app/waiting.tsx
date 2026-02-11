@@ -297,9 +297,8 @@ export default function WaitingScreen() {
     <View style={styles.container}>
       {/* Top Header Area */}
       <View style={styles.headerContainer}>
-        <TouchableOpacity style={styles.backButton} onPress={() => router.back()}>
-          <Ionicons name="arrow-back" size={28} color="red" />
-        </TouchableOpacity>
+        {/* ✅ Back button disabled - contractor must wait for acceptances or cancel job */}
+        <View style={styles.backButton} />
 
         <Text style={styles.title}>Waiting for Workers...</Text>
         <Text style={styles.timerText}>Expected Response: {formatTime(timeLeft)}</Text>

@@ -31,8 +31,6 @@ export default function ContractorHome() {
   const [totalSpending, setTotalSpending] = React.useState(0);
   const [workersEngaged, setWorkersEngaged] = React.useState(0);
   const [notificationCount, setNotificationCount] = React.useState<number>(0); // ✅ Add notification count state
-  const [showMenu, setShowMenu] = React.useState(false); // ✅ Add 3-dot menu state
-  const [lastJobId, setLastJobId] = React.useState<string | null>(null); // ✅ Track last posted job
 
   // Initialize socket connection on focus
   useFocusEffect(
@@ -172,17 +170,6 @@ export default function ContractorHome() {
             await fetchWalletBalance();
             await fetchJobs();
             await fetchNotificationCount(); // ✅ Fetch notification count
-            
-            // ✅ Fetch last posted job ID to show in menu
-            try {
-              const jobId = await AsyncStorage.getItem('lastJobId');
-              if (jobId) {
-                setLastJobId(jobId);
-                console.log('✅ Last job ID loaded:', jobId);
-              }
-            } catch (err) {
-              console.warn('Could not load lastJobId:', err);
-            }
           }
         } catch (err) {
           // Silent fail on token loading
@@ -274,6 +261,17 @@ export default function ContractorHome() {
       // Total spending by contractor (sum of amounts for paid jobs)
       const spending = paidJobs.reduce((sum: number, j: any) => sum + (Number(j.amount) || 0), 0);
       setTotalSpending(spending);
+      
+      // ✅ Save last posted job ID for waiting screen access
+      if (myJobs.length > 0) {
+        const lastJob = myJobs[myJobs.length - 1]; // Most recent job
+        try {
+          await AsyncStorage.setItem('lastJobId', lastJob._id);
+          console.log('✅ Last job ID saved:', lastJob._id);
+        } catch (err) {
+          console.warn('Could not save lastJobId:', err);
+        }
+      }
     } catch (err) {
       console.error('Job fetch error:', err);
     }
@@ -385,51 +383,7 @@ export default function ContractorHome() {
               </View>
             )}
           </TouchableOpacity>
-          
-          {/* ✅ 3-Dot Menu Button */}
-          <TouchableOpacity 
-            onPress={() => setShowMenu(!showMenu)}
-            style={{ marginLeft: 12 }}
-          >
-            <MaterialIcons name="more-vert" size={28} color="#FFD700" />
-          </TouchableOpacity>
         </View>
-        
-        {/* ✅ Menu Dropdown */}
-        {showMenu && (
-          <View style={{
-            marginTop: 12,
-            backgroundColor: 'rgba(255,255,255,0.95)',
-            borderRadius: 8,
-            overflow: 'hidden',
-            elevation: 5,
-          }}>
-            {lastJobId && (
-              <TouchableOpacity
-                onPress={() => {
-                  setShowMenu(false);
-                  router.push('/waiting' as any);
-                }}
-                style={{ padding: 12, borderBottomWidth: 1, borderBottomColor: '#eee' }}
-              >
-                <Text style={{ color: '#1a2f4d', fontWeight: '600', fontSize: 14 }}>
-                  👀 View Waiting Screen
-                </Text>
-              </TouchableOpacity>
-            )}
-            <TouchableOpacity
-              onPress={() => {
-                setShowMenu(false);
-                router.navigate('../../dashboard' as any);
-              }}
-              style={{ padding: 12 }}
-            >
-              <Text style={{ color: '#1a2f4d', fontWeight: '600', fontSize: 14 }}>
-                📊 View Dashboard
-              </Text>
-            </TouchableOpacity>
-          </View>
-        )}
       </LinearGradient>
 
       {/* Top cards (show only Jobs Posted + Completed on home screen) */}
