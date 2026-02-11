@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { View, Text, TextInput, TouchableOpacity, Alert, StatusBar } from 'react-native';
+import { View, Text, TextInput, TouchableOpacity, Alert, StatusBar, ActivityIndicator } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -44,10 +44,17 @@ export default function Register() {
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [role, setRole] = useState<'worker' | 'contractor'>('worker');
+  const [isLoading, setIsLoading] = useState(false); // ✅ Add loading state
+  const [agreedToTerms, setAgreedToTerms] = useState(false); // ✅ Add terms checkbox state
 
   const handleRegister = async () => {
     if (!name || !phone || !password)
       return Alert.alert('Error', 'Fill all fields');
+
+    // ✅ Validate terms and conditions agreement
+    if (!agreedToTerms) {
+      return Alert.alert('Error', 'Please agree to Terms and Conditions to proceed');
+    }
 
     // Validate phone number (10 digits)
     const phoneTrim = phone.trim();
@@ -55,6 +62,7 @@ export default function Register() {
       return Alert.alert('Invalid Phone', 'Phone number must be exactly 10 digits');
     }
 
+    setIsLoading(true); // ✅ Show loading spinner
     try {
       // ✅ GET FCM TOKEN - Wait for it to be available (race condition fix)
       let fcmToken = null;
@@ -85,7 +93,7 @@ export default function Register() {
       const res = await fetch(`${API_BASE}/users/register`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, phone: phoneTrim, password, role }),
+        body: JSON.stringify({ name, phone: phoneTrim, password, role, agreedToTerms }), // ✅ Include agreedToTerms
       });
 
       const data = await res.json();
@@ -138,6 +146,8 @@ export default function Register() {
     } catch (err) {
       console.error('Registration error:', err);
       Alert.alert('Error', 'Server not responding');
+    } finally {
+      setIsLoading(false); // ✅ Hide loading spinner
     }
   };
 
@@ -191,8 +201,37 @@ export default function Register() {
         </TouchableOpacity>
       </View>
 
-      <TouchableOpacity style={styles.registerButton} onPress={handleRegister}>
-        <Text style={styles.buttonText}>Register</Text>
+      {/* ✅ Terms and Conditions Checkbox */}
+      <View style={{ flexDirection: 'row', alignItems: 'center', marginVertical: 16, paddingHorizontal: 16 }}>
+        <TouchableOpacity
+          style={{
+            width: 24,
+            height: 24,
+            borderWidth: 2,
+            borderColor: '#007AFF',
+            borderRadius: 4,
+            justifyContent: 'center',
+            alignItems: 'center',
+            backgroundColor: agreedToTerms ? '#007AFF' : 'transparent',
+          }}
+          onPress={() => setAgreedToTerms(!agreedToTerms)}
+        >
+          {agreedToTerms && (
+            <MaterialIcons name="check" size={16} color="#fff" />
+          )}
+        </TouchableOpacity>
+        <Text style={{ marginLeft: 10, color: '#555', fontSize: 13, flex: 1 }}>
+          I agree to the{' '}
+          <Text style={{ color: '#007AFF', fontWeight: '600' }}>Terms and Conditions</Text>
+        </Text>
+      </View>
+
+      <TouchableOpacity style={styles.registerButton} onPress={handleRegister} disabled={isLoading}>
+        {isLoading ? (
+          <ActivityIndicator size="small" color="#fff" />
+        ) : (
+          <Text style={styles.buttonText}>Register</Text>
+        )}
       </TouchableOpacity>
     </View>
   );

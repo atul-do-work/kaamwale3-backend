@@ -138,9 +138,11 @@ async function updateContractorStats(phone) {
     today.setHours(0, 0, 0, 0);
     
     // Fetch today's jobs for this contractor (using phone)
+    // ✅ EXCLUDE cancelled jobs from all calculations
     const todayJobs = await Job.find({
       contractorPhone: phone,
-      createdAt: { $gte: today }
+      createdAt: { $gte: today },
+      isCancelled: { $ne: true } // ✅ Exclude cancelled jobs
     });
     
     const jobsPosted = todayJobs.length;
@@ -894,15 +896,27 @@ app.post("/users/update-profile", authenticateToken, async (req, res) => {
 // ---------------- USER ROUTES ----------------
 app.post("/users/register", async (req, res) => {
   try {
-    const { name, phone, password, role } = req.body;
+    const { name, phone, password, role, agreedToTerms } = req.body; // ✅ Include agreedToTerms
     if (!name || !phone || !password || !role)
       return res.status(400).json({ success: false, message: "All fields required" });
+
+    // ✅ Validate terms agreement
+    if (!agreedToTerms) {
+      return res.status(400).json({ success: false, message: "Must agree to Terms and Conditions" });
+    }
 
     const existingUser = await User.findOne({ phone });
     if (existingUser) return res.status(400).json({ success: false, message: "Phone already registered" });
 
     const hashedPassword = await bcrypt.hash(password, 10);
-    const newUser = new User({ name, phone, password: hashedPassword, role });
+    const newUser = new User({ 
+      name, 
+      phone, 
+      password: hashedPassword, 
+      role,
+      agreedToTerms: true, // ✅ Save agreement status
+      agreedToTermsAt: new Date() // ✅ Save when user agreed
+    });
     await newUser.save();
 
     let wallet = await Wallet.findOne({ phone });

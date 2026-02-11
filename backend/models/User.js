@@ -52,6 +52,9 @@ const userSchema = new mongoose.Schema({
   // ✅ Worker Profile - Main Skill & Expected Wages
   mainSkill: { type: String, default: '' }, // Labour, Mason, Engineer, ITI/Technician
   expectedWage: { type: String, default: '' }, // 0-400, 400-550, 550-700, 700-max
+  // ✅ Terms and Conditions
+  agreedToTerms: { type: Boolean, default: false }, // User agreement to T&C during registration
+  agreedToTermsAt: { type: Date, default: null }, // When user agreed to T&C
 }, { timestamps: true });
 
 // create 2dsphere index for location queries

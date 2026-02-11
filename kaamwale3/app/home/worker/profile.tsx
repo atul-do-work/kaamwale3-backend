@@ -36,10 +36,11 @@ export default function Profile(): React.ReactElement {
   const [earningsModalVisible, setEarningsModalVisible] = useState(false);
   const [workerName, setWorkerName] = useState<string>("");
   const [workerPhone, setWorkerPhone] = useState<string>("");
-  const [totalEarnings, setTotalEarnings] = useState(2450);
-  const [totalDeductions, setTotalDeductions] = useState(245);
-  const [totalBonus, setTotalBonus] = useState(500);
-  const [referralBonus, setReferralBonus] = useState(500);
+  const [totalEarnings, setTotalEarnings] = useState(0); // ✅ From backend
+  const [gigEarnings, setGigEarnings] = useState(0); // ✅ Earned from gigs
+  const [jobsEarnings, setJobsEarnings] = useState(0); // ✅ Earned from jobs/pending
+  const [totalDeductions, setTotalDeductions] = useState(0); // ✅ From backend
+  const [referralBonus, setReferralBonus] = useState(0); // ✅ From backend
   const [userToken, setUserToken] = useState<string>("");
   
   // Menu states
@@ -78,6 +79,35 @@ export default function Profile(): React.ReactElement {
       }
     })();
   }, []);
+
+  // ✅ Fetch earnings data when modal is opened
+  const fetchEarningsData = async () => {
+    try {
+      const token = await AsyncStorage.getItem("token");
+      if (!token) return;
+
+      const response = await fetch(`${API_BASE}/worker/earnings`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+
+      if (!response.ok) throw new Error("Failed to fetch earnings");
+
+      const data = await response.json();
+      if (data.success && data.earnings) {
+        const earned = data.earnings.byStatus?.earned?.amount || 0;
+        const pending = data.earnings.byStatus?.pending?.amount || 0;
+        
+        setGigEarnings(earned);
+        setJobsEarnings(pending);
+        setTotalEarnings(data.earnings.totalEarned || 0);
+        
+        // You can also set deductions here if available from backend
+        console.log('✅ Earnings fetched:', data.earnings);
+      }
+    } catch (err) {
+      console.error('Error fetching earnings:', err);
+    }
+  };
 
   const pickImage = async () => {
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
@@ -286,7 +316,10 @@ export default function Profile(): React.ReactElement {
         <View style={styles.cardsRow}>
         {[
           { title: "Gig History", icon: "history", route: "/GigHistory" },
-          { title: "Earnings", icon: "attach-money", action: () => setEarningsModalVisible(true) },
+          { title: "Earnings", icon: "attach-money", action: () => {
+            fetchEarningsData(); // ✅ Fetch fresh earnings when clicking
+            setEarningsModalVisible(true);
+          } },
           { title: "Settings", icon: "settings", route: "/Settings" },
         ].map((card, index) => (
           <TouchableOpacity
@@ -374,7 +407,7 @@ export default function Profile(): React.ReactElement {
             >
               <Text style={styles.totalEarningsLabel}>Total Earnings</Text>
               <Text style={styles.totalEarningsValue}>₹{totalEarnings}</Text>
-              <Text style={styles.totalEarningsSubtext}>From {15} completed gigs</Text>
+              <Text style={styles.totalEarningsSubtext}>From {totalEarnings > 0 ? 'completed gigs' : 'no gigs yet'}</Text>
             </LinearGradient>
 
             {/* Earnings Breakdown */}
@@ -385,27 +418,27 @@ export default function Profile(): React.ReactElement {
                 </View>
                 <View style={styles.earningsItemContent}>
                   <Text style={styles.earningsItemLabel}>Gig Earnings</Text>
-                  <Text style={styles.earningsItemValue}>₹{2450}</Text>
+                  <Text style={styles.earningsItemValue}>₹{gigEarnings}</Text>
                 </View>
               </View>
 
               <View style={styles.earningsItem}>
                 <View style={[styles.earningsIconBox, { backgroundColor: "#FFF3E0" }]}>
-                  <MaterialIcons name="card-giftcard" size={24} color="#F39C12" />
+                  <MaterialIcons name="assessment" size={24} color="#F39C12" />
                 </View>
                 <View style={styles.earningsItemContent}>
-                  <Text style={styles.earningsItemLabel}>Referral Bonus</Text>
-                  <Text style={styles.earningsItemValue}>₹{referralBonus}</Text>
+                  <Text style={styles.earningsItemLabel}>Jobs Earned</Text>
+                  <Text style={styles.earningsItemValue}>₹{jobsEarnings}</Text>
                 </View>
               </View>
 
               <View style={styles.earningsItem}>
-                <View style={[styles.earningsIconBox, { backgroundColor: "#F3E5F5" }]}>
-                  <MaterialIcons name="card-membership" size={24} color="#9C27B0" />
+                <View style={[styles.earningsIconBox, { backgroundColor: "#FCE4EC" }]}>
+                  <MaterialIcons name="card-giftcard" size={24} color="#E91E63" />
                 </View>
                 <View style={styles.earningsItemContent}>
-                  <Text style={styles.earningsItemLabel}>Bonus</Text>
-                  <Text style={styles.earningsItemValue}>₹{totalBonus}</Text>
+                  <Text style={styles.earningsItemLabel}>Referral Bonus</Text>
+                  <Text style={styles.earningsItemValue}>₹{referralBonus}</Text>
                 </View>
               </View>
 
@@ -420,15 +453,11 @@ export default function Profile(): React.ReactElement {
               </View>
             </View>
 
-            {/* Net Earnings */}
-            <View style={styles.netEarningsCard}>
-              <Text style={styles.netEarningsLabel}>Available Balance</Text>
-              <Text style={styles.netEarningsValue}>₹{totalEarnings + totalBonus + referralBonus - totalDeductions}</Text>
-              <TouchableOpacity style={styles.withdrawButton}>
-                <MaterialIcons name="wallet" size={20} color="#fff" />
-                <Text style={styles.withdrawButtonText}>Withdraw to Wallet</Text>
-              </TouchableOpacity>
-            </View>
+            {/* Net Earnings - Removed Available Balance Section */}
+            <TouchableOpacity style={styles.withdrawButton}>
+              <MaterialIcons name="wallet" size={20} color="#fff" />
+              <Text style={styles.withdrawButtonText}>View Withdrawal Options</Text>
+            </TouchableOpacity>
           </ScrollView>
         </View>
         </TouchableOpacity>

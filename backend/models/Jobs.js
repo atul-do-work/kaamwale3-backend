@@ -42,6 +42,7 @@ const jobSchema = new mongoose.Schema({
     }
   }],
   declinedBy: [String],
+  isCancelled: { type: Boolean, default: false }, // ✅ Flag to exclude cancelled jobs from counts
   attendanceStatus: String,
   attendanceTime: Date,
   paymentStatus: String,

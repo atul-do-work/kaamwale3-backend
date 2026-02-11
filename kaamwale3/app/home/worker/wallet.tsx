@@ -50,6 +50,7 @@ export default function Wallet(): React.ReactElement {
   // ✅ Bank account states
   const [bankAccount, setBankAccount] = useState<any>(null);
   const [showAddBank, setShowAddBank] = useState(false);
+  const [showBankInfo, setShowBankInfo] = useState(true); // ✅ Control visibility of bank info display
   const [bankDetails, setBankDetails] = useState({
     accountHolderName: '',
     accountNumber: '',
@@ -731,12 +732,12 @@ export default function Wallet(): React.ReactElement {
       </Modal>
 
       {/* ✅ Bank Account Info Display */}
-      {bankAccount && (
+      {bankAccount && showBankInfo && (
         <View style={{ padding: 16, backgroundColor: "#f0f8ff", marginTop: 16, marginHorizontal: 16, borderRadius: 8, borderLeftWidth: 4, borderLeftColor: "#1a2f4d" }}>
           <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
             <Text style={{ fontSize: 14, fontWeight: "600", color: "#333" }}>💳 Linked Bank Account</Text>
-            <TouchableOpacity onPress={() => setShowAddBank(true)}>
-              <Text style={{ color: "#1a2f4d", fontWeight: "600" }}>Change</Text>
+            <TouchableOpacity onPress={() => setShowBankInfo(false)}>
+              <MaterialIcons name="close" size={20} color="#333" />
             </TouchableOpacity>
           </View>
           <Text style={{ fontSize: 12, color: "#666", marginBottom: 4 }}>{bankAccount.bankName}</Text>

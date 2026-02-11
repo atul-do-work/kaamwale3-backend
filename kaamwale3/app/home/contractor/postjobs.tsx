@@ -54,6 +54,7 @@ export default function PostJobScreen() {
   const [bulkHiringEnabled, setBulkHiringEnabled] = useState(false); // ✅ Bulk hiring toggle
   const [requiredWorkers, setRequiredWorkers] = useState(1); // ✅ Number of workers needed
   const [gettingLocation, setGettingLocation] = useState(false); // ✅ Loading state for current location
+  const [isPostingJob, setIsPostingJob] = useState(false); // ✅ Loading state for posting job
 
   // SERVER_URL is loaded from central config
   const router = useRouter();   // ⭐ ADDED
@@ -240,6 +241,8 @@ export default function PostJobScreen() {
     if (walletBalance < 25)
       return Alert.alert("Insufficient Balance", "Minimum balance ₹25 required to post a job");
 
+    setIsPostingJob(true); // ✅ Show loading spinner
+
     // Helper function to format time in 12-hour format with AM/PM
     const formatTime12Hour = (date: Date): string => {
       let hours = date.getHours() % 12 || 12;
@@ -333,10 +336,10 @@ export default function PostJobScreen() {
       } catch (e) {
         console.warn("Failed to save lastJobId", e);
       }
-      router.push("/waiting");
-
+      
       setWalletBalance(data.wallet.balance);
 
+      // ✅ Clear all input fields after successful job posting
       setTitle("");
       setMainSkill("");
       setPrice("");
@@ -346,9 +349,12 @@ export default function PostJobScreen() {
       setStartTime(new Date());
       setEndTime(new Date());
       setPriceError(false);
-
+      setIsPostingJob(false); // ✅ Hide loading spinner
+      
+      router.push("/waiting");
     } catch (err) {
       console.error(err);
+      setIsPostingJob(false); // ✅ Hide loading spinner on error
       Alert.alert("Error", "Server not responding"); 
     }
   };
@@ -599,8 +605,12 @@ export default function PostJobScreen() {
           />
         )}
 
-        <TouchableOpacity style={styles.button} onPress={handlePostJob}>
-          <Text style={styles.buttonText}>Post Job</Text>
+        <TouchableOpacity style={styles.button} onPress={handlePostJob} disabled={isPostingJob}>
+          {isPostingJob ? (
+            <ActivityIndicator size="small" color="#fff" />
+          ) : (
+            <Text style={styles.buttonText}>Post Job</Text>
+          )}
         </TouchableOpacity>
       </View>
     </ScrollView>

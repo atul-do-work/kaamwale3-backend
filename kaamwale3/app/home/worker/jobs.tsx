@@ -29,7 +29,7 @@ interface Job {
   endTime?: string; // ✅ End time like "18:00"
   lat: number;
   lon: number;
-  timestamp: string;
+  date: string; // ✅ Job date from backend
   status?: "pending" | "accepted" | "declined";
   acceptedBy?: string;
   paymentStatus?: "Paid" | null;
@@ -353,7 +353,7 @@ export default function Jobs(): React.ReactElement {
                       <View style={{ flexDirection: "row", alignItems: "center", flex: 1 }}>
                         <MaterialIcons name="event" size={14} color="#999" />
                         <Text style={{ color: "#666", fontSize: 12, marginLeft: 6 }}>
-                          {job.timestamp ? new Date(job.timestamp).toLocaleDateString() : "N/A"}
+                          {job.date ? new Date(job.date).toLocaleDateString() : "N/A"}
                         </Text>
                       </View>
 

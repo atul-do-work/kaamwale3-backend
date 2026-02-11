@@ -159,44 +159,6 @@ export default function PremiumPlansModal({
             </View>
           )}
 
-          {/* Add Test Balance Button */}
-          <TouchableOpacity
-            onPress={async () => {
-              try {
-                const token = await AsyncStorage.getItem("token");
-                const res = await fetch(`${API_BASE}/wallet/add-test-balance`, {
-                  method: "POST",
-                  headers: {
-                    "Content-Type": "application/json",
-                    Authorization: `Bearer ${token}`,
-                  },
-                  body: JSON.stringify({ amount: 1000 }),
-                });
-                const data = await res.json();
-                if (data.success) {
-                  setWalletBalance(data.newBalance);
-                  setError("");
-                }
-              } catch (err) {
-                console.error("Error adding test balance:", err);
-              }
-            }}
-            style={{
-              backgroundColor: "#e3f2fd",
-              borderWidth: 1,
-              borderColor: "#2196F3",
-              paddingVertical: 10,
-              paddingHorizontal: 15,
-              marginHorizontal: 15,
-              marginBottom: 12,
-              borderRadius: 6,
-            }}
-          >
-            <Text style={{ color: "#2196F3", fontSize: 13, fontWeight: "600", textAlign: "center" }}>
-              + Add ₹1000 Test Balance
-            </Text>
-          </TouchableOpacity>
-
           {/* Plans */}
           <ScrollView style={{ paddingHorizontal: 15 }}>
             {plans.map((plan) => (

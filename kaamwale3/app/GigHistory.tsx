@@ -259,41 +259,47 @@ export default function GigHistory() {
 
   const renderConditionsCard = () => (
     <View style={styles.conditionsCard}>
-      <Text style={styles.conditionsTitle}>✓ Requirements</Text>
+      <Text style={styles.conditionsTitle}>✓ Requirements Status</Text>
       <View style={styles.conditionsList}>
+        {/* 5 Days Requirement */}
         <View style={[styles.condition, { borderLeftColor: incentiveData.consecutiveDays >= 5 ? '#27AE60' : '#BDC3C7' }]}>
           <MaterialIcons 
             name={incentiveData.consecutiveDays >= 5 ? 'check' : 'close'} 
-            size={20} 
-            color={incentiveData.consecutiveDays >= 5 ? '#27AE60' : '#BDC3C7'}
+            size={24} 
+            color={incentiveData.consecutiveDays >= 5 ? '#27AE60' : '#E74C3C'}
+            style={{ fontWeight: 'bold' }}
           />
           <View style={styles.conditionText}>
-            <Text style={styles.conditionLabel}>Complete 5 consecutive days</Text>
-            <Text style={styles.conditionValue}>{incentiveData.consecutiveDays}/5 days</Text>
+            <Text style={styles.conditionLabel}>5 Consecutive Days</Text>
+            <Text style={styles.conditionValue}>{incentiveData.consecutiveDays}/5 days ({Math.round((incentiveData.consecutiveDays / 5) * 100)}%)</Text>
           </View>
         </View>
 
+        {/* 7 Hours Per Day Requirement */}
         <View style={[styles.condition, { borderLeftColor: incentiveData.totalHours >= 35 ? '#27AE60' : '#BDC3C7' }]}>
           <MaterialIcons 
             name={incentiveData.totalHours >= 35 ? 'check' : 'close'} 
-            size={20} 
-            color={incentiveData.totalHours >= 35 ? '#27AE60' : '#BDC3C7'}
+            size={24} 
+            color={incentiveData.totalHours >= 35 ? '#27AE60' : '#E74C3C'}
+            style={{ fontWeight: 'bold' }}
           />
           <View style={styles.conditionText}>
-            <Text style={styles.conditionLabel}>Minimum 7 hours per day</Text>
-            <Text style={styles.conditionValue}>{incentiveData.totalHours} hours total</Text>
+            <Text style={styles.conditionLabel}>7+ Hours Per Day</Text>
+            <Text style={styles.conditionValue}>{incentiveData.totalHours}/35 hours ({Math.round((incentiveData.totalHours / 35) * 100)}%)</Text>
           </View>
         </View>
 
+        {/* Cancellation Requirement */}
         <View style={[styles.condition, { borderLeftColor: incentiveData.cancellations <= 1 ? '#27AE60' : '#BDC3C7' }]}>
           <MaterialIcons 
             name={incentiveData.cancellations <= 1 ? 'check' : 'close'} 
-            size={20} 
-            color={incentiveData.cancellations <= 1 ? '#27AE60' : '#BDC3C7'}
+            size={24} 
+            color={incentiveData.cancellations <= 1 ? '#27AE60' : '#E74C3C'}
+            style={{ fontWeight: 'bold' }}
           />
           <View style={styles.conditionText}>
-            <Text style={styles.conditionLabel}>No last-minute cancellations</Text>
-            <Text style={styles.conditionValue}>Max 1 cancellation allowed</Text>
+            <Text style={styles.conditionLabel}>No Cancellations</Text>
+            <Text style={styles.conditionValue}>{incentiveData.cancellations} cancelled ({incentiveData.cancellations <= 1 ? '✔ Allowed' : '✗ Exceeded'})</Text>
           </View>
         </View>
       </View>
@@ -313,7 +319,7 @@ export default function GigHistory() {
             <MaterialIcons name={milestone.icon as any} size={24} color="#fff" />
           </View>
           <View style={styles.milestoneInfo}>
-            <Text style={styles.milestoneTitle}>{milestone.days} Days</Text>
+            <Text style={styles.milestoneTitle}>{milestone.days} Days Challenge</Text>
             <Text style={styles.milestoneReward}>₹{milestone.reward} Reward</Text>
           </View>
           {milestone.completed && (
@@ -344,7 +350,7 @@ export default function GigHistory() {
 
         {milestone.completed && (
           <View style={styles.completedStatus}>
-            <Text style={styles.completedText}>🎉 Reward Unlocked!</Text>
+            <Text style={styles.completedText}>🎉 Reward Unlocked! ₹{milestone.reward}</Text>
           </View>
         )}
       </LinearGradient>
@@ -354,6 +360,11 @@ export default function GigHistory() {
   const renderGigCard = (gig: GigHistory) => {
     const paymentStatus = gig.paymentStatus || 'Pending';
     const displayStatus = paymentStatus === 'Paid' ? 'Completed' : paymentStatus;
+    
+    // ✅ Calculate work hours from workDuration if available
+    const workHours = gig.workDuration ? parseFloat(gig.workDuration) : 0;
+    const has8Hours = workHours >= 8;
+    const isCancelled = gig.status === 'cancelled';
 
     return (
       <View style={styles.gigCard}>
@@ -390,6 +401,34 @@ export default function GigHistory() {
             <View style={styles.detailItem}>
               <MaterialIcons name="star" size={18} color="#F39C12" />
               <Text style={styles.detailText}>{gig.rating.stars} ⭐</Text>
+            </View>
+          )}
+        </View>
+
+        {/* ✅ Work Hours & Requirement Status */}
+        <View style={styles.requirementsRow}>
+          <View style={[styles.requirementBadge, { borderColor: has8Hours ? '#27AE60' : '#E74C3C' }]}>
+            <MaterialIcons 
+              name={has8Hours ? 'check-circle' : 'cancel'} 
+              size={18} 
+              color={has8Hours ? '#27AE60' : '#E74C3C'} 
+            />
+            <Text style={[styles.requirementText, { color: has8Hours ? '#27AE60' : '#E74C3C' }]}>
+              {workHours > 0 ? `${workHours}h` : 'N/A'} {has8Hours ? '✔' : '✗'}
+            </Text>
+          </View>
+          
+          {isCancelled && (
+            <View style={[styles.requirementBadge, { borderColor: '#E74C3C', backgroundColor: '#FFEBEE' }]}>
+              <MaterialIcons name="cancel" size={18} color="#E74C3C" />
+              <Text style={[styles.requirementText, { color: '#E74C3C' }]}>Cancelled ✗</Text>
+            </View>
+          )}
+          
+          {paymentStatus === 'Paid' && !isCancelled && (
+            <View style={[styles.requirementBadge, { borderColor: '#27AE60', backgroundColor: '#E8F5E9' }]}>
+              <MaterialIcons name="check-circle" size={18} color="#27AE60" />
+              <Text style={[styles.requirementText, { color: '#27AE60' }]}>Completed ✔</Text>
             </View>
           )}
         </View>
@@ -829,6 +868,27 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#555',
     lineHeight: 18,
+  },
+  // ✅ New styles for requirement tracking
+  requirementsRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginTop: 10,
+    flexWrap: 'wrap',
+  },
+  requirementBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 6,
+    borderWidth: 1,
+    backgroundColor: '#f5f5f5',
+  },
+  requirementText: {
+    fontSize: 11,
+    fontWeight: '600',
   },
   emptyState: {
     alignItems: 'center',

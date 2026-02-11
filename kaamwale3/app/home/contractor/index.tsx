@@ -30,6 +30,9 @@ export default function ContractorHome() {
   const [postedCount, setPostedCount] = React.useState(0);
   const [totalSpending, setTotalSpending] = React.useState(0);
   const [workersEngaged, setWorkersEngaged] = React.useState(0);
+  const [notificationCount, setNotificationCount] = React.useState<number>(0); // ✅ Add notification count state
+  const [showMenu, setShowMenu] = React.useState(false); // ✅ Add 3-dot menu state
+  const [lastJobId, setLastJobId] = React.useState<string | null>(null); // ✅ Track last posted job
 
   // Initialize socket connection on focus
   useFocusEffect(
@@ -72,20 +75,30 @@ export default function ContractorHome() {
               }
             }
             
-            // ✅ Check if user has an ACTIVE premium plan in their user data
-            if (currentUser?.premiumPlan && currentUser.premiumPlan.type) {
+            // ✅ Check if user has an ACTIVE premium plan - PERSISTENT across tab switches
+            // First check if we already marked as premium (persists across focus)
+            const cachedPremium = await AsyncStorage.getItem('hasPremium');
+            
+            if (cachedPremium === 'true') {
+              hasActivePremium = true;
+              console.log('✅ Using cached premium status from AsyncStorage');
+            } else if (currentUser?.premiumPlan && currentUser.premiumPlan.type) {
+              // Fallback: Check the premium plan data from user object
               const expiryDate = new Date(currentUser.premiumPlan.expiryDate);
               const now = new Date();
               
               // If premium plan exists and hasn't expired
               if (expiryDate > now) {
                 hasActivePremium = true;
-                // Save to AsyncStorage for future reference
-                await AsyncStorage.setItem('hasPremium', 'true');
               }
             }
             
             setHasPremium(hasActivePremium);
+            
+            // ✅ Persist premium status for next time (tab switch, etc.)
+            if (hasActivePremium) {
+              await AsyncStorage.setItem('hasPremium', 'true');
+            }
             
             // ✅ Don't auto-show premium modal - only show when user clicks "Upgrade Now"
             // Modal will show on demand only
@@ -158,6 +171,18 @@ export default function ContractorHome() {
             // Fetch wallet balance and jobs
             await fetchWalletBalance();
             await fetchJobs();
+            await fetchNotificationCount(); // ✅ Fetch notification count
+            
+            // ✅ Fetch last posted job ID to show in menu
+            try {
+              const jobId = await AsyncStorage.getItem('lastJobId');
+              if (jobId) {
+                setLastJobId(jobId);
+                console.log('✅ Last job ID loaded:', jobId);
+              }
+            } catch (err) {
+              console.warn('Could not load lastJobId:', err);
+            }
           }
         } catch (err) {
           // Silent fail on token loading
@@ -233,7 +258,7 @@ export default function ContractorHome() {
       setJobs(data);
 
       // Filter jobs posted by this contractor
-      const myJobs = data.filter((job: any) => job.contractorName === userName);
+      const myJobs = data.filter((job: any) => job.contractorName === userName && !job.isCancelled); // ✅ Exclude cancelled jobs
       setPostedCount(myJobs.length);
 
       // Count active/unpaid workers for contractor jobs
@@ -254,15 +279,47 @@ export default function ContractorHome() {
     }
   };
 
+  // ✅ Fetch notification count
+  const fetchNotificationCount = async () => {
+    try {
+      const savedToken = await AsyncStorage.getItem('token');
+      const res = await fetch(`${SERVER_URL}/notifications?limit=100&skip=0`, {
+        headers: { Authorization: `Bearer ${savedToken}` },
+      });
+      if (!res.ok) throw new Error('Failed to fetch notifications');
+      
+      const data = await res.json();
+      setNotificationCount(data.unreadCount || 0);
+    } catch (err) {
+      console.error('Failed to fetch notification count:', err);
+    }
+  };
+
   const handlePlanSelected = async (planId: string) => {
     try {
       // ✅ Save premium status to AsyncStorage
       await AsyncStorage.setItem('hasPremium', 'true');
       
+      // ✅ Fetch updated user data from backend and save to AsyncStorage with premium plan info
+      const savedToken = await AsyncStorage.getItem('token');
+      try {
+        const response = await fetch(`${SERVER_URL}/users/profile`, {
+          headers: { Authorization: `Bearer ${savedToken}` },
+        });
+        const data = await response.json();
+        if (data.success && data.user) {
+          // Update user in AsyncStorage with fresh data including premium plan
+          await AsyncStorage.setItem('user', JSON.stringify(data.user));
+          console.log('✅ Updated user data with premium plan:', data.user.premiumPlan);
+        }
+      } catch (err) {
+        console.warn('Could not fetch fresh user data after plan purchase:', err);
+      }
+      
       // Close modal
       setPremiumModalVisible(false);
       
-      // Set premium status
+      // Set premium status immediately
       setHasPremium(true);
       
       // ✅ Fetch city-based leaderboard using cached data
@@ -320,8 +377,59 @@ export default function ContractorHome() {
             onPress={() => router.push("/NotificationHistory" as any)}
           >
             <MaterialIcons name="notifications-none" size={28} color="#000" />
+            {notificationCount > 0 && ( // ✅ Show badge if unread notifications exist
+              <View style={styles.badge}>
+                <Text style={styles.badgeText}>
+                  {notificationCount > 9 ? '9+' : notificationCount}
+                </Text>
+              </View>
+            )}
+          </TouchableOpacity>
+          
+          {/* ✅ 3-Dot Menu Button */}
+          <TouchableOpacity 
+            onPress={() => setShowMenu(!showMenu)}
+            style={{ marginLeft: 12 }}
+          >
+            <MaterialIcons name="more-vert" size={28} color="#FFD700" />
           </TouchableOpacity>
         </View>
+        
+        {/* ✅ Menu Dropdown */}
+        {showMenu && (
+          <View style={{
+            marginTop: 12,
+            backgroundColor: 'rgba(255,255,255,0.95)',
+            borderRadius: 8,
+            overflow: 'hidden',
+            elevation: 5,
+          }}>
+            {lastJobId && (
+              <TouchableOpacity
+                onPress={() => {
+                  setShowMenu(false);
+                  router.push('/waiting' as any);
+                }}
+                style={{ padding: 12, borderBottomWidth: 1, borderBottomColor: '#eee' }}
+              >
+                <Text style={{ color: '#1a2f4d', fontWeight: '600', fontSize: 14 }}>
+                  👀 View Waiting Screen
+                </Text>
+              </TouchableOpacity>
+            )}
+            <TouchableOpacity
+              onPress={() => {
+                setShowMenu(false);
+                router.navigate('../../dashboard' as any);
+              }}
+              style={{ padding: 12 }}
+            >
+              <Text style={{ color: '#1a2f4d', fontWeight: '600', fontSize: 14 }}>
+                📊 View Dashboard
+              </Text>
+            </TouchableOpacity>
+          </View>
+        )}
       </LinearGradient>
 
       {/* Top cards (show only Jobs Posted + Completed on home screen) */}

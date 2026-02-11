@@ -248,9 +248,13 @@ export default function DashboardScreen() {
   };
 
   const today = new Date().toDateString();
-  const jobsWithAttendance = jobs.filter(
-    (j) => j.attendanceStatus && new Date(j.timestamp).toDateString() === today
-  );
+  // ✅ Show jobs that were ACCEPTED today (not just jobs with attendance marked)
+  const jobsWithAttendance = jobs.filter((j) => {
+    if (!j.acceptedBy) return false; // Only accepted jobs
+    // Check if accepted at timestamp matches today
+    const acceptedDate = j.acceptedAt ? new Date(j.acceptedAt).toDateString() : new Date(j.createdAt).toDateString();
+    return acceptedDate === today;
+  });
 
   return (
     <ScrollView style={styles.container}>
@@ -320,70 +324,51 @@ export default function DashboardScreen() {
         </LinearGradient>
       </View>
 
-      {/* Trends Section */}
-      {dateRange !== 'today' && historicalStats.length > 0 && (
-        <View style={styles.trendContainer}>
-          <Text style={styles.trendTitle}>📊 Trends & Insights</Text>
-          <View style={styles.trendCard}>
-            <Text style={styles.trendText}>Average Jobs/Day: {stats?.avgJobsPerDay || 0}</Text>
-            <Text style={styles.trendText}>Avg Completion/Day: {stats?.avgCompletionPerDay || 0}</Text>
-          </View>
-        </View>
-      )}
+      {/* Today's Worker Activity - Show only for today view */}
+      {dateRange === 'today' && ( // ✅ Only show for today view, hide for week/month
+        <View style={styles.sectionContainer}>
+          <Text style={styles.sectionTitle}>Today's Worker Acceptances</Text>
 
-      {/* Today's Worker Activity */}
-      <View style={styles.sectionContainer}>
-        <Text style={styles.sectionTitle}>Today's Worker Activity</Text>
+          {loading ? (
+            <ActivityIndicator size="large" color="#1a2f4d" style={{ marginTop: 20 }} />
+          ) : jobsWithAttendance.length === 0 ? (
+            <Text style={styles.noDataText}>No workers accepted jobs today</Text>
+          ) : (
+            jobsWithAttendance.map((job) => (
+              <View key={job._id} style={styles.workerCard}>
+                {/* Background bubbles for visual appeal */}
+                <View style={[styles.cardBubble, { position: 'absolute', left: 10, top: 10, backgroundColor: 'rgba(108, 92, 231, 0.08)' }]} />
+                <View style={[styles.cardBubble, { position: 'absolute', right: 10, bottom: 10, backgroundColor: 'rgba(0, 184, 148, 0.08)', width: 60, height: 60 }]} />
+                
+                <View style={styles.workerInfo}>
+                  <Text style={styles.workerName}>{job.acceptedBy || 'Unknown'}</Text>
+                  <Text style={styles.jobTitle}>{job.title}</Text>
+                  <View style={styles.jobDetails}>
+                    <Text style={styles.detailText}>₹{job.amount}</Text>
+                    <Text style={[styles.detailText, { color: '#00b894' }]}>
+                      Accepted {job.acceptedAt ? new Date(job.acceptedAt).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : 'today'}
+                    </Text>
+                  </View>
+                </View>
 
-        {loading ? (
-          <ActivityIndicator size="large" color="#1a2f4d" style={{ marginTop: 20 }} />
-        ) : jobsWithAttendance.length === 0 ? (
-          <Text style={styles.noDataText}>No workers marked attendance today</Text>
-        ) : (
-          jobsWithAttendance.map((job) => (
-            <View key={job._id} style={styles.workerCard}>
-              {/* Background bubbles for visual appeal */}
-              <View style={[styles.cardBubble, { position: 'absolute', left: 10, top: 10, backgroundColor: 'rgba(108, 92, 231, 0.08)' }]} />
-              <View style={[styles.cardBubble, { position: 'absolute', right: 10, bottom: 10, backgroundColor: 'rgba(0, 184, 148, 0.08)', width: 60, height: 60 }]} />
-              
-              <View style={styles.workerInfo}>
-                <Text style={styles.workerName}>{job.acceptedBy}</Text>
-                <Text style={styles.jobTitle}>{job.title}</Text>
-                <View style={styles.jobDetails}>
-                  <Text style={styles.detailText}>₹{job.amount}</Text>
-                  <Text
-                    style={[
-                      styles.detailText,
-                      {
-                        color:
-                          job.attendanceStatus === 'Present'
-                            ? '#00b894'
-                            : '#e17055',
-                      },
-                    ]}
-                  >
-                    {job.attendanceStatus}
-                  </Text>
+                <View style={styles.paymentBadge}>
+                  {job.paymentStatus === 'Paid' ? (
+                    <>
+                      <MaterialIcons name="check-circle" size={20} color="#00b894" />
+                      <Text style={{ color: '#00b894', fontWeight: '700' }}>Paid</Text>
+                    </>
+                  ) : (
+                    <>
+                      <MaterialIcons name="pending" size={20} color="#f39c12" />
+                      <Text style={{ color: '#f39c12', fontWeight: '700' }}>Pending</Text>
+                    </>
+                  )}
                 </View>
               </View>
-
-              <View style={styles.paymentBadge}>
-                {job.paymentStatus === 'Paid' ? (
-                  <>
-                    <MaterialIcons name="check-circle" size={20} color="#00b894" />
-                    <Text style={{ color: '#00b894', fontWeight: '700' }}>Paid</Text>
-                  </>
-                ) : (
-                  <>
-                    <MaterialIcons name="pending" size={20} color="#f39c12" />
-                    <Text style={{ color: '#f39c12', fontWeight: '700' }}>Pending</Text>
-                  </>
-                )}
-              </View>
-            </View>
-          ))
-        )}
-      </View>
+            ))
+          )}
+        </View>
+      )}
 
       {/* All Jobs Section */}
       <View style={styles.sectionContainer}>

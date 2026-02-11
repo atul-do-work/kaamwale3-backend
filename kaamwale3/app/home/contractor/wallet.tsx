@@ -78,6 +78,9 @@ export default function ContractorWalletAttendance() {
   const [razorpayHtml, setRazorpayHtml] = useState("");
   const [currentPaymentJobId, setCurrentPaymentJobId] = useState<string | null>(null);
 
+  // ✅ Pagination state for attendance cards
+  const [displayedCount, setDisplayedCount] = useState(5); // Show 5 cards initially
+
   // ✅ Razorpay deposit states
   const [depositModalVisible, setDepositModalVisible] = useState(false);
   const [depositModalHtml, setDepositModalHtml] = useState("");
@@ -1072,12 +1075,31 @@ export default function ContractorWalletAttendance() {
           {loading ? (
             <ActivityIndicator size="large" color="#1a2f4d" style={{ marginTop: 20 }} />
           ) : (
-            <FlatList
-              data={jobs}
-              keyExtractor={item => item._id.toString()}
-              renderItem={renderJob}
-              contentContainerStyle={{ paddingBottom: 50 }}
-            />
+            <View style={{ flex: 1 }}>
+              <FlatList
+                data={jobs.slice(0, displayedCount)} // ✅ Show only up to displayedCount
+                keyExtractor={item => item._id.toString()}
+                renderItem={renderJob}
+                contentContainerStyle={{ paddingBottom: 20 }}
+              />
+              
+              {/* ✅ See More Button - Show only if there are more items */}
+              {displayedCount < jobs.length && (
+                <TouchableOpacity
+                  style={{ 
+                    marginHorizontal: 16, 
+                    marginBottom: 20, 
+                    paddingVertical: 12, 
+                    backgroundColor: '#1a2f4d', 
+                    borderRadius: 8, 
+                    alignItems: 'center' 
+                  }}
+                  onPress={() => setDisplayedCount(prev => prev + 5)} // ✅ Load 5 more cards
+                >
+                  <Text style={{ color: '#fff', fontSize: 14, fontWeight: '600' }}>See More</Text>
+                </TouchableOpacity>
+              )}
+            </View>
           )}
         </>
       )}
