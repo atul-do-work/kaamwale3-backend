@@ -277,19 +277,19 @@ export default function DashboardScreen() {
           style={[styles.filterButton, dateRange === 'today' && styles.filterButtonActive]}
           onPress={() => handleDateRangeChange('today')}
         >
-          <Text style={[styles.filterText, dateRange === 'today' && styles.filterTextActive]}>Today</Text>
+          <Text style={[styles.filterText, dateRange === 'today' && styles.filterTextActive]}>{t('today')}</Text>
         </TouchableOpacity>
         <TouchableOpacity
           style={[styles.filterButton, dateRange === 'week' && styles.filterButtonActive]}
           onPress={() => handleDateRangeChange('week')}
         >
-          <Text style={[styles.filterText, dateRange === 'week' && styles.filterTextActive]}>This Week</Text>
+          <Text style={[styles.filterText, dateRange === 'week' && styles.filterTextActive]}>Week</Text>
         </TouchableOpacity>
         <TouchableOpacity
           style={[styles.filterButton, dateRange === 'month' && styles.filterButtonActive]}
           onPress={() => handleDateRangeChange('month')}
         >
-          <Text style={[styles.filterText, dateRange === 'month' && styles.filterTextActive]}>This Month</Text>
+          <Text style={[styles.filterText, dateRange === 'month' && styles.filterTextActive]}>Month</Text>
         </TouchableOpacity>
       </View>
 
@@ -300,7 +300,7 @@ export default function DashboardScreen() {
           <View style={[styles.cardBubble, { position: 'absolute', right: -15, bottom: -15, width: 80, height: 80, backgroundColor: 'rgba(255, 255, 255, 0.1)' }]} />
           <MaterialIcons name="assignment" size={32} color="#fff" />
           <Text style={styles.statValue}>{stats?.totalJobsPosted || 0}</Text>
-          <Text style={styles.statLabel}>Jobs Posted</Text>
+          <Text style={styles.statLabel}>{t('jobsPosted')}</Text>
         </LinearGradient>
 
         <LinearGradient colors={['#1a2f4d', '#22344eff']} style={styles.statCard}>
@@ -376,10 +376,10 @@ export default function DashboardScreen() {
 
       {/* All Jobs Section */}
       <View style={styles.sectionContainer}>
-        <Text style={styles.sectionTitle}>All Posted Jobs</Text>
+        <Text style={styles.sectionTitle}>{t('allPostedJobs')}</Text>
 
         {jobs.length === 0 ? (
-          <Text style={styles.noDataText}>No jobs posted yet</Text>
+          <Text style={styles.noDataText}>{t('noJobsPostedYet')}</Text>
         ) : (
           jobs.map((job) => (
             <TouchableOpacity key={job._id} style={styles.jobCard} onPress={() => handleJobCardClick(job)}>

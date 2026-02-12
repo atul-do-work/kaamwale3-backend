@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { View, Text, TextInput, TouchableOpacity, Alert, StatusBar, ActivityIndicator } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
@@ -7,6 +7,7 @@ import { API_BASE } from '../utils/config';
 import styles from '../styles/RegisterScreenStyles';
 import { registerForPushNotificationsAsync } from '../services/notification';
 import { useLanguage } from '../context/LanguageContext';
+import { useAuth } from '../context/AuthContext';
 
 type User = {
   name: string;
@@ -41,6 +42,7 @@ async function waitForFcmToken(timeoutMs = 8000) {
 export default function Register() {
   const router = useRouter();
   const { t } = useLanguage();
+  const { accessToken, user, loading: authLoading } = useAuth();
   const [name, setName] = useState('');
   const [phone, setPhone] = useState('');
   const [password, setPassword] = useState('');
@@ -48,6 +50,14 @@ export default function Register() {
   const [role, setRole] = useState<'worker' | 'contractor'>('worker');
   const [isLoading, setIsLoading] = useState(false);
   const [agreedToTerms, setAgreedToTerms] = useState(false);
+
+  // ✅ FIX: Check if user is already logged in and redirect
+  useEffect(() => {
+    if (!authLoading && accessToken && user) {
+      console.log('✅ [Register] User already logged in, redirecting to /home');
+      router.replace('/home');
+    }
+  }, [accessToken, user, authLoading, router]);
 
   const handleRegister = async () => {
     if (!name || !phone || !password)

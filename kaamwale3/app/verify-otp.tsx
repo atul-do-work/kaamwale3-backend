@@ -8,10 +8,18 @@ import styles from '../styles/LoginScreenStyles';
 
 export default function VerifyOtpScreen() {
   const router = useRouter();
-  const { saveTokens } = useAuth();
+  const { saveTokens, accessToken, user, loading: authLoading } = useAuth();
   const [phone, setPhone] = useState<string>('');
   const [otp, setOtp] = useState<string>('');
   const [loading, setLoading] = useState(false);
+
+  // ✅ FIX: Check if user is already logged in and redirect
+  useEffect(() => {
+    if (!authLoading && accessToken && user) {
+      console.log('✅ [VerifyOTP] User already logged in, redirecting to /home');
+      router.replace('/home');
+    }
+  }, [accessToken, user, authLoading, router]);
 
   useEffect(() => {
     (async () => {

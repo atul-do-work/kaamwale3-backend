@@ -8,7 +8,7 @@ import * as ImagePicker from "expo-image-picker";
 import { API_BASE } from "../../../utils/config";
 import { clearAllUserData } from "../../../utils/socket";
 import { useAuth } from "../../../context/AuthContext";
-import { useLanguage } from '../../../utils/auth';
+import { useLanguage } from '../../../context/LanguageContext';
 import api from '../../../utils/api';
 import { StyleSheet } from "react-native";
 
@@ -221,7 +221,7 @@ const styles = StyleSheet.create({
 
 export default function ContractorProfile(): React.ReactElement {
   const { t } = useLanguage();
-  const { accessToken, user: authUser } = useAuth();
+  const { accessToken, user: authUser, logout } = useAuth();
   const [userName, setUserName] = useState<string>("Contractor");
   const [contractorId, setContractorId] = useState<string>("0000");
   const [profilePhoto, setProfilePhoto] = useState<string | null>(null);
@@ -299,8 +299,10 @@ export default function ContractorProfile(): React.ReactElement {
         style: "destructive",
         onPress: async () => {
           try {
-            // ✅ Comprehensive cleanup including socket
+            // ✅ Clear socket state
             await clearAllUserData();
+            // ✅ Clear AuthContext state (CRITICAL - this clears AsyncStorage and state)
+            await logout();
             router.replace("/");
           } catch (err) {
             console.error("Error logging out", err);

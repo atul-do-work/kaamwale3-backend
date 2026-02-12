@@ -21,6 +21,7 @@ import { API_BASE } from "../../../utils/config";
 import { clearAllUserData } from "../../../utils/socket";
 import ReferralModal from "../../../components/ReferralModal";
 import { useLanguage } from "../../../context/LanguageContext";
+import { useAuth } from "../../../context/AuthContext";
 
 const MAIN_SKILLS = ['Labour', 'Mason', 'Engineer', 'ITI/Technician'];
 const WAGE_RANGES = [
@@ -31,6 +32,7 @@ const WAGE_RANGES = [
 
 export default function Profile(): React.ReactElement {
   const { t } = useLanguage();
+  const { logout } = useAuth();
   const [userName, setUserName] = useState<string>("Worker");
   const [workerId, setWorkerId] = useState<string>("0000");
   const [profilePhoto, setProfilePhoto] = useState<string | null>(null);
@@ -198,8 +200,10 @@ export default function Profile(): React.ReactElement {
         style: "destructive",
         onPress: async () => {
           try {
-            // ✅ Comprehensive cleanup including socket
+            // ✅ Clear socket state
             await clearAllUserData();
+            // ✅ Clear AuthContext state (CRITICAL - this clears AsyncStorage and state)
+            await logout();
             router.replace("/");
           } catch (err) {
             console.error("Failed to logout", err);

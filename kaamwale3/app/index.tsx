@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import {
   View,
   Text,
@@ -15,15 +15,25 @@ import { useRouter } from "expo-router";
 import * as Location from 'expo-location';
 import styles from "../styles/LoginScreenStyles";
 import { useLanguage } from '../context/LanguageContext';
+import { useAuth } from '../context/AuthContext';
 //*******************2nd step */
 
 export default function LoginScreen() {
   const router = useRouter();
   const { t } = useLanguage();
+  const { saveTokens, accessToken, user, loading: authLoading } = useAuth();
   const [phone, setPhone] = useState("");
   const [password, setPassword] = useState("");
   const [passwordVisible, setPasswordVisible] = useState(false);
   const [loading, setLoading] = useState(false);
+
+  // ✅ FIX: Check if user is already logged in when screen mounts
+  useEffect(() => {
+    if (!authLoading && accessToken && user) {
+      console.log('✅ [Login] User already logged in, redirecting to /home');
+      router.replace('/home');
+    }
+  }, [accessToken, user, authLoading, router]);
 
   const handleLogin = async () => {
     if (!phone || !password) {
@@ -119,6 +129,9 @@ export default function LoginScreen() {
       }
 
       await AsyncStorage.setItem("user", JSON.stringify(data.user)); // save user object
+      
+      // ✅ FIX: Update AuthContext state immediately
+      await saveTokens(accessToken, refreshToken, data.user);
       
       console.log(`✅ Login successful for ${data.user.role}: ${data.user.phone}`);
 

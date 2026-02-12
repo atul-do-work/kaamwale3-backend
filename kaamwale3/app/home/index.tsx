@@ -9,10 +9,16 @@ import { View, ActivityIndicator, TouchableOpacity, Text } from 'react-native';
  * The _layout.tsx should NOT do role checking to avoid race conditions
  */
 export default function HomeIndex() {
-  const { user, accessToken } = useAuth();
+  const { user, accessToken, loading } = useAuth();
   const [redirect, setRedirect] = useState<string | null>(null);
 
   useEffect(() => {
+    // ✅ FIX: Wait for AuthProvider to finish loading tokens before making decisions
+    if (loading) {
+      console.log('⏳ [HomeIndex] Waiting for auth to load...');
+      return; // Don't redirect while loading
+    }
+
     if (!accessToken) {
       console.log('→ [HomeIndex] No accessToken, redirecting to login');
       setRedirect('/');
@@ -37,7 +43,7 @@ export default function HomeIndex() {
       console.warn(`⚠️ [HomeIndex] Unknown role: ${user.role}`);
       setRedirect('/');
     }
-  }, [user, accessToken]);
+  }, [user, accessToken, loading]);
 
   // Redirect to worker home
   if (redirect === '/home/worker') {

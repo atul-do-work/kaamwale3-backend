@@ -48,11 +48,17 @@ export default function RootLayout() {
                 },
                 body: JSON.stringify({ fcmToken })
               });
-              const data = await response.json();
-              if (data.success) {
-                console.log('✅ Backend FCM token updated on startup');
+              
+              // ✅ FIX: Check response status before parsing JSON
+              if (response.ok) {
+                const data = await response.json();
+                if (data.success) {
+                  console.log('✅ Backend FCM token updated on startup');
+                } else {
+                  console.warn('⚠️ Backend returned error:', data.message);
+                }
               } else {
-                console.warn('⚠️ Failed to update backend FCM token:', data.message);
+                console.warn('⚠️ Backend request failed with status:', response.status);
               }
             }
           } catch (err) {
