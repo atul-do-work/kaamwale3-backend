@@ -31,6 +31,7 @@ interface Notification {
 
 export default function NotificationHistoryScreen(): React.ReactElement {
   const router = useRouter();
+  const { t } = require('../context/LanguageContext').useLanguage();
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -43,7 +44,7 @@ export default function NotificationHistoryScreen(): React.ReactElement {
     try {
       const storedToken = await AsyncStorage.getItem("token");
       if (!storedToken) {
-        Alert.alert("Error", "No authentication token found");
+        Alert.alert(t('error'), t('noAuthTokenFound'));
         return;
       }
 
@@ -73,11 +74,11 @@ export default function NotificationHistoryScreen(): React.ReactElement {
         setUnreadCount(data.unreadCount || 0);
         console.log(`📬 Loaded ${data.notifications.length} notifications`);
       } else {
-        Alert.alert("Error", data.message || "Failed to load notifications");
+        Alert.alert(t('error'), data.message || t('failedToLoadNotifications'));
       }
     } catch (error) {
       console.error("Fetch notifications error:", error);
-      Alert.alert("Error", "Failed to load notifications");
+      Alert.alert(t('error'), t('failedToLoadNotifications'));
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -138,9 +139,9 @@ export default function NotificationHistoryScreen(): React.ReactElement {
       if (!token) return;
 
       Alert.alert("Mark All as Read?", "Are you sure?", [
-        { text: "Cancel", style: "cancel" },
+        { text: t('cancel'), style: "cancel" },
         {
-          text: "Yes",
+          text: t('yes'),
           onPress: async () => {
             const response = await fetch(`${SERVER_URL}/notifications/read-all`, {
               method: "PUT",
@@ -161,7 +162,7 @@ export default function NotificationHistoryScreen(): React.ReactElement {
                 }))
               );
               setUnreadCount(0);
-              Alert.alert("Success", "All notifications marked as read");
+              Alert.alert(t('success'), t('allNotificationsMarkedAsRead'));
               console.log("✅ All notifications marked as read");
             }
           },
@@ -240,7 +241,7 @@ export default function NotificationHistoryScreen(): React.ReactElement {
     return (
       <View style={styles.centerContainer}>
         <ActivityIndicator size="large" color="#1a2f4d" />
-        <Text style={styles.loadingText}>Loading notifications...</Text>
+        <Text style={styles.loadingText}>{t('loadingNotifications')}</Text>
       </View>
     );
   }
@@ -254,6 +255,7 @@ export default function NotificationHistoryScreen(): React.ReactElement {
             <Ionicons name="arrow-back" size={24} color="#fff" />
           </TouchableOpacity>
           <Text style={styles.headerTitle}>Notifications</Text>
+                    <Text style={styles.headerTitle}>{t('notifications')}</Text>
           <View style={styles.headerRight}>
             {unreadCount > 0 && (
               <View style={styles.badgeCircle}>
@@ -280,7 +282,7 @@ export default function NotificationHistoryScreen(): React.ReactElement {
                 filter === "all" && styles.filterTextActive,
               ]}
             >
-              All
+              {t('all')}
             </Text>
           </TouchableOpacity>
           <TouchableOpacity
@@ -296,7 +298,7 @@ export default function NotificationHistoryScreen(): React.ReactElement {
                 filter === "unread" && styles.filterTextActive,
               ]}
             >
-              Unread ({unreadCount})
+              {t('unread')} ({unreadCount})
             </Text>
           </TouchableOpacity>
         </View>
@@ -313,6 +315,7 @@ export default function NotificationHistoryScreen(): React.ReactElement {
             >
               <Ionicons name="checkmark-done" size={18} color="#1a2f4d" />
               <Text style={styles.markAllText}>Mark all as read</Text>
+                          <Text style={styles.markAllText}>{t('markAllAsRead')}</Text>
             </TouchableOpacity>
           )}
 
@@ -341,10 +344,11 @@ export default function NotificationHistoryScreen(): React.ReactElement {
             color="#D1D5DB"
           />
           <Text style={styles.emptyTitle}>No Notifications</Text>
+                    <Text style={styles.emptyTitle}>{t('noNotifications')}</Text>
           <Text style={styles.emptyText}>
             {filter === "unread"
-              ? "You're all caught up! No unread notifications."
-              : "You don't have any notifications yet."}
+              ? t('allCaughtUpNoUnread')
+              : t('noNotificationsYet')}
           </Text>
         </View>
       )}

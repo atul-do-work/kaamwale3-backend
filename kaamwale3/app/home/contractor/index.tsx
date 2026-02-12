@@ -9,6 +9,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { socket } from '../../../utils/socket';
 import { SERVER_URL } from '../../../utils/config';
 import PremiumPlansModal from '../../../components/PremiumPlansModal';
+import { useLanguage } from '../../../context/LanguageContext';
 import styles from '../../../styles/ContractorHomeStyles';
 const bannerImage = require('../../../assets/discount.jpg');
 // @ts-ignore - Image files are properly located in assets folder
@@ -16,6 +17,7 @@ const profile = require('../../../assets/oip2.jpg');
 
 export default function ContractorHome() {
   const router = useRouter();
+  const { t } = useLanguage();
   const [token, setToken] = React.useState<string>('');
   const [premiumModalVisible, setPremiumModalVisible] = React.useState(false);
   const [hasPremium, setHasPremium] = React.useState(false);
@@ -183,13 +185,13 @@ export default function ContractorHome() {
   );
 
   const topCards = [
-    { id: 1, icon: 'work', amount: postedCount.toString(), label: 'Jobs Posted' },
-    { id: 2, icon: 'check-circle', amount: jobsDoneCount.toString(), label: 'Completed' },
+    { id: 1, icon: 'work', amount: postedCount.toString(), label: t('jobsPosted') },
+    { id: 2, icon: 'check-circle', amount: jobsDoneCount.toString(), label: t('jobsCompleted') },
     { id: 3, icon: 'people', amount: workersEngaged.toString(), label: 'Workers' },
     { id: 4, icon: 'attach-money', amount: `₹${totalSpending}`, label: 'Spending' },
   ];
 
-  const bottomCard = { id: 3, icon: 'dashboard', amount: '', label: 'Dashboard' };
+  const bottomCard = { id: 3, icon: 'dashboard', amount: '', label: t('dashboard') };
 
   // Leaderboard is now populated from state in useFocusEffect
 
@@ -367,7 +369,7 @@ export default function ContractorHome() {
       >
         <View style={styles.headerContent}>
           <View>
-            <Text style={styles.dashboardText}>Dashboard</Text>
+            <Text style={styles.dashboardText}>{t('dashboard')}</Text>
             <Text style={styles.greetingText}>{getGreeting()}, {userName}</Text>
           </View>
           <TouchableOpacity 

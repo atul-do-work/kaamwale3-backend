@@ -14,10 +14,12 @@ import { API_BASE } from '../utils/config';
 import { useRouter } from "expo-router";
 import * as Location from 'expo-location';
 import styles from "../styles/LoginScreenStyles";
+import { useLanguage } from '../context/LanguageContext';
 //*******************2nd step */
 
 export default function LoginScreen() {
   const router = useRouter();
+  const { t } = useLanguage();
   const [phone, setPhone] = useState("");
   const [password, setPassword] = useState("");
   const [passwordVisible, setPasswordVisible] = useState(false);
@@ -25,14 +27,14 @@ export default function LoginScreen() {
 
   const handleLogin = async () => {
     if (!phone || !password) {
-      Alert.alert("Missing Details", "Please enter phone and password");
+      Alert.alert(t('required'), t('required'));
       return;
     }
 
     // Validate phone (10 digits)
     const phoneTrim = phone.trim();
     if (!/^\d{10}$/.test(phoneTrim)) {
-      Alert.alert('Invalid Phone', 'Phone number must be exactly 10 digits');
+      Alert.alert(t('invalidPhone'), t('invalidPhone'));
       return;
     }
 
@@ -120,7 +122,7 @@ export default function LoginScreen() {
       
       console.log(`✅ Login successful for ${data.user.role}: ${data.user.phone}`);
 
-      Alert.alert("Success", `Logged in as ${data.user.role}`);
+      Alert.alert(t('success'), `Logged in as ${data.user.role}`);
 
       // ------------------------
       //  NAVIGATION BASED ON ROLE
@@ -131,7 +133,7 @@ export default function LoginScreen() {
       router.replace("/home");
     } catch (error) {
       console.error("Login error:", error);
-      Alert.alert("Error", (error as Error).message || "Server not responding");
+      Alert.alert(t('error'), (error as Error).message || "Server not responding");
     } finally {
       setLoading(false);
     }
@@ -140,12 +142,12 @@ export default function LoginScreen() {
   return (
     <View style={styles.container}>
       <StatusBar barStyle="light-content" />
-      <Text style={styles.title}>Welcome Back</Text>
-      <Text style={styles.subtitle}>Login to your account</Text>
+      <Text style={styles.title}>{t('login')}</Text>
+      <Text style={styles.subtitle}>{t('login')} to your account</Text>
 
       <TextInput
         style={styles.input}
-        placeholder="Phone Number"
+        placeholder={t('phone')}
         keyboardType="phone-pad"
         value={phone}
         onChangeText={setPhone}
@@ -155,7 +157,7 @@ export default function LoginScreen() {
       <View style={styles.passwordContainer}>
         <TextInput
           style={styles.passwordInput}
-          placeholder="Password"
+          placeholder={t('password')}
           secureTextEntry={!passwordVisible}
           value={password}
           onChangeText={setPassword}
@@ -177,7 +179,7 @@ export default function LoginScreen() {
         {loading ? (
           <ActivityIndicator size="small" color="#fff" />
         ) : (
-          <Text style={styles.buttonText}>Login</Text>
+          <Text style={styles.buttonText}>{t('login')}</Text>
         )}
       </TouchableOpacity>
 
@@ -186,7 +188,7 @@ export default function LoginScreen() {
         onPress={() => router.push("/register")}
       >
         <Text style={styles.registerText}>
-          Don't have an account? Register
+          Don't have an account? {t('register')}
         </Text>
       </TouchableOpacity>
     </View>

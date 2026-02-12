@@ -20,6 +20,7 @@ import axios from "axios";
 import { API_BASE } from "../../../utils/config";
 import { clearAllUserData } from "../../../utils/socket";
 import ReferralModal from "../../../components/ReferralModal";
+import { useLanguage } from "../../../context/LanguageContext";
 
 const MAIN_SKILLS = ['Labour', 'Mason', 'Engineer', 'ITI/Technician'];
 const WAGE_RANGES = [
@@ -29,6 +30,7 @@ const WAGE_RANGES = [
 ];
 
 export default function Profile(): React.ReactElement {
+  const { t } = useLanguage();
   const [userName, setUserName] = useState<string>("Worker");
   const [workerId, setWorkerId] = useState<string>("0000");
   const [profilePhoto, setProfilePhoto] = useState<string | null>(null);
@@ -113,7 +115,7 @@ export default function Profile(): React.ReactElement {
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (status !== "granted") {
       Alert.alert(
-        "Permission denied",
+        t('warning'),
         "Camera roll permission is required to select a profile photo."
       );
       return;
@@ -134,7 +136,7 @@ export default function Profile(): React.ReactElement {
       try {
         const userToken = await AsyncStorage.getItem("token");
         if (!userToken) {
-          Alert.alert("Error", "No auth token found");
+          Alert.alert(t('error'), t('photoUploadError'));
           return;
         }
 
@@ -162,10 +164,10 @@ export default function Profile(): React.ReactElement {
           console.log("✅ Saving profile photo URL:", response.data.profilePhoto);
           setProfilePhoto(response.data.profilePhoto);
           await AsyncStorage.setItem("profilePhoto", response.data.profilePhoto);
-          Alert.alert("Success", "Profile photo updated!");
+          Alert.alert(t('success'), t('profilePhotoUpdated'));
         } else {
           console.log("❌ Invalid response:", response.data);
-          Alert.alert("Error", "Server returned invalid response");
+          Alert.alert(t('error'), t('serverError'));
           const savedPhoto = await AsyncStorage.getItem("profilePhoto");
           if (savedPhoto) setProfilePhoto(savedPhoto);
         }
@@ -176,8 +178,8 @@ export default function Profile(): React.ReactElement {
         console.error("❌ Error message:", err.message);
         
         Alert.alert(
-          "Upload failed",
-          err?.response?.data?.message || err.message || "Could not upload profile photo. Please check your internet connection and try again."
+          t('error'),
+          err?.response?.data?.message || err.message || t('photoUploadError')
         );
         
         // Revert to previously saved photo
@@ -189,7 +191,7 @@ export default function Profile(): React.ReactElement {
   };
 
   const handleLogout = async () => {
-    Alert.alert("Logout", "Are you sure you want to logout?", [
+    Alert.alert(t('logout'), t('confirmLogout'), [
       { text: "Cancel", style: "cancel" },
       {
         text: "Logout",
@@ -215,7 +217,7 @@ export default function Profile(): React.ReactElement {
 
   const handleSaveProfile = async () => {
     if (!selectedSkill || !selectedWage) {
-      Alert.alert("Error", "Please select both skill and wage range");
+      Alert.alert(t('error'), t('selectSkillWage'));
       return;
     }
 
@@ -244,13 +246,13 @@ export default function Profile(): React.ReactElement {
           await AsyncStorage.setItem("user", JSON.stringify(user));
         }
         
-        Alert.alert("Success", "Profile updated successfully!");
+        Alert.alert(t('success'), t('profileUpdated'));
         setMenuModalVisible(false);
         setShowMenu(false);
       }
     } catch (err: any) {
       console.error("Profile update error:", err);
-      Alert.alert("Error", err?.response?.data?.message || "Failed to update profile");
+      Alert.alert(t('error'), err?.response?.data?.message || t('failedUpdateProfile'));
     }
   };
 

@@ -22,6 +22,7 @@ import { useFocusEffect } from "@react-navigation/native"; // ✅ ADDED for clos
 import { SERVER_URL, API_BASE } from "../../../utils/config";
 import styles from "../../../styles/ContractorWalletStyles";
 import { socket } from "../../../utils/socket";
+import { useLanguage } from "../../../context/LanguageContext";
 
 // Wallet cards data
 const walletCards = [
@@ -52,6 +53,7 @@ interface Job {
 
 export default function ContractorWalletAttendance() {
   const [activeTab, setActiveTab] = useState<"Wallet" | "Attendance">("Wallet");
+  const { t } = useLanguage();
   const [jobs, setJobs] = useState<Job[]>([]);
   const [loading, setLoading] = useState(true);
   const [contractorName, setContractorName] = useState<string>("");
@@ -228,12 +230,12 @@ export default function ContractorWalletAttendance() {
       const data = await res.json();
 
       if (res.ok && data.success) {
-        Alert.alert("Success", "Payment successful!");
+        Alert.alert(t('success'), t('paymentSuccessful'));
         setJobs(prev => prev.map(job => (job._id === jobId ? { ...job, paymentStatus: "Paid" } : job)));
         socket.emit("jobUpdated");
         socket.emit("walletUpdated", walletBalance);
       } else {
-        Alert.alert("Error", data.message || "Payment failed");
+        Alert.alert(t('error'), data.message || t('paymentFailed'));
       }
     } catch (err) {
       console.error("Payment failed:", err);
@@ -255,7 +257,7 @@ export default function ContractorWalletAttendance() {
   const initiateRazorpayPayment = async (jobId: string) => {
     try {
       const job = jobs.find(j => j._id === jobId);
-      if (!job) return Alert.alert("Error", "Job not found");
+      if (!job) return Alert.alert(t('error'), t('jobNotFound'));
 
       // Step 1: Create order on backend
       const orderResponse = await fetch(`${SERVER_URL}/api/payment/create-order`, {
@@ -274,7 +276,7 @@ export default function ContractorWalletAttendance() {
 
       const orderData = await orderResponse.json();
       if (!orderData.success) {
-        return Alert.alert("Error", "Failed to create payment order");
+        return Alert.alert(t('error'), t('failedCreatePayment'));
       }
 
       // Step 2: Create Razorpay checkout HTML
@@ -335,7 +337,7 @@ export default function ContractorWalletAttendance() {
       setCurrentPaymentJobId(jobId);
       setRazorpayModalVisible(true);
     } catch (error) {
-      Alert.alert("Error", "Failed to initiate payment");
+      Alert.alert(t('error'), t('failedPayment'));
       console.error("Payment initiation failed:", error);
     }
   };
@@ -349,7 +351,7 @@ export default function ContractorWalletAttendance() {
         await verifyRazorpayPayment(data);
       } else if (data.type === 'payment_failed') {
         setRazorpayModalVisible(false);
-        Alert.alert("Payment Failed", data.error || "Payment cancelled");
+        Alert.alert(t('error'), data.error || t('paymentCancelled'));
       }
     } catch (error) {
       console.error("Error handling Razorpay response:", error);
@@ -390,7 +392,7 @@ export default function ContractorWalletAttendance() {
 
       // Check HTTP status AND response success flag
       if (verifyResponse.ok && verifyData.success) {
-        Alert.alert("Success", "Payment successful! Amount added to worker's wallet");
+        Alert.alert(t('success'), t('paymentSuccessful') + "! " + t('paymentSuccessful'));
         setJobs(prev => prev.map(j => (j._id === currentPaymentJobId ? { ...j, paymentStatus: "Paid" } : j)));
         
         // ✅ Emit events to notify worker
@@ -404,11 +406,11 @@ export default function ContractorWalletAttendance() {
         socket.emit("walletUpdated", walletBalance);
         setCurrentPaymentJobId(null);
       } else {
-        Alert.alert("Error", verifyData.message || "Payment verification failed");
+        Alert.alert(t('error'), verifyData.message || t('paymentFailed'));
       }
     } catch (error) {
       setRazorpayModalVisible(false);
-      Alert.alert("Error", "Payment verification failed");
+      Alert.alert(t('error'), t('paymentFailed'));
       console.error("Verification error:", error);
     }
   };
@@ -440,7 +442,7 @@ export default function ContractorWalletAttendance() {
       const data = await response.json();
 
       if (response.ok) {
-        Alert.alert("Success", "Rating submitted successfully!");
+        Alert.alert(t('success'), t('ratingSubmitted'));
         setRatingModalVisible(false);
         // Update the job in state to reflect the rating
         setJobs(prev => prev.map(job => 
@@ -449,10 +451,10 @@ export default function ContractorWalletAttendance() {
             : job
         ));
       } else {
-        Alert.alert("Error", data.message || "Failed to submit rating");
+        Alert.alert(t('error'), data.message || t('failedSubmitRating'));
       }
     } catch (error) {
-      Alert.alert("Error", "Failed to submit rating");
+      Alert.alert(t('error'), t('failedSubmitRating'));
       console.error(error);
     } finally {
       setSubmittingRating(false);
@@ -492,7 +494,7 @@ export default function ContractorWalletAttendance() {
   // DEPOSIT
   const handleDeposit = async () => {
     const amt = Number(depositAmount);
-    if (!amt || amt <= 0) return Alert.alert("Error", "Enter valid deposit amount");
+    if (!amt || amt <= 0) return Alert.alert(t('error'), t('enterValidDeposit'));
 
     try {
       const res = await fetch(`${SERVER_URL}/wallet/deposit`, {
@@ -506,22 +508,22 @@ export default function ContractorWalletAttendance() {
       try { data = raw ? JSON.parse(raw) : undefined; } catch { console.warn('handleDeposit: non-JSON response', raw); }
 
       if (res.ok && data && data.success) {
-        Alert.alert("Success", "Deposit successful");
+        Alert.alert(t('success'), t('depositSuccessful'));
         setWalletBalance(data.wallet.balance);
         setDepositAmount("");
         setShowDepositInput(false);
         socket.emit("walletUpdated", data.wallet.balance);
       }
     } catch {
-      Alert.alert("Error", "Deposit failed");
+      Alert.alert(t('error'), t('depositFailed'));
     }
   };
 
   // WITHDRAW
   const handleWithdraw = async () => {
     const amt = Number(withdrawAmount);
-    if (!amt || amt <= 0) return Alert.alert("Error", "Enter valid withdraw amount");
-    if (amt > walletBalance) return Alert.alert("Error", "Insufficient balance");
+    if (!amt || amt <= 0) return Alert.alert(t('error'), t('enterValidWithdraw'));
+    if (amt > walletBalance) return Alert.alert(t('error'), t('insufficientBalance'));
 
     try {
       const res = await fetch(`${SERVER_URL}/wallet/withdraw`, {
@@ -535,14 +537,14 @@ export default function ContractorWalletAttendance() {
       try { data = raw ? JSON.parse(raw) : undefined; } catch { console.warn('handleWithdraw: non-JSON response', raw); }
 
       if (res.ok && data && data.success) {
-        Alert.alert("Success", "Withdraw successful");
+        Alert.alert(t('success'), t('withdrawSuccessful'));
         setWalletBalance(data.wallet.balance);
         setWithdrawAmount("");
         setShowWithdrawInput(false);
         socket.emit("walletUpdated", data.wallet.balance);
       }
     } catch {
-      Alert.alert("Error", "Withdraw failed");
+      Alert.alert(t('error'), t('withdrawFailed'));
     }
   };
 
@@ -567,27 +569,27 @@ export default function ContractorWalletAttendance() {
   const handleAddBankAccount = async () => {
     // Validation
     if (!bankDetails.accountHolderName.trim()) {
-      Alert.alert("Error", "Please enter account holder name");
+      Alert.alert(t('error'), t('enterAccountHolderName'));
       return;
     }
 
     if (bankDetails.accountNumber.length < 9 || bankDetails.accountNumber.length > 18) {
-      Alert.alert("Error", "Account number must be 9-18 digits");
+      Alert.alert(t('error'), t('invalidAccountNumber'));
       return;
     }
 
     if (bankDetails.accountNumber !== bankDetails.accountNumberConfirm) {
-      Alert.alert("Error", "Account numbers do not match");
+      Alert.alert(t('error'), t('accountMismatch'));
       return;
     }
 
     if (bankDetails.ifscCode.length !== 11) {
-      Alert.alert("Error", "IFSC code must be exactly 11 characters");
+      Alert.alert(t('error'), t('invalidIFSC'));
       return;
     }
 
     if (!bankDetails.bankName.trim()) {
-      Alert.alert("Error", "Please enter bank name");
+      Alert.alert(t('error'), t('enterBankName'));
       return;
     }
 
@@ -627,19 +629,19 @@ export default function ContractorWalletAttendance() {
         );
       }
     } catch (err: any) {
-      Alert.alert("Error", err.response?.data?.message || "Failed to add bank account");
+      Alert.alert(t('error'), err.response?.data?.message || t('failedAddBank'));
     }
   };
 
   // ✅ Confirm Deposit with Razorpay
   const confirmDeposit = async () => {
     if (!depositAmount || Number(depositAmount) <= 0) {
-      Alert.alert("Error", "Enter a valid amount to deposit");
+      Alert.alert(t('error'), t('enterValidAmount'));
       return;
     }
     
     if (Number(depositAmount) < 100) {
-      Alert.alert("Error", "Minimum deposit is ₹100");
+      Alert.alert(t('error'), t('minimumDeposit'));
       return;
     }
 
@@ -654,7 +656,7 @@ export default function ContractorWalletAttendance() {
       );
 
       if (!orderRes.data.success) {
-        Alert.alert("Error", "Failed to create deposit order");
+        Alert.alert(t('error'), t('failedCreateOrder'));
         return;
       }
 
@@ -719,7 +721,7 @@ export default function ContractorWalletAttendance() {
       setCurrentDepositAmount(Number(depositAmount));
       setCurrentDepositOrderId(orderId);
     } catch (err: any) {
-      Alert.alert("Error", err.response?.data?.message || "Failed to initiate deposit");
+      Alert.alert(t('error'), err.response?.data?.message || t('failedInitiateDeposit'));
     }
   };
 
@@ -733,7 +735,7 @@ export default function ContractorWalletAttendance() {
         await verifyDeposit(data);
       } else if (data.type === "deposit_failed") {
         setDepositModalVisible(false);
-        Alert.alert("Payment Failed", data.error || "Deposit cancelled");
+        Alert.alert(t('error'), data.error || t('depositCancelled'));
       }
     } catch (error) {
       console.error("Error handling deposit response:", error);
@@ -760,30 +762,30 @@ export default function ContractorWalletAttendance() {
 
       if (res.data.success) {
         setWalletBalance(res.data.walletBalance);
-        Alert.alert("Success", `₹${currentDepositAmount} deposited to your wallet!`);
+        Alert.alert(t('success'), `₹${currentDepositAmount} ` + t('deposited'));
         setDepositAmount("");
         setShowDepositInput(false);
         
         // Refresh wallet
         if (savedToken) fetchWallet(savedToken);
       } else {
-        Alert.alert("Error", res.data.message || "Deposit verification failed");
+        Alert.alert(t('error'), res.data.message || t('depositVerificationFailed'));
       }
     } catch (err: any) {
       setDepositModalVisible(false);
-      Alert.alert("Error", err.response?.data?.message || "Deposit verification failed");
+      Alert.alert(t('error'), err.response?.data?.message || t('depositVerificationFailed'));
     }
   };
 
   // ✅ Confirm Withdraw
   const confirmWithdraw = async () => {
     if (!withdrawAmount || Number(withdrawAmount) <= 0) {
-      Alert.alert("Error", "Enter a valid amount to withdraw");
+      Alert.alert(t('error'), t('enterValidWithdrawAmount'));
       return;
     }
 
     if (Number(withdrawAmount) < 100) {
-      Alert.alert("Error", "Minimum withdrawal is ₹100");
+      Alert.alert(t('error'), t('minimumWithdraw'));
       return;
     }
 
@@ -808,7 +810,7 @@ export default function ContractorWalletAttendance() {
     try {
       const savedToken = await AsyncStorage.getItem("token");
       if (!savedToken) {
-        Alert.alert("Error", "Authentication token not found");
+        Alert.alert(t('error'), t('tokenNotFound'));
         return;
       }
       const res = await axios.post(
@@ -819,7 +821,7 @@ export default function ContractorWalletAttendance() {
 
       if (res.data.success) {
         setWalletBalance(res.data.walletBalance);
-        Alert.alert("Success", `Withdrawal of ₹${withdrawAmount} initiated!\n\nAmount will be transferred to your bank account within 2-4 hours.`);
+        Alert.alert(t('success'), t('withdrawalInitiated') + "!\n\n" + t('amountTransferred'));
         setWithdrawAmount("");
         setShowWithdrawInput(false);
         
@@ -827,8 +829,8 @@ export default function ContractorWalletAttendance() {
         if (savedToken) fetchWallet(savedToken);
       }
     } catch (err: any) {
-      const errorMsg = err.response?.data?.message || "Withdrawal failed";
-      Alert.alert("Error", errorMsg);
+      const errorMsg = err.response?.data?.message || t('withdrawFailed');
+      Alert.alert(t('error'), errorMsg);
     }
   };
 

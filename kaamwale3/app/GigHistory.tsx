@@ -16,6 +16,7 @@ import { useRouter } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { API_BASE } from '../utils/config';
 import { LinearGradient } from 'expo-linear-gradient';
+import { useLanguage } from '../context/LanguageContext';
 
 const { width } = Dimensions.get('window');
 
@@ -83,6 +84,7 @@ interface Milestone {
 
 export default function GigHistory() {
   const router = useRouter();
+  const { t } = useLanguage();
   const [gigs, setGigs] = useState<GigHistory[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -239,8 +241,8 @@ export default function GigHistory() {
     >
       <View style={styles.incentiveContent}>
         <View style={styles.incentiveInfo}>
-          <Text style={styles.incentiveTitle}>🎁 Earn Incentives</Text>
-          <Text style={styles.incentiveSubtitle}>Complete tasks to unlock rewards</Text>
+          <Text style={styles.incentiveTitle}>🎁 {t('earnIncentives')}</Text>
+          <Text style={styles.incentiveSubtitle}>{t('completeTasksToUnlockRewards')}</Text>
         </View>
         <View style={styles.incentiveStats}>
           <View style={styles.statItem}>
@@ -250,7 +252,7 @@ export default function GigHistory() {
           <View style={styles.statDivider} />
           <View style={styles.statItem}>
             <Text style={styles.statValue}>{incentiveData.totalHours}</Text>
-            <Text style={styles.statLabel}>Hours</Text>
+            <Text style={styles.statLabel}>{t('hours')}</Text>
           </View>
         </View>
       </View>
@@ -259,7 +261,7 @@ export default function GigHistory() {
 
   const renderConditionsCard = () => (
     <View style={styles.conditionsCard}>
-      <Text style={styles.conditionsTitle}>✓ Requirements Status</Text>
+      <Text style={styles.conditionsTitle}>✓ {t('requirementsStatus')}</Text>
       <View style={styles.conditionsList}>
         {/* 5 Days Requirement */}
         <View style={[styles.condition, { borderLeftColor: incentiveData.consecutiveDays >= 5 ? '#27AE60' : '#BDC3C7' }]}>
@@ -270,7 +272,7 @@ export default function GigHistory() {
             style={{ fontWeight: 'bold' }}
           />
           <View style={styles.conditionText}>
-            <Text style={styles.conditionLabel}>5 Consecutive Days</Text>
+            <Text style={styles.conditionLabel}>{t('consecutiveDays')}</Text>
             <Text style={styles.conditionValue}>{incentiveData.consecutiveDays}/5 days ({Math.round((incentiveData.consecutiveDays / 5) * 100)}%)</Text>
           </View>
         </View>
@@ -284,7 +286,7 @@ export default function GigHistory() {
             style={{ fontWeight: 'bold' }}
           />
           <View style={styles.conditionText}>
-            <Text style={styles.conditionLabel}>7+ Hours Per Day</Text>
+            <Text style={styles.conditionLabel}>{t('hoursPerDay')}</Text>
             <Text style={styles.conditionValue}>{incentiveData.totalHours}/35 hours ({Math.round((incentiveData.totalHours / 35) * 100)}%)</Text>
           </View>
         </View>
@@ -319,8 +321,8 @@ export default function GigHistory() {
             <MaterialIcons name={milestone.icon as any} size={24} color="#fff" />
           </View>
           <View style={styles.milestoneInfo}>
-            <Text style={styles.milestoneTitle}>{milestone.days} Days Challenge</Text>
-            <Text style={styles.milestoneReward}>₹{milestone.reward} Reward</Text>
+            <Text style={styles.milestoneTitle}>{milestone.days} {t('daysChallenge')}</Text>
+            <Text style={styles.milestoneReward}>₹{milestone.reward} {t('reward')}</Text>
           </View>
           {milestone.completed && (
             <View style={styles.completedBadge}>
@@ -350,7 +352,7 @@ export default function GigHistory() {
 
         {milestone.completed && (
           <View style={styles.completedStatus}>
-            <Text style={styles.completedText}>🎉 Reward Unlocked! ₹{milestone.reward}</Text>
+            <Text style={styles.completedText}>🎉 {t('rewardUnlocked')}! ₹{milestone.reward}</Text>
           </View>
         )}
       </LinearGradient>
@@ -359,7 +361,7 @@ export default function GigHistory() {
 
   const renderGigCard = (gig: GigHistory) => {
     const paymentStatus = gig.paymentStatus || 'Pending';
-    const displayStatus = paymentStatus === 'Paid' ? 'Completed' : paymentStatus;
+    const displayStatus = paymentStatus === 'Paid' ? t('completed') : t('pending');
     
     // ✅ Calculate work hours from workDuration if available
     const workHours = gig.workDuration ? parseFloat(gig.workDuration) : 0;
@@ -414,29 +416,29 @@ export default function GigHistory() {
               color={has8Hours ? '#27AE60' : '#E74C3C'} 
             />
             <Text style={[styles.requirementText, { color: has8Hours ? '#27AE60' : '#E74C3C' }]}>
-              {workHours > 0 ? `${workHours}h` : 'N/A'} {has8Hours ? '✔' : '✗'}
+              {workHours > 0 ? `${workHours}h` : t('notAvailable')} {has8Hours ? '✔' : '✗'}
             </Text>
           </View>
           
           {isCancelled && (
             <View style={[styles.requirementBadge, { borderColor: '#E74C3C', backgroundColor: '#FFEBEE' }]}>
               <MaterialIcons name="cancel" size={18} color="#E74C3C" />
-              <Text style={[styles.requirementText, { color: '#E74C3C' }]}>Cancelled ✗</Text>
+              <Text style={[styles.requirementText, { color: '#E74C3C' }]}>{t('cancelled')} ✗</Text>
             </View>
           )}
           
           {paymentStatus === 'Paid' && !isCancelled && (
             <View style={[styles.requirementBadge, { borderColor: '#27AE60', backgroundColor: '#E8F5E9' }]}>
               <MaterialIcons name="check-circle" size={18} color="#27AE60" />
-              <Text style={[styles.requirementText, { color: '#27AE60' }]}>Completed ✔</Text>
+              <Text style={[styles.requirementText, { color: '#27AE60' }]}>{t('completed')} ✔</Text>
             </View>
           )}
         </View>
 
         {gig.rating && (
           <View style={styles.ratingBox}>
-            <Text style={styles.ratingLabel}>💬 Feedback</Text>
-            <Text style={styles.ratingText}>{gig.rating.feedback || 'No feedback provided'}</Text>
+            <Text style={styles.ratingLabel}>💬 {t('feedback')}</Text>
+            <Text style={styles.ratingText}>{gig.rating.feedback || t('noFeedbackProvided')}</Text>
           </View>
         )}
       </View>
@@ -454,7 +456,7 @@ export default function GigHistory() {
         <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
           <MaterialIcons name="arrow-back" size={28} color="#000" />
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>Gig History</Text>
+        <Text style={styles.headerTitle}>{t('gigHistory')}</Text>
         <View style={{ width: 44 }} />
       </View>
 
@@ -475,7 +477,7 @@ export default function GigHistory() {
 
           {/* Milestones Section */}
           <View style={styles.section}>
-            <Text style={styles.sectionTitle}>📊 Milestones</Text>
+            <Text style={styles.sectionTitle}>📊 {t('milestones')}</Text>
             {milestones.map(milestone => renderMilestoneCard(milestone))}
           </View>
 
@@ -486,7 +488,7 @@ export default function GigHistory() {
                 <MaterialIcons name="check-circle" size={28} color="#27AE60" />
               </View>
               <Text style={styles.statusOverviewValue}>{completedGigs.length}</Text>
-              <Text style={styles.statusOverviewLabel}>Completed</Text>
+              <Text style={styles.statusOverviewLabel}>{t('completed')}</Text>
             </View>
 
             <View style={styles.statusOverviewCard}>
@@ -494,7 +496,7 @@ export default function GigHistory() {
                 <MaterialIcons name="schedule" size={28} color="#F39C12" />
               </View>
               <Text style={styles.statusOverviewValue}>{pendingGigs.length}</Text>
-              <Text style={styles.statusOverviewLabel}>Pending</Text>
+              <Text style={styles.statusOverviewLabel}>{t('pending')}</Text>
             </View>
 
             <View style={styles.statusOverviewCard}>
@@ -502,18 +504,18 @@ export default function GigHistory() {
                 <MaterialIcons name="cancel" size={28} color="#E74C3C" />
               </View>
               <Text style={styles.statusOverviewValue}>{cancelledGigs.length}</Text>
-              <Text style={styles.statusOverviewLabel}>Cancelled</Text>
+              <Text style={styles.statusOverviewLabel}>{t('cancelled')}</Text>
             </View>
           </View>
 
           {/* Gigs List Section */}
           <View style={styles.section}>
-            <Text style={styles.sectionTitle}>📋 All Gigs</Text>
+            <Text style={styles.sectionTitle}>📋 {t('allGigs')}</Text>
             {gigs.length === 0 ? (
               <View style={styles.emptyState}>
                 <MaterialIcons name="work-outline" size={64} color="#BDC3C7" />
-                <Text style={styles.emptyTitle}>No Gigs Yet</Text>
-                <Text style={styles.emptyText}>Start accepting jobs to build your gig history</Text>
+                <Text style={styles.emptyTitle}>{t('noGigsYet')}</Text>
+                <Text style={styles.emptyText}>{t('startAcceptingJobs')}</Text>
               </View>
             ) : (
               gigs.map(gig => renderGigCard(gig))

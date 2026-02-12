@@ -19,6 +19,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { API_BASE as API_URL } from '../../../utils/config';
 import { socket } from '../../../utils/socket';
 import { connectSocket } from '../../../utils/socket';
+import { useLanguage } from '../../../context/LanguageContext';
 // Define types for wallet and transactions
 type Transaction = {
   type: 'deposit' | 'withdraw' | 'payment'; // ✅ Added 'payment' type for contractor payments
@@ -32,6 +33,7 @@ type WalletType = {
 };
 
 export default function Wallet(): React.ReactElement {
+  const { t } = useLanguage();
   const [wallet, setWallet] = useState<WalletType>({ balance: 0, transactions: [] });
   const [showDeposit, setShowDeposit] = useState(false);
   const [depositAmount, setDepositAmount] = useState('');
@@ -237,12 +239,12 @@ export default function Wallet(): React.ReactElement {
 
   const confirmDeposit = async () => {
     if (!depositAmount || Number(depositAmount) <= 0) {
-      Alert.alert('Error', 'Enter a valid amount to deposit');
+      Alert.alert(t('error'), t('enterValidAmount'));
       return;
     }
     
     if (Number(depositAmount) < 100) {
-      Alert.alert('Error', 'Minimum deposit is ₹100');
+      Alert.alert(t('error'), t('minimumDeposit'));
       return;
     }
 
@@ -257,7 +259,7 @@ export default function Wallet(): React.ReactElement {
       );
 
       if (!orderRes.data.success) {
-        Alert.alert('Error', 'Failed to create deposit order');
+        Alert.alert(t('error'), t('failedCreateOrder'));
         return;
       }
 
@@ -322,7 +324,7 @@ export default function Wallet(): React.ReactElement {
       setCurrentDepositAmount(Number(depositAmount));
       setCurrentDepositOrderId(orderId);
     } catch (err: any) {
-      Alert.alert('Error', err.response?.data?.message || 'Failed to initiate deposit');
+      Alert.alert(t('error'), err.response?.data?.message || t('failedInitiateDeposit'));
     }
   };
 

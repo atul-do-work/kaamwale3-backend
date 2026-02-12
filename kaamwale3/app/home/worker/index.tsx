@@ -20,6 +20,7 @@ import * as Location from "expo-location";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { socket } from "../../../utils/socket"; // ✅ Use global socket instead
 import { API_BASE } from "../../../utils/config";
+import { useLanguage } from "../../../context/LanguageContext";
 import { 
   triggerJobAlert,
   cleanupJobAlert,
@@ -70,8 +71,8 @@ class ErrorBoundary extends React.Component<
   }
 }
 
-// ✅ Helper function to get dynamic greeting based on time of day
-const getGreeting = (): string => {
+// ✅ Helper function to get dynamic greeting based on time of day (will be translated via context)
+const getGreeting = (t: any): string => {
   const hour = new Date().getHours();
   if (hour < 12) return "Good Morning";
   if (hour < 18) return "Good Afternoon";
@@ -104,10 +105,11 @@ interface JobItemProps {
   onAccept: (id: string) => void; // ✅ Changed from number to string
   onDecline: (id: string, auto?: boolean) => void; // ✅ Changed from number to string
   timer: number;
+  t: (key: string) => string; // ✅ Translation function
 }
 
 // ---------------- JOB CARD COMPONENT ----------------
-const JobItem = memo(({ item, onAccept, onDecline, timer }: JobItemProps) => (
+const JobItem = memo(({ item, onAccept, onDecline, timer, t }: JobItemProps) => (
   <View style={styles.jobCard}>
     <Text style={styles.title}>{item.title}</Text>
 
@@ -145,14 +147,14 @@ const JobItem = memo(({ item, onAccept, onDecline, timer }: JobItemProps) => (
           style={[styles.button, { backgroundColor: "#2ecc71" }]}
           onPress={() => onAccept(item._id)}
         >
-          <Text style={styles.buttonText}>Accept</Text>
+          <Text style={styles.buttonText}>{t('accept')}</Text>
         </TouchableOpacity>
 
         <TouchableOpacity
           style={[styles.button, { backgroundColor: "#e74c3c" }]}
           onPress={() => onDecline(item._id)}
         >
-          <Text style={styles.buttonText}>Decline</Text>
+          <Text style={styles.buttonText}>{t('decline')}</Text>
         </TouchableOpacity>
       </View>
     )}
@@ -161,6 +163,7 @@ const JobItem = memo(({ item, onAccept, onDecline, timer }: JobItemProps) => (
 
 // ---------------- WORKER HOME COMPONENT ----------------
 function WorkerHome() {
+  const { t } = useLanguage();
   const [error, setError] = useState<string | null>(null);
   const [currentJob, setCurrentJob] = useState<Job | null>(null);
   const [currentLocation, setCurrentLocation] = useState<{ lat: number; lon: number } | null>(null);
@@ -1101,8 +1104,8 @@ function WorkerHome() {
           {/* Header with Notification Bell & Online Toggle */}
           <View style={styles.headerContainer}>
         <View>
-          <Text style={styles.dashboardText}>Dashboard</Text>
-          <Text style={styles.greetingText}>{getGreeting()}, {workerName}</Text>
+          <Text style={styles.dashboardText}>{t('dashboard')}</Text>
+          <Text style={styles.greetingText}>{getGreeting(t)}, {workerName}</Text>
         </View>
         <View style={styles.headerRightContainer}>
           {/* Online/Offline Toggle */}
@@ -1118,7 +1121,7 @@ function WorkerHome() {
               style={{ marginRight: 4 }}
             />
             <Text style={styles.statusToggleText}>
-              {isOnline ? "Online" : "Offline"}
+              {isOnline ? t('online') : t('offline')}
             </Text>
           </TouchableOpacity>
 

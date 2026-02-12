@@ -9,6 +9,7 @@ import { socket } from "../../../utils/socket";
 import { SERVER_URL } from "../../../utils/config";
 import { useFocusEffect } from '@react-navigation/native';
 import { useRouter } from "expo-router";  // ⭐ ADDED
+import { useLanguage } from "../../../context/LanguageContext";
 
 interface JobPayload {
   title: string;
@@ -29,6 +30,7 @@ const MASON_TYPES = ['Tile Mason', 'Stone Mason', 'Cement Mason', 'Composite Mas
 const BULK_HIRING_OPTIONS = [1, 2, 3, 5, 10];
 
 export default function PostJobScreen() {
+  const { t } = useLanguage();
   const [title, setTitle] = useState('');
   const [mainSkill, setMainSkill] = useState('');
   const [workerType, setWorkerType] = useState('');
@@ -234,8 +236,8 @@ export default function PostJobScreen() {
     // ✅ FIXED: Worker type required ONLY for Mason, not for other skills
     if (mainSkill === 'Mason' && !workerType) return Alert.alert("Missing", "Please select worker type for Mason");
     if (!price) return Alert.alert("Missing", "Please enter price");
-    if (parseInt(price) < 410) return Alert.alert("Price Error", "Minimum price must be ₹410 or above");
-    if (!selectedLocation) return Alert.alert("Missing", "Please select location - required for worker matching");
+    if (parseInt(price) < 410) return Alert.alert(t('error'), t('minimumPrice'));
+    if (!selectedLocation) return Alert.alert(t('required'), t('selectLocation'));
     // ✅ Image is optional, but location is REQUIRED for accurate matching
 
     if (walletBalance < 25)
@@ -325,7 +327,7 @@ export default function PostJobScreen() {
       const raw = await res.text();
       let data: any = undefined;
       try { data = raw ? JSON.parse(raw) : undefined; } catch { console.warn('handlePostJob: non-JSON response', raw); }
-      if (!res.ok) return Alert.alert("Error", data?.message || raw || "Failed to post job");
+      if (!res.ok) return Alert.alert(t('error'), data?.message || raw || t('errorPosting'));
 
       // Alert.alert("Success", `Job posted! Remaining balance: ₹${data.wallet.balance}`);
 
@@ -435,7 +437,7 @@ export default function PostJobScreen() {
             onChangeText={handlePriceChange}
           />
         </View>
-        {priceError && <Text style={styles.errorText}>⚠️ Minimum price must be ₹410</Text>}
+        {priceError && <Text style={styles.errorText}>⚠️ {t('minimumPrice')}</Text>}
 
         {/* Location Selection - Use Current Location Button */}
         <View style={styles.dropdownContainer}>
@@ -609,7 +611,7 @@ export default function PostJobScreen() {
           {isPostingJob ? (
             <ActivityIndicator size="small" color="#fff" />
           ) : (
-            <Text style={styles.buttonText}>Post Job</Text>
+            <Text style={styles.buttonText}>{t('postJob')}</Text>
           )}
         </TouchableOpacity>
       </View>

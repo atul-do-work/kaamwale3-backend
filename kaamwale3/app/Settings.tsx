@@ -11,21 +11,22 @@ import {
 import { MaterialIcons, Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import { useRouter } from "expo-router";
-import ReferralModal from "../components/ReferralModal"; // ✅ Import referral modal
-import AsyncStorage from "@react-native-async-storage/async-storage"; // ✅ Import AsyncStorage
+import ReferralModal from "../components/ReferralModal";
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import { useLanguage } from "../context/LanguageContext";
+import { Language } from "../constants/translations";
 
 export default function SettingsScreen(): React.ReactElement {
   const router = useRouter();
+  const { language: appLanguage, setLanguage, t } = useLanguage();
   const [notifications, setNotifications] = useState(true);
   const [emailAlerts, setEmailAlerts] = useState(true);
   const [darkMode, setDarkMode] = useState(false);
-  const [language, setLanguage] = useState<"en" | "hi">("en");
   const [selectedPayment, setSelectedPayment] = useState("upi");
-  const [referralModalVisible, setReferralModalVisible] = useState(false); // ✅ Referral modal state
-  const [workerName, setWorkerName] = useState("Worker"); // ✅ Will be loaded from AsyncStorage
-  const [workerPhone, setWorkerPhone] = useState("9876543210"); // ✅ Will be loaded from AsyncStorage
+  const [referralModalVisible, setReferralModalVisible] = useState(false);
+  const [workerName, setWorkerName] = useState("Worker");
+  const [workerPhone, setWorkerPhone] = useState("9876543210");
 
-  // ✅ Load user data when screen mounts
   React.useEffect(() => {
     (async () => {
       const userStr = await AsyncStorage.getItem("user");
@@ -37,8 +38,12 @@ export default function SettingsScreen(): React.ReactElement {
     })();
   }, []);
 
+  const handleLanguageChange = async (lang: Language) => {
+    await setLanguage(lang);
+  };
+
   const handleSave = () => {
-    Alert.alert("Success", "Settings saved successfully!");
+    Alert.alert(t('success'), t('settingsSaved'));
   };
 
   const settingSections: Array<{
@@ -54,12 +59,12 @@ export default function SettingsScreen(): React.ReactElement {
     }>;
   }> = [
     {
-      title: "Notifications",
+      title: t('notifications'),
       icon: "notifications",
       color: "#FF6B6B",
       items: [
         {
-          label: "Push Notifications",
+          label: t('notifications'),
           desc: "Receive job alerts and updates",
           value: notifications,
           onChange: setNotifications,
@@ -89,20 +94,26 @@ export default function SettingsScreen(): React.ReactElement {
       ],
     },
     {
-      title: "Language",
+      title: t('language'),
       icon: "language",
       color: "#95E1D3",
       items: [
         {
-          label: "English",
-          value: language === "en",
-          onChange: () => setLanguage("en"),
+          label: t('english'),
+          value: appLanguage === "en",
+          onChange: () => handleLanguageChange("en"),
           type: "radio",
         },
         {
-          label: "हिंदी",
-          value: language === "hi",
-          onChange: () => setLanguage("hi"),
+          label: t('hindi'),
+          value: appLanguage === "hi",
+          onChange: () => handleLanguageChange("hi"),
+          type: "radio",
+        },
+        {
+          label: t('marathi'),
+          value: appLanguage === "mr",
+          onChange: () => handleLanguageChange("mr"),
           type: "radio",
         },
       ],
@@ -125,7 +136,7 @@ export default function SettingsScreen(): React.ReactElement {
           type: "radio",
         },
         {
-          label: "Wallet",
+          label: t('wallet'),
           value: selectedPayment === "wallet",
           onChange: () => setSelectedPayment("wallet"),
           type: "radio",
@@ -145,7 +156,7 @@ export default function SettingsScreen(): React.ReactElement {
         <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}>
           <Ionicons name="arrow-back" size={24} color="#fff" />
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>Settings</Text>
+        <Text style={styles.headerTitle}>{t('settings')}</Text>
         <View style={{ width: 40 }} />
       </LinearGradient>
 
@@ -170,7 +181,7 @@ export default function SettingsScreen(): React.ReactElement {
                 {item.type === "toggle" ? (
                  <Switch
   value={item.value}
-  onValueChange={(value) => item.onChange(value)}   // ⭐ fixed
+  onValueChange={(value) => item.onChange(value)}
   trackColor={{ false: "#D3D3D3", true: section.color + "40" }}
   thumbColor={item.value ? section.color : "#f4f3f4"}
  />
@@ -195,7 +206,7 @@ export default function SettingsScreen(): React.ReactElement {
       {/* Verification Button */}
       <TouchableOpacity 
         style={styles.verificationButton} 
-        onPress={handleVerification}
+        onPress={() => router.push("/Verification" as any)}
       >
         <MaterialIcons name="verified-user" size={20} color="#fff" />
         <Text style={styles.verificationText}>Verification & KYC</Text>
@@ -215,7 +226,7 @@ export default function SettingsScreen(): React.ReactElement {
       {/* Save Button */}
       <TouchableOpacity style={styles.saveButton} onPress={handleSave}>
         <MaterialIcons name="save" size={20} color="#fff" />
-        <Text style={styles.saveText}>Save Settings</Text>
+        <Text style={styles.saveText}>{t('save')} Settings</Text>
       </TouchableOpacity>
 
       {/* ✅ Referral Modal */}

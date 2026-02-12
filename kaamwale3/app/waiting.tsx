@@ -6,9 +6,11 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { socket } from "../utils/socket";
 import { SERVER_URL } from "../utils/config";
 import * as Location from "expo-location";
+import { useLanguage } from "../context/LanguageContext";
 
 export default function WaitingScreen() {
   const router = useRouter();
+  const { t } = useLanguage();
   const [timeLeft, setTimeLeft] = useState(300); // 5 min default
   const [modalVisible, setModalVisible] = useState(false);
   const [acceptedWorker, setAcceptedWorker] = useState<any | null>(null);
@@ -117,12 +119,12 @@ export default function WaitingScreen() {
 
   const handleCancelJob = () => {
     Alert.alert(
-      "Cancel Job?",
+      t('cancelJob') + "?",
       "Are you sure you want to cancel this request?\n\nYou may be charged a cancellation fee.",
       [
         { text: "No", onPress: () => {}, style: "cancel" },
         {
-          text: "Yes, Cancel Job",
+          text: t('yes') + ", " + t('cancelJob'),
           style: "destructive",
           onPress: () => {
             handleCancelJobConfirm();
@@ -300,7 +302,7 @@ export default function WaitingScreen() {
         {/* ✅ Back button disabled - contractor must wait for acceptances or cancel job */}
         <View style={styles.backButton} />
 
-        <Text style={styles.title}>Waiting for Workers...</Text>
+        <Text style={styles.title}>{t('waitingForWorkers')}...</Text>
         <Text style={styles.timerText}>Expected Response: {formatTime(timeLeft)}</Text>
       </View>
 
@@ -309,7 +311,7 @@ export default function WaitingScreen() {
         <ActivityIndicator size="large" color="#667eea" />
         {isBulkHiring ? (
           <>
-            <Text style={styles.loadingText}>Waiting for Workers...</Text>
+            <Text style={styles.loadingText}>{t('waitingForWorkers')}...</Text>
             <View style={styles.bulkHiringCounter}>
               <Text style={styles.counterText}>
                 {acceptedWorkers.length} / {requiredWorkers} Workers Accepted
@@ -333,7 +335,7 @@ export default function WaitingScreen() {
       <View style={styles.bottomActions}>
         <TouchableOpacity style={styles.actionBtn} onPress={handleNeedHelp}>
           <Ionicons name="help-circle" size={20} color="#667eea" style={{ marginRight: 8 }} />
-          <Text style={styles.actionText}>Need Help?</Text>
+            <Text style={styles.actionText}>{t('needHelp')}?</Text>
         </TouchableOpacity>
 
         <TouchableOpacity style={styles.actionBtn} onPress={handleGetCallback}>
@@ -355,7 +357,7 @@ export default function WaitingScreen() {
           {cancellationLoading ? (
             <ActivityIndicator color="#fff" size="small" />
           ) : (
-            <Text style={styles.cancelText}>Cancel Job</Text>
+            <Text style={styles.cancelText}>{t('cancelJob')}</Text>
           )}
         </TouchableOpacity>
       </View>

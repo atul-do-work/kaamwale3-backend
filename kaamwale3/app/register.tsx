@@ -5,7 +5,8 @@ import { useRouter } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { API_BASE } from '../utils/config';
 import styles from '../styles/RegisterScreenStyles';
-import { registerForPushNotificationsAsync } from '../services/notification'; // ✅ Import FCM service
+import { registerForPushNotificationsAsync } from '../services/notification';
+import { useLanguage } from '../context/LanguageContext';
 
 type User = {
   name: string;
@@ -39,27 +40,28 @@ async function waitForFcmToken(timeoutMs = 8000) {
 
 export default function Register() {
   const router = useRouter();
+  const { t } = useLanguage();
   const [name, setName] = useState('');
   const [phone, setPhone] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [role, setRole] = useState<'worker' | 'contractor'>('worker');
-  const [isLoading, setIsLoading] = useState(false); // ✅ Add loading state
-  const [agreedToTerms, setAgreedToTerms] = useState(false); // ✅ Add terms checkbox state
+  const [isLoading, setIsLoading] = useState(false);
+  const [agreedToTerms, setAgreedToTerms] = useState(false);
 
   const handleRegister = async () => {
     if (!name || !phone || !password)
-      return Alert.alert('Error', 'Fill all fields');
+      return Alert.alert(t('error'), t('required'));
 
     // ✅ Validate terms and conditions agreement
     if (!agreedToTerms) {
-      return Alert.alert('Error', 'Please agree to Terms and Conditions to proceed');
+      return Alert.alert(t('error'), t('agreeTerms'));
     }
 
     // Validate phone number (10 digits)
     const phoneTrim = phone.trim();
     if (!/^\d{10}$/.test(phoneTrim)) {
-      return Alert.alert('Invalid Phone', 'Phone number must be exactly 10 digits');
+      return Alert.alert(t('invalidPhone'), t('invalidPhone'));
     }
 
     setIsLoading(true); // ✅ Show loading spinner
@@ -154,7 +156,7 @@ export default function Register() {
   return (
     <View style={styles.container}>
       <StatusBar barStyle="light-content" />
-      <Text style={styles.title}>Create Account</Text>
+      <Text style={styles.title}>{t('register')}</Text>
 
       <TextInput 
         style={styles.input} 
@@ -165,7 +167,7 @@ export default function Register() {
       />
       <TextInput 
         style={styles.input} 
-        placeholder="Phone Number" 
+        placeholder={t('phone')} 
         placeholderTextColor="#999"
         keyboardType="phone-pad" 
         value={phone} 
@@ -174,7 +176,7 @@ export default function Register() {
       <View style={styles.passwordContainer}>
         <TextInput 
           style={styles.passwordInput} 
-          placeholder="Password" 
+          placeholder={t('password')} 
           placeholderTextColor="#999"
           secureTextEntry={!showPassword} 
           value={password} 
@@ -194,10 +196,10 @@ export default function Register() {
 
       <View style={styles.roleContainer}>
         <TouchableOpacity style={[styles.roleButton, role === 'worker' && styles.roleButtonSelected]} onPress={() => setRole('worker')}>
-          <Text style={[styles.roleText, role === 'worker' && styles.roleTextSelected]}>Worker</Text>
+          <Text style={[styles.roleText, role === 'worker' && styles.roleTextSelected]}>{t('worker')}</Text>
         </TouchableOpacity>
         <TouchableOpacity style={[styles.roleButton, role === 'contractor' && styles.roleButtonSelected]} onPress={() => setRole('contractor')}>
-          <Text style={[styles.roleText, role === 'contractor' && styles.roleTextSelected]}>Contractor</Text>
+          <Text style={[styles.roleText, role === 'contractor' && styles.roleTextSelected]}>{t('contractor')}</Text>
         </TouchableOpacity>
       </View>
 
@@ -221,8 +223,7 @@ export default function Register() {
           )}
         </TouchableOpacity>
         <Text style={{ marginLeft: 10, color: '#555', fontSize: 13, flex: 1 }}>
-          I agree to the{' '}
-          <Text style={{ color: '#007AFF', fontWeight: '600' }}>Terms and Conditions</Text>
+          {t('agreeTerms')}
         </Text>
       </View>
 
@@ -230,7 +231,7 @@ export default function Register() {
         {isLoading ? (
           <ActivityIndicator size="small" color="#fff" />
         ) : (
-          <Text style={styles.buttonText}>Register</Text>
+          <Text style={styles.buttonText}>{t('register')}</Text>
         )}
       </TouchableOpacity>
     </View>

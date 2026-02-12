@@ -4,6 +4,7 @@ import { useEffect } from 'react';
 import * as Notifications from 'expo-notifications';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { registerForPushNotificationsAsync } from '../services/notification';
+import { LanguageProvider } from '../context/LanguageContext';
 
 // ******************** 1st step 
 // Prevent splash screen from auto-hiding
@@ -71,28 +72,30 @@ export default function RootLayout() {
   }, []);
 
   return (
-    <Stack screenOptions={{ headerShown: false }}>
-      {/* Login/Auth screen is the entry point */}
-      <Stack.Screen name="index" />
-      
-      {/* Home with role-based routing */}
-      <Stack.Screen name="home" />
-      
-      {/* Other screens */}
-      <Stack.Screen name="register" />
-      <Stack.Screen name="waiting" />
-      <Stack.Screen name="verify-otp" />
-      <Stack.Screen name="dashboard" />
-      <Stack.Screen name="ActivityHistory" />
-      <Stack.Screen name="DocumentsAndPolicies" />
-      <Stack.Screen name="GigHistory" />
-      <Stack.Screen name="HelpCentre" />
-      <Stack.Screen name="NotificationHistory" />
-      <Stack.Screen name="PaymentHistory" />
-      <Stack.Screen name="Settings" />
-      <Stack.Screen name="SupportTickets" />
-      <Stack.Screen name="Verification" />
-      <Stack.Screen name="VideosAndTutorials" />
-    </Stack>
+    <LanguageProvider>
+      <Stack screenOptions={{ headerShown: false }}>
+        {/* Login/Auth screen is the entry point */}
+        <Stack.Screen name="index" />
+        
+        {/* Home with role-based routing */}
+        <Stack.Screen name="home" />
+        
+        {/* Other screens */}
+        <Stack.Screen name="register" />
+        <Stack.Screen name="waiting" />
+        <Stack.Screen name="verify-otp" />
+        <Stack.Screen name="dashboard" />
+        <Stack.Screen name="ActivityHistory" />
+        <Stack.Screen name="DocumentsAndPolicies" />
+        <Stack.Screen name="GigHistory" />
+        <Stack.Screen name="HelpCentre" />
+        <Stack.Screen name="NotificationHistory" />
+        <Stack.Screen name="PaymentHistory" />
+        <Stack.Screen name="Settings" />
+        <Stack.Screen name="SupportTickets" />
+        <Stack.Screen name="Verification" />
+        <Stack.Screen name="VideosAndTutorials" />
+      </Stack>
+    </LanguageProvider>
   );
 }
