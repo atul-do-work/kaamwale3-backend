@@ -13,9 +13,10 @@ import {
 import { MaterialIcons, Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import { useRouter, useFocusEffect } from "expo-router";
-import AsyncStorage from "@react-native-async-storage/async-storage";
+import { useAuth } from "../context/AuthContext";
 import * as ImagePicker from "expo-image-picker";
 import { SERVER_URL } from "../utils/config";
+import api from "../utils/api";
 
 interface VerificationDocument {
   type: string;
@@ -48,34 +49,24 @@ const DOCUMENT_TYPES = [
 
 export default function VerificationScreen(): React.ReactElement {
   const router = useRouter();
+  const { accessToken } = useAuth();
   const [verificationStatus, setVerificationStatus] =
     useState<VerificationStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
-  const [token, setToken] = useState<string | null>(null);
   const [selectedDocType, setSelectedDocType] = useState<string | null>(null);
   const [selectedFile, setSelectedFile] = useState<any>(null);
 
   // Fetch verification status
   const fetchVerificationStatus = useCallback(async () => {
     try {
-      const storedToken = await AsyncStorage.getItem("token");
-      if (!storedToken) {
+      if (!accessToken) {
         Alert.alert("Error", "No authentication token found");
         return;
       }
 
-      setToken(storedToken);
-
-      const response = await fetch(`${SERVER_URL}/verification/status`, {
-        method: "GET",
-        headers: {
-          "Authorization": `Bearer ${storedToken}`,
-          "Content-Type": "application/json",
-        },
-      });
-
-      const data = await response.json();
+      const res = await api.get(`/verification/status`);
+      const data = res.data;
 
       if (data.success) {
         setVerificationStatus(data.verification);
@@ -90,7 +81,7 @@ export default function VerificationScreen(): React.ReactElement {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [accessToken]);
 
   // Initial load
   useEffect(() => {

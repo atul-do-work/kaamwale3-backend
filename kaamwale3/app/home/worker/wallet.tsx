@@ -14,9 +14,7 @@ import { useFocusEffect } from '@react-navigation/native';
 import { WebView } from 'react-native-webview';
 import styles from '../../../styles/WorkerWalletStyles';
 import { LinearGradient } from 'expo-linear-gradient';
-import axios from 'axios';
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import { API_BASE as API_URL } from '../../../utils/config';
+// API base now used via `api` wrapper; no direct API_BASE import needed here
 import { socket } from '../../../utils/socket';
 import { connectSocket } from '../../../utils/socket';
 import { useLanguage } from '../../../context/LanguageContext';
@@ -32,12 +30,17 @@ type WalletType = {
   transactions: Transaction[];
 };
 
+import { useAuth } from '../../../context/AuthContext';
+import api from '../../../utils/api';
+
 export default function Wallet(): React.ReactElement {
   const { t } = useLanguage();
+  const { accessToken, user: authUser } = useAuth();
+  
   const [wallet, setWallet] = useState<WalletType>({ balance: 0, transactions: [] });
   const [showDeposit, setShowDeposit] = useState(false);
-  const [depositAmount, setDepositAmount] = useState('');
   const [showWithdraw, setShowWithdraw] = useState(false);
+  const [depositAmount, setDepositAmount] = useState('');
   const [withdrawAmount, setWithdrawAmount] = useState('');
   const [currentUserPhone, setCurrentUserPhone] = useState<string | null>(null);
   const [walletFetchPending, setWalletFetchPending] = useState(false);
@@ -61,39 +64,33 @@ export default function Wallet(): React.ReactElement {
     bankName: '',
     accountType: 'savings'
   });
-  const [token, setToken] = useState<string | null>(null);
 
   // API_URL imported from central config
 
-  // ✅ Check for user changes when screen comes into focus (no dependency on currentUserPhone to avoid stale closures)
+  // ✅ Check for user changes when screen comes into focus
   useFocusEffect(
     React.useCallback(() => {
-      (async () => {
-        const userStr = await AsyncStorage.getItem('user');
-        const userPhone = userStr ? JSON.parse(userStr).phone : null;
-        
-        // If user changed (compare with ref, not state), reset wallet state immediately
-        if (userPhone && userPhone !== previousUserPhoneRef.current) {
-          console.log(`👤 Wallet: User changed from ${previousUserPhoneRef.current} to ${userPhone}, resetting wallet`);
-          previousUserPhoneRef.current = userPhone;
-          setCurrentUserPhone(userPhone);
-          setWallet({ balance: 0, transactions: [] });
-        } else if (!userPhone && previousUserPhoneRef.current !== null) {
-          // User logged out
-          console.log(`👤 Wallet: User logged out, resetting wallet`);
-          previousUserPhoneRef.current = null;
-          setCurrentUserPhone(null);
-          setWallet({ balance: 0, transactions: [] });
-        }
-      })();
-    }, [])
+      const userPhone = authUser?.phone;
+      // If user changed (compare with ref), reset wallet state immediately
+      if (userPhone && userPhone !== previousUserPhoneRef.current) {
+        console.log(`👤 Wallet: User changed from ${previousUserPhoneRef.current} to ${userPhone}, resetting wallet`);
+        previousUserPhoneRef.current = userPhone;
+        setCurrentUserPhone(userPhone);
+        setWallet({ balance: 0, transactions: [] });
+      } else if (!userPhone && previousUserPhoneRef.current !== null) {
+        // User logged out
+        console.log(`👤 Wallet: User logged out, resetting wallet`);
+        previousUserPhoneRef.current = null;
+        setCurrentUserPhone(null);
+        setWallet({ balance: 0, transactions: [] });
+      }
+    }, [authUser])
   );
 
-  // ✅ Close all modals when wallet tab loses focus (not visible in other tabs)
+  // ✅ Close all modals when wallet tab loses focus
   useFocusEffect(
     React.useCallback(() => {
       return () => {
-        // When this component loses focus, close all modals
         setShowAddBank(false);
         setShowDeposit(false);
         setShowWithdraw(false);
@@ -103,40 +100,20 @@ export default function Wallet(): React.ReactElement {
     }, [])
   );
 
-  // Fetch wallet data when component mounts
+  // ✅ Initialize user phone from AuthProvider
   useEffect(() => {
-    // ✅ Get current user to detect user changes on initial mount
-    (async () => {
-      const userStr = await AsyncStorage.getItem('user');
-      const userPhone = userStr ? JSON.parse(userStr).phone : null;
-      
-      // If user changed, reset wallet state
-      if (userPhone && userPhone !== currentUserPhone) {
-        console.log(`👤 User changed from ${currentUserPhone} to ${userPhone}, resetting wallet`);
-        setCurrentUserPhone(userPhone);
-        setWallet({ balance: 0, transactions: [] });
-      }
-    })();
-  }, []);
+    const userPhone = authUser?.phone;
+    if (userPhone && userPhone !== currentUserPhone) {
+      console.log(`👤 User changed from ${currentUserPhone} to ${userPhone}, resetting wallet`);
+      setCurrentUserPhone(userPhone);
+      setWallet({ balance: 0, transactions: [] });
+    }
+  }, [authUser?.phone]);
 
   // Fetch wallet when user phone changes
   useEffect(() => {
     if (currentUserPhone) {
       console.log(`💼 Fetching wallet for user: ${currentUserPhone}`);
-      (async () => {
-        // ✅ Ensure socket is connected with auth token (don't disconnect if already connected)
-        const storedToken = await AsyncStorage.getItem('token');
-        if (storedToken) {
-          if (!socket.connected) {
-            socket.auth = { token: storedToken };
-            socket.connect();
-            console.log("✅ Socket connecting with token for wallet");
-          } else {
-            console.log("✅ Socket already connected for wallet");
-          }
-        }
-      })();
-
       // Small delay to ensure socket is ready
       const timer = setTimeout(() => {
         fetchWallet();
@@ -205,12 +182,9 @@ export default function Wallet(): React.ReactElement {
 
   const fetchWallet = async () => {
     try {
-      const token = await AsyncStorage.getItem('token');
-      if (!token) return Promise.reject('No token');
+      if (!accessToken) return Promise.reject('No token');
 
-      const res = await axios.get(`${API_URL}/wallet`, {
-        headers: { Authorization: `Bearer ${token}` }
-      });
+      const res = await api.get('/wallet');
 
       if (res.data.success && res.data.wallet) {
         console.log(`💰 Wallet fetched: ₹${res.data.wallet.balance}`);
@@ -249,14 +223,10 @@ export default function Wallet(): React.ReactElement {
     }
 
     try {
-      const token = await AsyncStorage.getItem('token');
-      
       // Step 1: Create deposit order
-      const orderRes = await axios.post(
-        `${API_URL}/wallet/deposit/create-order`,
-        { amount: Number(depositAmount) },
-        { headers: { Authorization: `Bearer ${token}` } }
-      );
+      const orderRes = await api.post('/wallet/deposit/create-order', { 
+        amount: Number(depositAmount) 
+      });
 
       if (!orderRes.data.success) {
         Alert.alert(t('error'), t('failedCreateOrder'));
@@ -348,18 +318,12 @@ export default function Wallet(): React.ReactElement {
   // Verify deposit payment
   const verifyDeposit = async (data: any) => {
     try {
-      const token = await AsyncStorage.getItem('token');
-      
-      const res = await axios.post(
-        `${API_URL}/wallet/deposit/verify`,
-        {
-          orderId: data.orderId,
-          paymentId: data.paymentId,
-          signature: data.signature,
-          amount: currentDepositAmount
-        },
-        { headers: { Authorization: `Bearer ${token}` } }
-      );
+      const res = await api.post('/wallet/deposit/verify', {
+        orderId: data.orderId,
+        paymentId: data.paymentId,
+        signature: data.signature,
+        amount: currentDepositAmount
+      });
 
       setDepositModalVisible(false);
 
@@ -410,12 +374,7 @@ export default function Wallet(): React.ReactElement {
     }
 
     try {
-      const savedToken = await AsyncStorage.getItem('token');
-      const res = await axios.post(
-        `${API_URL}/wallet/withdraw`,
-        { amount: Number(withdrawAmount) },
-        { headers: { Authorization: `Bearer ${savedToken}` } }
-      );
+      const res = await api.post('/wallet/withdraw', { amount: Number(withdrawAmount) });
 
       if (res.data.success) {
         setWallet({ ...wallet, balance: res.data.walletBalance });
@@ -435,11 +394,7 @@ export default function Wallet(): React.ReactElement {
   // ✅ Fetch bank account
   const fetchBankAccount = async () => {
     try {
-      const savedToken = await AsyncStorage.getItem('token');
-      const res = await axios.get(
-        `${API_URL}/wallet/bank-account`,
-        { headers: { Authorization: `Bearer ${savedToken}` } }
-      );
+      const res = await api.get('/wallet/bank-account');
 
       if (res.data.success) {
         setBankAccount(res.data.bankAccount);
@@ -478,12 +433,7 @@ export default function Wallet(): React.ReactElement {
     }
 
     try {
-      const savedToken = await AsyncStorage.getItem('token');
-      const res = await axios.post(
-        `${API_URL}/wallet/bank-account/add`,
-        bankDetails,
-        { headers: { Authorization: `Bearer ${savedToken}` } }
-      );
+      const res = await api.post('/wallet/bank-account/add', bankDetails);
 
       if (res.data.success) {
         setBankAccount(res.data.bankAccount);

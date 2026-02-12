@@ -13,8 +13,9 @@ import {
 import { MaterialIcons, Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import { useRouter, useFocusEffect } from "expo-router";
-import AsyncStorage from "@react-native-async-storage/async-storage";
+import { useAuth } from "../context/AuthContext";
 import { SERVER_URL } from "../utils/config";
+import api from "../utils/api";
 
 interface Notification {
   _id: string;
@@ -32,23 +33,20 @@ interface Notification {
 export default function NotificationHistoryScreen(): React.ReactElement {
   const router = useRouter();
   const { t } = require('../context/LanguageContext').useLanguage();
+  const { accessToken } = useAuth();
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [token, setToken] = useState<string | null>(null);
   const [unreadCount, setUnreadCount] = useState(0);
   const [filter, setFilter] = useState<"all" | "unread">("all");
 
   // Fetch notifications
   const fetchNotifications = useCallback(async () => {
     try {
-      const storedToken = await AsyncStorage.getItem("token");
-      if (!storedToken) {
+      if (!accessToken) {
         Alert.alert(t('error'), t('noAuthTokenFound'));
         return;
       }
-
-      setToken(storedToken);
 
       const queryParams = new URLSearchParams({
         unreadOnly: filter === "unread" ? "true" : "false",
@@ -56,18 +54,8 @@ export default function NotificationHistoryScreen(): React.ReactElement {
         skip: "0",
       });
 
-      const response = await fetch(
-        `${SERVER_URL}/notifications?${queryParams}`,
-        {
-          method: "GET",
-          headers: {
-            "Authorization": `Bearer ${storedToken}`,
-            "Content-Type": "application/json",
-          },
-        }
-      );
-
-      const data = await response.json();
+      const res = await api.get(`/notifications?${queryParams}`);
+      const data = res.data;
 
       if (data.success) {
         setNotifications(data.notifications || []);
@@ -83,7 +71,7 @@ export default function NotificationHistoryScreen(): React.ReactElement {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [filter]);
+  }, [accessToken, filter]);
 
   // Initial load
   useEffect(() => {
@@ -101,20 +89,10 @@ export default function NotificationHistoryScreen(): React.ReactElement {
   // Mark notification as read
   const handleMarkAsRead = async (notificationId: string) => {
     try {
-      if (!token) return;
+      if (!accessToken) return;
 
-      const response = await fetch(
-        `${SERVER_URL}/notifications/${notificationId}/read`,
-        {
-          method: "PUT",
-          headers: {
-            "Authorization": `Bearer ${token}`,
-            "Content-Type": "application/json",
-          },
-        }
-      );
-
-      const data = await response.json();
+      const res = await api.put(`/notifications/${notificationId}/read`);
+      const data = res.data;
 
       if (data.success) {
         // Update local state
@@ -136,22 +114,15 @@ export default function NotificationHistoryScreen(): React.ReactElement {
   // Mark all as read
   const handleMarkAllAsRead = async () => {
     try {
-      if (!token) return;
+      if (!accessToken) return;
 
       Alert.alert("Mark All as Read?", "Are you sure?", [
         { text: t('cancel'), style: "cancel" },
         {
           text: t('yes'),
           onPress: async () => {
-            const response = await fetch(`${SERVER_URL}/notifications/read-all`, {
-              method: "PUT",
-              headers: {
-                "Authorization": `Bearer ${token}`,
-                "Content-Type": "application/json",
-              },
-            });
-
-            const data = await response.json();
+            const res = await api.put(`/notifications/read-all`);
+            const data = res.data;
 
             if (data.success) {
               // Update local state

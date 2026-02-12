@@ -7,7 +7,6 @@
     "scheme": "kaamwale3",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
-
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.atulsharma897438.kaamwale3",
@@ -15,10 +14,16 @@
         "ITSAppUsesNonExemptEncryption": false
       }
     },
-
     "android": {
       "package": "com.atulsharma897438.kaamwale3",
-      "permissions": ["INTERNET", "POST_NOTIFICATIONS", "RECEIVE_BOOT_COMPLETED", "MODIFY_AUDIO_SETTINGS", "ACCESS_FINE_LOCATION", "ACCESS_COARSE_LOCATION"],
+      "permissions": [
+        "INTERNET",
+        "POST_NOTIFICATIONS",
+        "RECEIVE_BOOT_COMPLETED",
+        "MODIFY_AUDIO_SETTINGS",
+        "ACCESS_FINE_LOCATION",
+        "ACCESS_COARSE_LOCATION"
+      ],
       "googleServicesFile": "./google-services.json",
       "icon": "./assets/icon.png",
       "adaptiveIcon": {
@@ -26,7 +31,6 @@
         "backgroundColor": "#E6F4FE"
       }
     },
-
     "plugins": [
       "expo-router",
       "@maplibre/maplibre-react-native",
@@ -40,20 +44,18 @@
           "resizeMode": "contain",
           "backgroundColor": "#ffffff"
         }
-      ]
+      ],
+      "expo-secure-store"
     ],
-
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
     },
-
     "extra": {
       "eas": {
         "projectId": "dff2151c-5fd2-47f4-a8c3-3ffd925d8e99"
       }
     },
-
     "owner": "indianworker38s-organization"
   }
 }

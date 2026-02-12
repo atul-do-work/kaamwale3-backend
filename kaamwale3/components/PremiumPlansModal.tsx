@@ -9,8 +9,8 @@ import {
 } from "react-native";
 import { MaterialIcons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
-import AsyncStorage from "@react-native-async-storage/async-storage";
-import { API_BASE } from "../utils/config";
+import { useAuth } from "../context/AuthContext";
+import api from "../utils/api";
 
 interface PremiumPlansModalProps {
   visible: boolean;
@@ -23,6 +23,7 @@ export default function PremiumPlansModal({
   onClose,
   onPlanSelected,
 }: PremiumPlansModalProps) {
+  const { accessToken } = useAuth();
   const [subscribing, setSubscribing] = useState(false);
   const [error, setError] = useState("");
   const [walletBalance, setWalletBalance] = React.useState(0);
@@ -36,11 +37,8 @@ export default function PremiumPlansModal({
 
   const fetchWalletBalance = async () => {
     try {
-      const token = await AsyncStorage.getItem("token");
-      const res = await fetch(`${API_BASE}/wallet/balance`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      const data = await res.json();
+      const res = await api.get(`/wallet/balance`);
+      const data = res.data;
       if (data.balance !== undefined) {
         setWalletBalance(data.balance);
       }
@@ -79,18 +77,9 @@ export default function PremiumPlansModal({
     try {
       setError("");
       setSubscribing(true);
-      const token = await AsyncStorage.getItem("token");
 
-      const res = await fetch(`${API_BASE}/premium/subscribe`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({ planId, customAddons: [] }),
-      });
-
-      const data = await res.json();
+      const res = await api.post(`/premium/subscribe`, { planId, customAddons: [] });
+      const data = res.data;
 
       if (data.success) {
         onPlanSelected(planId);

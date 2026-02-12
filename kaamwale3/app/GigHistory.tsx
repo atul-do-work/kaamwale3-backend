@@ -14,15 +14,15 @@ import {
 import { MaterialIcons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { useAuth } from '../context/AuthContext';
 import { API_BASE } from '../utils/config';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useLanguage } from '../context/LanguageContext';
 
 const { width } = Dimensions.get('window');
 
-const logActivity = async (action: string, details: string) => {
+const logActivity = async (token: string | null, action: string, details: string) => {
   try {
-    const token = await AsyncStorage.getItem('token');
     await fetch(`${API_BASE}/activity`, {
       method: 'POST',
       headers: {
@@ -85,6 +85,7 @@ interface Milestone {
 export default function GigHistory() {
   const router = useRouter();
   const { t } = useLanguage();
+  const { accessToken } = useAuth();
   const [gigs, setGigs] = useState<GigHistory[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -135,7 +136,7 @@ export default function GigHistory() {
   const fetchGigHistory = async () => {
     try {
       setLoading(true);
-      const token = await AsyncStorage.getItem('token');
+      const token = accessToken;
       const res = await fetch(`${API_BASE}/jobs/my-accepted`, {
         headers: { Authorization: `Bearer ${token}` },
       });
@@ -144,7 +145,7 @@ export default function GigHistory() {
         const data = await res.json();
         setGigs(data);
         calculateIncentiveProgress(data);
-        await logActivity('GIG_HISTORY_VIEWED', 'User viewed their gig history');
+        await logActivity(accessToken, 'GIG_HISTORY_VIEWED', 'User viewed their gig history');
       }
     } catch (err) {
       console.error('Error fetching gig history:', err);

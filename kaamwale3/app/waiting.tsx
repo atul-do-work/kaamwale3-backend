@@ -327,7 +327,7 @@ export default function WaitingScreen() {
             </View>
           </>
         ) : (
-          <Text style={styles.loadingText}>We are notifying workers near you</Text>
+          <Text style={styles.loadingText}>{t('weAreNotifyingWorkersNearYou')}</Text>
         )}
       </View>
 

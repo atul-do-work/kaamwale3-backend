@@ -10,8 +10,8 @@ import {
 import { MaterialIcons, Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import { useRouter } from "expo-router";
-import AsyncStorage from "@react-native-async-storage/async-storage";
-import { API_BASE } from "../utils/config";
+import { useAuth } from "../context/AuthContext";
+import api from "../utils/api";
 
 interface Transaction {
   id: string;
@@ -24,6 +24,7 @@ interface Transaction {
 
 export default function PaymentHistoryScreen(): React.ReactElement {
   const router = useRouter();
+  const { accessToken } = useAuth();
   const [filter, setFilter] = useState<"all" | "credit" | "debit" | "refund">("all");
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [loading, setLoading] = useState(true);
@@ -34,11 +35,8 @@ export default function PaymentHistoryScreen(): React.ReactElement {
 
   const fetchTransactions = async () => {
     try {
-      const token = await AsyncStorage.getItem("token");
-      const res = await fetch(`${API_BASE}/wallet/transactions`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      const data = await res.json();
+      const res = await api.get(`/wallet/transactions`);
+      const data = res.data;
       if (data.success && data.transactions) {
         setTransactions(data.transactions);
       }

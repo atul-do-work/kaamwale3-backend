@@ -13,11 +13,11 @@ import {
 import { MaterialIcons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { useAuth } from '../context/AuthContext';
 import { API_BASE } from '../utils/config';
 
-const logActivity = async (action: string, details: string) => {
+const logActivity = async (token: string | null, action: string, details: string) => {
   try {
-    const token = await AsyncStorage.getItem('token');
     await fetch(`${API_BASE}/activity`, {
       method: 'POST',
       headers: {
@@ -130,6 +130,7 @@ const CATEGORIES = [
 
 export default function VideosAndTutorials() {
   const router = useRouter();
+  const { accessToken } = useAuth();
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
   const [loading, setLoading] = useState(false);
 
@@ -139,7 +140,7 @@ export default function VideosAndTutorials() {
 
   const openYouTube = async (url: string, title: string) => {
     try {
-      await logActivity('VIDEO_WATCHED', `Watched tutorial: ${title}`);
+      await logActivity(accessToken, 'VIDEO_WATCHED', `Watched tutorial: ${title}`);
       await Linking.openURL(url);
     } catch (err) {
       console.error('Error opening URL:', err);

@@ -16,13 +16,14 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { WebView } from "react-native-webview";
 import { MaterialIcons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
-import AsyncStorage from "@react-native-async-storage/async-storage";
 import axios from "axios";
 import { useFocusEffect } from "@react-navigation/native"; // ✅ ADDED for closing modals on tab blur
 import { SERVER_URL, API_BASE } from "../../../utils/config";
 import styles from "../../../styles/ContractorWalletStyles";
 import { socket } from "../../../utils/socket";
 import { useLanguage } from "../../../context/LanguageContext";
+import { useAuth } from "../../../context/AuthContext";
+import api from "../../../utils/api";
 
 // Wallet cards data
 const walletCards = [
@@ -54,10 +55,10 @@ interface Job {
 export default function ContractorWalletAttendance() {
   const [activeTab, setActiveTab] = useState<"Wallet" | "Attendance">("Wallet");
   const { t } = useLanguage();
+  const { accessToken, user: authUser } = useAuth();
   const [jobs, setJobs] = useState<Job[]>([]);
   const [loading, setLoading] = useState(true);
   const [contractorName, setContractorName] = useState<string>("");
-  const [token, setToken] = useState<string>("");
   const [walletBalance, setWalletBalance] = useState<number>(0);
 
   const [depositAmount, setDepositAmount] = useState<string>("");
@@ -118,47 +119,35 @@ export default function ContractorWalletAttendance() {
     }, [])
   );
 
-  // Load contractor name & token from storage
+  // Load contractor name & token from AuthContext (migrated from AsyncStorage)
   useEffect(() => {
     (async () => {
       try {
-        const userStr = await AsyncStorage.getItem("user");
-        const savedToken = await AsyncStorage.getItem("token");
-
-        if (savedToken) setToken(savedToken);
+        const userStr = authUser ? JSON.stringify(authUser) : null;
 
         if (userStr) {
           const user = JSON.parse(userStr);
           if (user?.name) setContractorName(user.name);
         }
 
-        if (savedToken) {
-          fetchWallet(savedToken);
+        if (accessToken) {
+          fetchWallet(accessToken);
           fetchBankAccount();
         }
       } catch (err) {
-        console.error("Failed to load user or token", err);
+        console.error('Failed to load user or token', err);
       }
     })();
-  }, []);
+  }, [accessToken, authUser]);
 
   // Fetch Jobs
   const fetchJobs = async () => {
-    if (!contractorName || !token) return;
+    if (!contractorName || !accessToken) return;
 
     setLoading(true);
     try {
-      const res = await fetch(`${SERVER_URL}/jobs`, {
-        method: "GET",
-        headers: {
-          Authorization: `Bearer ${token}`,
-          "Content-Type": "application/json",
-        },
-      });
-
-      if (!res.ok) throw new Error("Failed to fetch jobs");
-
-      const data: Job[] = await res.json();
+      const res = await api.get(`/jobs`);
+      const data: Job[] = res.data;
 
       const myJobs = data
         .filter(j => j.contractorName === contractorName && j.status === "accepted")
@@ -199,16 +188,12 @@ export default function ContractorWalletAttendance() {
       socket.off("jobUpdated", fetchJobs);
       socket.off("walletUpdated");
     };
-  }, [contractorName, token]);
+  }, [contractorName, accessToken]);
 
   // Mark attendance
   const markAttendance = async (jobId: string, status: "Present" | "Absent") => {
     try {
-      await fetch(`${SERVER_URL}/jobs/attendance/${jobId}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ status }),
-      });
+      await api.post(`/jobs/attendance/${jobId}`, { status });
 
       setJobs(prev => prev.map(job => (job._id === jobId ? { ...job, attendanceStatus: status } : job)));
       socket.emit("jobUpdated");
@@ -221,15 +206,10 @@ export default function ContractorWalletAttendance() {
   // Pay worker - supports mode: "Cash" | "Online" (keeps existing logic)
   const payWorker = async (jobId: string, mode: string = "Cash") => {
     try {
-      const res = await fetch(`${SERVER_URL}/jobs/pay/${jobId}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ mode }),
-      });
+      const res = await api.post(`/jobs/pay/${jobId}`, { mode });
+      const data = res.data;
 
-      const data = await res.json();
-
-      if (res.ok && data.success) {
+      if (data.success) {
         Alert.alert(t('success'), t('paymentSuccessful'));
         setJobs(prev => prev.map(job => (job._id === jobId ? { ...job, paymentStatus: "Paid" } : job)));
         socket.emit("jobUpdated");
@@ -260,22 +240,14 @@ export default function ContractorWalletAttendance() {
       if (!job) return Alert.alert(t('error'), t('jobNotFound'));
 
       // Step 1: Create order on backend
-      const orderResponse = await fetch(`${SERVER_URL}/api/payment/create-order`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`
-        },
-        body: JSON.stringify({
-          jobId: job._id,
-          amount: job.amount,
-          workerPhone: job.acceptedBy,
-          workerName: job.acceptedBy
-        })
+      const orderRes = await api.post(`/api/payment/create-order`, {
+        jobId: job._id,
+        amount: job.amount,
+        workerPhone: job.acceptedBy,
+        workerName: job.acceptedBy
       });
 
-      const orderData = await orderResponse.json();
-      if (!orderData.success) {
+      if (!orderRes.data.success) {
         return Alert.alert(t('error'), t('failedCreatePayment'));
       }
 
@@ -296,12 +268,12 @@ export default function ContractorWalletAttendance() {
           </div>
           <script>
             var options = {
-              "key": "${orderData.key_id}",
-              "amount": ${orderData.amount},
+              "key": "${orderRes.data.key_id}",
+              "amount": ${orderRes.data.amount},
               "currency": "INR",
               "name": "Kaamwale",
               "description": "Payment for job: ${job.title}",
-              "order_id": "${orderData.orderId}",
+              "order_id": "${orderRes.data.orderId}",
               "handler": function (response){
                 window.ReactNativeWebView.postMessage(JSON.stringify({
                   type: 'payment_success',
@@ -366,32 +338,21 @@ export default function ContractorWalletAttendance() {
       const job = jobs.find(j => j._id === currentPaymentJobId);
       if (!job) return;
 
-      const verifyResponse = await fetch(`${SERVER_URL}/api/payment/verify-payment`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`
-        },
-        body: JSON.stringify({
-          orderId: data.orderId,
-          paymentId: data.paymentId,
-          signature: data.signature,
-          jobId: job._id,
-          amount: job.amount,
-          workerPhone: job.acceptedBy
-        })
+      const verifyRes = await api.post(`/api/payment/verify-payment`, {
+        orderId: data.orderId,
+        paymentId: data.paymentId,
+        signature: data.signature,
+        jobId: job._id,
+        amount: job.amount,
+        workerPhone: job.acceptedBy
       });
 
-      // Parse response
-      const verifyData = await verifyResponse.json().catch(() => ({
-        success: false,
-        message: 'Invalid response from server'
-      }));
+      const verifyData = verifyRes.data;
 
       setRazorpayModalVisible(false);
 
-      // Check HTTP status AND response success flag
-      if (verifyResponse.ok && verifyData.success) {
+      // Check response success flag
+      if (verifyData.success) {
         Alert.alert(t('success'), t('paymentSuccessful') + "! " + t('paymentSuccessful'));
         setJobs(prev => prev.map(j => (j._id === currentPaymentJobId ? { ...j, paymentStatus: "Paid" } : j)));
         
@@ -423,25 +384,18 @@ export default function ContractorWalletAttendance() {
   };
 
   const handleSubmitRating = async () => {
-    if (!selectedJobForRating || !token) return;
+    if (!selectedJobForRating || !accessToken) return;
 
     setSubmittingRating(true);
     try {
-      const response = await fetch(`${SERVER_URL}/jobs/rate/${selectedJobForRating._id}`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({
-          stars: ratingStars,
-          feedback: ratingFeedback,
-        }),
+      const res = await api.post(`/jobs/rate/${selectedJobForRating._id}`, {
+        stars: ratingStars,
+        feedback: ratingFeedback,
       });
 
-      const data = await response.json();
+      const data = res.data;
 
-      if (response.ok) {
+      if (data.success) {
         Alert.alert(t('success'), t('ratingSubmitted'));
         setRatingModalVisible(false);
         // Update the job in state to reflect the rating
@@ -462,29 +416,16 @@ export default function ContractorWalletAttendance() {
   };
 
   // WALLET
-  const fetchWallet = async (savedToken: string | null) => {
-    if (!savedToken) return;
+  const fetchWallet = async (accessTkn?: string) => {
+    const tkn = accessTkn || accessToken;
+    if (!tkn) return;
     try {
-      const res = await fetch(`${SERVER_URL}/wallet`, {
-        method: "GET",
-        headers: { Authorization: `Bearer ${savedToken}` },
-      });
+      const res = await api.get(`/wallet`);
+      const data = res.data;
 
-      // Defensive parsing: server may return plain text for errors (e.g. "Token missing")
-      const raw = await res.text();
-      let data: any = undefined;
-      try {
-        data = raw ? JSON.parse(raw) : undefined;
-      } catch (parseErr) {
-        console.warn("fetchWallet: non-JSON response:", raw);
-      }
-
-      if (res.ok && data && data.success) {
+      if (data && data.success) {
         setWalletBalance(data.wallet.balance);
         socket.emit("walletUpdated", data.wallet.balance);
-      } else if (!res.ok) {
-        // Show debug output in development and avoid crashing on JSON parse issues
-        console.warn("fetchWallet failed", res.status, data ?? raw);
       }
     } catch (err) {
       console.error("Wallet fetch failed:", err);
@@ -497,24 +438,17 @@ export default function ContractorWalletAttendance() {
     if (!amt || amt <= 0) return Alert.alert(t('error'), t('enterValidDeposit'));
 
     try {
-      const res = await fetch(`${SERVER_URL}/wallet/deposit`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ amount: amt }),
-      });
+      const res = await api.post(`/wallet/deposit`, { amount: amt });
+      const data = res.data;
 
-      const raw = await res.text();
-      let data: any = undefined;
-      try { data = raw ? JSON.parse(raw) : undefined; } catch { console.warn('handleDeposit: non-JSON response', raw); }
-
-      if (res.ok && data && data.success) {
+      if (data && data.success) {
         Alert.alert(t('success'), t('depositSuccessful'));
         setWalletBalance(data.wallet.balance);
         setDepositAmount("");
         setShowDepositInput(false);
         socket.emit("walletUpdated", data.wallet.balance);
       }
-    } catch {
+    } catch (err) {
       Alert.alert(t('error'), t('depositFailed'));
     }
   };
@@ -526,24 +460,17 @@ export default function ContractorWalletAttendance() {
     if (amt > walletBalance) return Alert.alert(t('error'), t('insufficientBalance'));
 
     try {
-      const res = await fetch(`${SERVER_URL}/wallet/withdraw`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ amount: amt }),
-      });
+      const res = await api.post(`/wallet/withdraw`, { amount: amt });
+      const data = res.data;
 
-      const raw = await res.text();
-      let data: any = undefined;
-      try { data = raw ? JSON.parse(raw) : undefined; } catch { console.warn('handleWithdraw: non-JSON response', raw); }
-
-      if (res.ok && data && data.success) {
+      if (data && data.success) {
         Alert.alert(t('success'), t('withdrawSuccessful'));
         setWalletBalance(data.wallet.balance);
         setWithdrawAmount("");
         setShowWithdrawInput(false);
         socket.emit("walletUpdated", data.wallet.balance);
       }
-    } catch {
+    } catch (err) {
       Alert.alert(t('error'), t('withdrawFailed'));
     }
   };
@@ -551,11 +478,7 @@ export default function ContractorWalletAttendance() {
   // ✅ Fetch bank account
   const fetchBankAccount = async () => {
     try {
-      const savedToken = await AsyncStorage.getItem("token");
-      const res = await axios.get(
-        `${API_BASE}/wallet/bank-account`,
-        { headers: { Authorization: `Bearer ${savedToken}` } }
-      );
+      const res = await api.get(`/wallet/bank-account`);
 
       if (res.data.success) {
         setBankAccount(res.data.bankAccount);
@@ -594,12 +517,7 @@ export default function ContractorWalletAttendance() {
     }
 
     try {
-      const savedToken = await AsyncStorage.getItem("token");
-      const res = await axios.post(
-        `${API_BASE}/wallet/bank-account/add`,
-        bankDetails,
-        { headers: { Authorization: `Bearer ${savedToken}` } }
-      );
+      const res = await api.post(`/wallet/bank-account/add`, bankDetails);
 
       if (res.data.success) {
         setBankAccount(res.data.bankAccount);
@@ -646,14 +564,10 @@ export default function ContractorWalletAttendance() {
     }
 
     try {
-      const savedToken = await AsyncStorage.getItem("token");
-      
       // Step 1: Create deposit order
-      const orderRes = await axios.post(
-        `${API_BASE}/wallet/deposit/create-order`,
-        { amount: Number(depositAmount) },
-        { headers: { Authorization: `Bearer ${savedToken}` } }
-      );
+      const orderRes = await api.post(`/wallet/deposit/create-order`, {
+        amount: Number(depositAmount)
+      });
 
       if (!orderRes.data.success) {
         Alert.alert(t('error'), t('failedCreateOrder'));
@@ -745,18 +659,12 @@ export default function ContractorWalletAttendance() {
   // Verify deposit payment
   const verifyDeposit = async (data: any) => {
     try {
-      const savedToken = await AsyncStorage.getItem("token");
-      
-      const res = await axios.post(
-        `${API_BASE}/wallet/deposit/verify`,
-        {
-          orderId: data.orderId,
-          paymentId: data.paymentId,
-          signature: data.signature,
-          amount: currentDepositAmount
-        },
-        { headers: { Authorization: `Bearer ${savedToken}` } }
-      );
+      const res = await api.post(`/wallet/deposit/verify`, {
+        orderId: data.orderId,
+        paymentId: data.paymentId,
+        signature: data.signature,
+        amount: currentDepositAmount
+      });
 
       setDepositModalVisible(false);
 
@@ -767,7 +675,7 @@ export default function ContractorWalletAttendance() {
         setShowDepositInput(false);
         
         // Refresh wallet
-        if (savedToken) fetchWallet(savedToken);
+        if (accessToken) fetchWallet(accessToken);
       } else {
         Alert.alert(t('error'), res.data.message || t('depositVerificationFailed'));
       }
@@ -808,16 +716,9 @@ export default function ContractorWalletAttendance() {
     }
 
     try {
-      const savedToken = await AsyncStorage.getItem("token");
-      if (!savedToken) {
-        Alert.alert(t('error'), t('tokenNotFound'));
-        return;
-      }
-      const res = await axios.post(
-        `${API_BASE}/wallet/withdraw`,
-        { amount: Number(withdrawAmount) },
-        { headers: { Authorization: `Bearer ${savedToken}` } }
-      );
+      const res = await api.post(`/wallet/withdraw`, {
+        amount: Number(withdrawAmount)
+      });
 
       if (res.data.success) {
         setWalletBalance(res.data.walletBalance);
@@ -826,7 +727,7 @@ export default function ContractorWalletAttendance() {
         setShowWithdrawInput(false);
         
         // Refresh wallet
-        if (savedToken) fetchWallet(savedToken);
+        if (accessToken) fetchWallet(accessToken);
       }
     } catch (err: any) {
       const errorMsg = err.response?.data?.message || t('withdrawFailed');

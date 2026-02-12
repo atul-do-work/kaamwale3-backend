@@ -13,8 +13,9 @@ import {
 import { MaterialIcons, Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import { useRouter, useFocusEffect } from "expo-router";
-import AsyncStorage from "@react-native-async-storage/async-storage";
+import { useAuth } from "../context/AuthContext";
 import { SERVER_URL } from "../utils/config";
+import api from "../utils/api";
 
 interface ActivityLog {
   _id: string;
@@ -51,40 +52,27 @@ const ACTION_ICONS: Record<string, { icon: string; color: string }> = {
 
 export default function ActivityHistoryScreen(): React.ReactElement {
   const router = useRouter();
+  const { accessToken } = useAuth();
   const [activities, setActivities] = useState<ActivityLog[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [token, setToken] = useState<string | null>(null);
   const [selectedFilter, setSelectedFilter] = useState<string>("all");
 
   // Fetch activity history
   const fetchActivityHistory = useCallback(async () => {
     try {
-      const storedToken = await AsyncStorage.getItem("token");
-      if (!storedToken) {
+      if (!accessToken) {
         Alert.alert("Error", "No authentication token found");
         return;
       }
-
-      setToken(storedToken);
 
       const queryParams = new URLSearchParams({
         limit: "100",
         skip: "0",
       });
 
-      const response = await fetch(
-        `${SERVER_URL}/activity/history?${queryParams}`,
-        {
-          method: "GET",
-          headers: {
-            "Authorization": `Bearer ${storedToken}`,
-            "Content-Type": "application/json",
-          },
-        }
-      );
-
-      const data = await response.json();
+      const res = await api.get(`/activity/history?${queryParams}`);
+      const data = res.data;
 
       if (data.success) {
         setActivities(data.activities || []);
@@ -99,7 +87,7 @@ export default function ActivityHistoryScreen(): React.ReactElement {
       setLoading(false);
       setRefreshing(false);
     }
-  }, []);
+  }, [accessToken]);
 
   // Initial load
   useEffect(() => {

@@ -15,6 +15,8 @@ import { MaterialIcons, Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useRouter } from 'expo-router';
+import { useLanguage } from '../../context/LanguageContext';
+import { useAuth } from '../../context/AuthContext';
 import { API_BASE } from '../../utils/config';
 import { socket } from '../../utils/socket';
 import * as Location from 'expo-location';
@@ -55,6 +57,8 @@ interface AggregatedStats {
 
 export default function DashboardScreen() {
   const router = useRouter();
+  const { t } = useLanguage();
+  const { accessToken, user: authUser } = useAuth();
   const [jobs, setJobs] = useState<Job[]>([]);
   const [loading, setLoading] = useState(true);
   const [token, setToken] = useState<string>('');
@@ -73,8 +77,8 @@ export default function DashboardScreen() {
   useEffect(() => {
     (async () => {
       try {
-        const userStr = await AsyncStorage.getItem('user');
-        const savedToken = await AsyncStorage.getItem('token');
+        const userStr = authUser ? JSON.stringify(authUser) : null;
+        const savedToken = accessToken;
 
         if (savedToken) setToken(savedToken);
         if (userStr) {
@@ -90,7 +94,7 @@ export default function DashboardScreen() {
         console.error('Failed to load user or token', err);
       }
     })();
-  }, []);
+  }, [accessToken, authUser]);
 
   // Listen for real-time worker location updates
   useEffect(() => {
@@ -251,8 +255,8 @@ export default function DashboardScreen() {
   // ✅ Show jobs that were ACCEPTED today (not just jobs with attendance marked)
   const jobsWithAttendance = jobs.filter((j) => {
     if (!j.acceptedBy) return false; // Only accepted jobs
-    // Check if accepted at timestamp matches today
-    const acceptedDate = j.acceptedAt ? new Date(j.acceptedAt).toDateString() : new Date(j.createdAt).toDateString();
+    // Check if accepted timestamp matches today
+    const acceptedDate = new Date(j.timestamp).toDateString();
     return acceptedDate === today;
   });
 
@@ -304,7 +308,7 @@ export default function DashboardScreen() {
           <View style={[styles.cardBubble, { position: 'absolute', right: -15, bottom: -15, width: 80, height: 80, backgroundColor: 'rgba(255, 255, 255, 0.1)' }]} />
           <MaterialIcons name="check-circle" size={32} color="#fff" />
           <Text style={styles.statValue}>{stats?.totalJobsCompleted || 0}</Text>
-          <Text style={styles.statLabel}>Completed</Text>
+          <Text style={styles.statLabel}>{t('completed')}</Text>
         </LinearGradient>
 
         <LinearGradient colors={['#1a2f4d', '#22344eff']} style={styles.statCard}>
@@ -312,7 +316,7 @@ export default function DashboardScreen() {
           <View style={[styles.cardBubble, { position: 'absolute', right: -15, bottom: -15, width: 80, height: 80, backgroundColor: 'rgba(255, 255, 255, 0.1)' }]} />
           <MaterialIcons name="people" size={32} color="#fff" />
           <Text style={styles.statValue}>{stats?.totalWorkersEngaged || 0}</Text>
-          <Text style={styles.statLabel}>Workers</Text>
+          <Text style={styles.statLabel}>{t('workers')}</Text>
         </LinearGradient>
 
         <LinearGradient colors={['#1a2f4d', '#22344eff']} style={styles.statCard}>
@@ -320,19 +324,19 @@ export default function DashboardScreen() {
           <View style={[styles.cardBubble, { position: 'absolute', right: -15, bottom: -15, width: 80, height: 80, backgroundColor: 'rgba(255, 255, 255, 0.1)' }]} />
           <MaterialIcons name="attach-money" size={32} color="#fff" />
           <Text style={styles.statValue}>₹{stats?.totalSpending || 0}</Text>
-          <Text style={styles.statLabel}>Spending</Text>
+          <Text style={styles.statLabel}>{t('spending')}</Text>
         </LinearGradient>
       </View>
 
       {/* Today's Worker Activity - Show only for today view */}
       {dateRange === 'today' && ( // ✅ Only show for today view, hide for week/month
         <View style={styles.sectionContainer}>
-          <Text style={styles.sectionTitle}>Today's Worker Acceptances</Text>
+          <Text style={styles.sectionTitle}>{t('todaysWorkerAcceptances')}</Text>
 
           {loading ? (
             <ActivityIndicator size="large" color="#1a2f4d" style={{ marginTop: 20 }} />
           ) : jobsWithAttendance.length === 0 ? (
-            <Text style={styles.noDataText}>No workers accepted jobs today</Text>
+            <Text style={styles.noDataText}>{t('noWorkersAcceptedJobToday')}</Text>
           ) : (
             jobsWithAttendance.map((job) => (
               <View key={job._id} style={styles.workerCard}>
@@ -346,7 +350,7 @@ export default function DashboardScreen() {
                   <View style={styles.jobDetails}>
                     <Text style={styles.detailText}>₹{job.amount}</Text>
                     <Text style={[styles.detailText, { color: '#00b894' }]}>
-                      Accepted {job.acceptedAt ? new Date(job.acceptedAt).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : 'today'}
+                      Accepted {job.timestamp ? new Date(job.timestamp).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : 'today'}
                     </Text>
                   </View>
                 </View>

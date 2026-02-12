@@ -13,12 +13,12 @@ import {
 import { MaterialIcons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { useAuth } from '../context/AuthContext';
 import * as ImagePicker from 'expo-image-picker';
 import { API_BASE } from '../utils/config';
 
-const logActivity = async (action: string, details: string) => {
+const logActivity = async (token: string | null, action: string, details: string) => {
   try {
-    const token = await AsyncStorage.getItem('token');
     await fetch(`${API_BASE}/activity`, {
       method: 'POST',
       headers: {
@@ -38,6 +38,7 @@ const logActivity = async (action: string, details: string) => {
 
 export default function DocumentsAndPolicies() {
   const router = useRouter();
+  const { accessToken } = useAuth();
   const [documents, setDocuments] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [uploading, setUploading] = useState(false);
@@ -49,7 +50,7 @@ export default function DocumentsAndPolicies() {
   const fetchDocuments = async () => {
     try {
       setLoading(true);
-      const token = await AsyncStorage.getItem('token');
+      const token = accessToken;
       const res = await fetch(`${API_BASE}/verification/status`, {
         headers: { Authorization: `Bearer ${token}` },
       });
@@ -100,7 +101,7 @@ export default function DocumentsAndPolicies() {
   const uploadDocument = async (photo: any, documentType: string) => {
     try {
       setUploading(true);
-      const token = await AsyncStorage.getItem('token');
+      const token = accessToken;
       
       const formData = new FormData();
       formData.append('documentType', documentType);
@@ -118,7 +119,7 @@ export default function DocumentsAndPolicies() {
 
       if (res.ok) {
         Alert.alert('Success', `${documentType.toUpperCase()} uploaded successfully!`);
-        await logActivity('DOCUMENT_UPLOAD', `Uploaded ${documentType} document`);
+        await logActivity(accessToken, 'DOCUMENT_UPLOAD', `Uploaded ${documentType} document`);
         fetchDocuments();
       } else {
         Alert.alert('Error', 'Failed to upload document');

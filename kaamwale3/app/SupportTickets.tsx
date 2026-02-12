@@ -17,9 +17,10 @@ import {
 import { MaterialIcons, Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import { useRouter, useFocusEffect } from "expo-router";
-import AsyncStorage from "@react-native-async-storage/async-storage";
+import { useAuth } from "../context/AuthContext";
 import * as ImagePicker from "expo-image-picker";
 import { SERVER_URL } from "../utils/config";
+import api from "../utils/api";
 
 interface SupportTicket {
   _id: string;
@@ -62,10 +63,10 @@ const TICKET_STATUSES = {
 export default function SupportTicketsScreen(): React.ReactElement {
     const { t } = useLanguage();
   const router = useRouter();
+  const { accessToken } = useAuth();
   const [tickets, setTickets] = useState<SupportTicket[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [token, setToken] = useState<string | null>(null);
   const [selectedTicket, setSelectedTicket] = useState<SupportTicket | null>(
     null
   );
@@ -86,23 +87,13 @@ export default function SupportTicketsScreen(): React.ReactElement {
   // Fetch tickets
   const fetchTickets = useCallback(async () => {
     try {
-      const storedToken = await AsyncStorage.getItem("token");
-      if (!storedToken) {
+      if (!accessToken) {
         Alert.alert(t('support_error_title'), t('support_error_no_token'));
         return;
       }
 
-      setToken(storedToken);
-
-      const response = await fetch(`${SERVER_URL}/support/tickets`, {
-        method: "GET",
-        headers: {
-          "Authorization": `Bearer ${storedToken}`,
-          "Content-Type": "application/json",
-        },
-      });
-
-      const data = await response.json();
+      const res = await api.get(`/support/tickets`);
+      const data = res.data;
 
       if (data.success) {
         setTickets(data.tickets || []);
@@ -117,7 +108,7 @@ export default function SupportTicketsScreen(): React.ReactElement {
       setLoading(false);
       setRefreshing(false);
     }
-  }, []);
+  }, [accessToken]);
 
   // Initial load
   useEffect(() => {
@@ -164,25 +155,18 @@ export default function SupportTicketsScreen(): React.ReactElement {
     setCreating(true);
 
     try {
-      if (!token) return;
+      if (!accessToken) return;
 
-      const response = await fetch(`${SERVER_URL}/support/create`, {
-        method: "POST",
-        headers: {
-          "Authorization": `Bearer ${token}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          type: newTicket.type,
-          subject: newTicket.subject,
-          description: newTicket.description,
-          jobId: newTicket.jobId || undefined,
-          reportedPhone: newTicket.reportedPhone || undefined,
-          screenshots: newTicket.screenshots,
-        }),
+      const res = await api.post(`/support/create`, {
+        type: newTicket.type,
+        subject: newTicket.subject,
+        description: newTicket.description,
+        jobId: newTicket.jobId || undefined,
+        reportedPhone: newTicket.reportedPhone || undefined,
+        screenshots: newTicket.screenshots,
       });
 
-      const data = await response.json();
+      const data = res.data;
       setCreating(false);
 
       if (data.success) {
@@ -210,20 +194,10 @@ export default function SupportTicketsScreen(): React.ReactElement {
   // View ticket details
   const viewTicketDetails = async (ticketId: string) => {
     try {
-      if (!token) return;
+      if (!accessToken) return;
 
-      const response = await fetch(
-        `${SERVER_URL}/support/ticket/${ticketId}`,
-        {
-          method: "GET",
-          headers: {
-            "Authorization": `Bearer ${token}`,
-            "Content-Type": "application/json",
-          },
-        }
-      );
-
-      const data = await response.json();
+      const res = await api.get(`/support/ticket/${ticketId}`);
+      const data = res.data;
 
       if (data.success) {
         setSelectedTicket(data.ticket);

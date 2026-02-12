@@ -1,12 +1,14 @@
 import React, { useState, useEffect } from 'react';
 import { View, Text, TextInput, TouchableOpacity, Alert, StatusBar, ActivityIndicator } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { useAuth } from '../context/AuthContext';
 import { useRouter } from 'expo-router';
 import { API_BASE } from '../utils/config';
 import styles from '../styles/LoginScreenStyles';
 
 export default function VerifyOtpScreen() {
   const router = useRouter();
+  const { saveTokens } = useAuth();
   const [phone, setPhone] = useState<string>('');
   const [otp, setOtp] = useState<string>('');
   const [loading, setLoading] = useState(false);
@@ -42,17 +44,11 @@ export default function VerifyOtpScreen() {
         return Alert.alert('Verification Failed', data?.message || 'Invalid or expired OTP');
       }
 
-      // Save tokens & user
+      // Save tokens & user via AuthProvider
       const accessToken = data.accessToken || data.token || null;
       const refreshToken = data.refreshToken || null;
 
-      if (accessToken) {
-        await AsyncStorage.setItem('accessToken', accessToken);
-        await AsyncStorage.setItem('token', accessToken);
-      }
-      if (refreshToken) await AsyncStorage.setItem('refreshToken', refreshToken);
-
-      if (data.user) await AsyncStorage.setItem('user', JSON.stringify(data.user));
+      await saveTokens(accessToken, refreshToken, data.user || null);
 
       Alert.alert('Success', 'Phone verified — you are logged in');
 

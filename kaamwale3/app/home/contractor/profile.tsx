@@ -3,11 +3,13 @@ import { View, Text, ScrollView, TouchableOpacity, Alert, Image, Platform , Dime
 import { SafeAreaView } from "react-native-safe-area-context";
 import { MaterialIcons, Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
-import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useRouter, useFocusEffect } from "expo-router";
 import * as ImagePicker from "expo-image-picker";
 import { API_BASE } from "../../../utils/config";
 import { clearAllUserData } from "../../../utils/socket";
+import { useAuth } from "../../../context/AuthContext";
+import { useLanguage } from '../../../utils/auth';
+import api from '../../../utils/api';
 import { StyleSheet } from "react-native";
 
 // ✅ Decorative Bubble Component
@@ -218,11 +220,12 @@ const styles = StyleSheet.create({
 });
 
 export default function ContractorProfile(): React.ReactElement {
+  const { t } = useLanguage();
+  const { accessToken, user: authUser } = useAuth();
   const [userName, setUserName] = useState<string>("Contractor");
   const [contractorId, setContractorId] = useState<string>("0000");
   const [profilePhoto, setProfilePhoto] = useState<string | null>(null);
   const [walletBalance, setWalletBalance] = useState<number>(0);
-  const [token, setToken] = useState<string>("");
   const [postedCount, setPostedCount] = useState(0);
   const [completedCount, setCompletedCount] = useState(0);
   const [inProgressCount, setInProgressCount] = useState(0);
@@ -232,15 +235,10 @@ export default function ContractorProfile(): React.ReactElement {
 
   const fetchJobStats = async (authToken: string) => {
     try {
-      const res = await fetch(`${API_BASE}/jobs`, {
-        headers: { Authorization: `Bearer ${authToken}` },
-      });
-
-      const raw = await res.text();
-      let data: any = undefined;
-      try { data = raw ? JSON.parse(raw) : undefined; } catch { console.warn('contractor profile jobs non-JSON', raw); }
+      const res = await api.get(`/jobs`);
+      const data = res.data;
       
-      if (res.ok && data && Array.isArray(data)) {
+      if (data && Array.isArray(data)) {
         const jobs = data;
         
         // Count statistics
@@ -262,48 +260,35 @@ export default function ContractorProfile(): React.ReactElement {
   useEffect(() => {
     (async () => {
       try {
-        const userStr = await AsyncStorage.getItem("user");
-        const photoStr = await AsyncStorage.getItem("profilePhoto");
-        const tokenStr = await AsyncStorage.getItem("token");
-
-        if (userStr) {
-          const parsed = JSON.parse(userStr);
-          setUserName(parsed.name || "Contractor");
-          setContractorId(parsed.phone || "0000");
+        if (authUser) {
+          setUserName(authUser.name || "Contractor");
+          setContractorId(authUser.phone || "0000");
         }
-        if (photoStr) setProfilePhoto(photoStr);
-        if (tokenStr) setToken(tokenStr);
 
         // Fetch wallet balance
-        if (tokenStr) {
-          const res = await fetch(`${API_BASE}/wallet`, {
-            headers: { Authorization: `Bearer ${tokenStr}` },
-          });
-
-          const raw = await res.text();
-          let data: any = undefined;
-          try { data = raw ? JSON.parse(raw) : undefined; } catch { console.warn('contractor profile wallet non-JSON', raw); }
-          if (res.ok && data && data.success) setWalletBalance(data.wallet?.balance || 0);
+        if (accessToken) {
+          const res = await api.get(`/wallet`);
+          const data = res.data;
+          if (data && data.success) setWalletBalance(data.wallet?.balance || 0);
 
           // Fetch job stats
-          await fetchJobStats(tokenStr);
+          await fetchJobStats(accessToken);
         }
       } catch (err) {
         console.error("Failed to load contractor info", err);
       }
     })();
-  }, []);
+  }, [authUser, accessToken]);
 
   // Refresh stats on focus
   useFocusEffect(
     React.useCallback(() => {
       (async () => {
-        const tokenStr = await AsyncStorage.getItem("token");
-        if (tokenStr) {
-          await fetchJobStats(tokenStr);
+        if (accessToken) {
+          await fetchJobStats(accessToken);
         }
       })();
-    }, [])
+    }, [accessToken])
   );
 
   const handleLogout = async () => {
