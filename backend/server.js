@@ -1743,7 +1743,6 @@ app.get("/leaderboard", async (req, res) => {
 
 // ===== OTP & AUTH ROUTES =====
 const { sendOtp } = require('./utils/sendOtp'); // ✅ Import Firebase OTP service
-const { sendPushToToken, sendNotificationToUserPhone } = require('./utils/push'); // ✅ Import Firebase push notifications for jobs
 
 // Request OTP - sends via Firebase Push or Console (for testing)
 app.post('/auth/request-otp', async (req, res) => {
