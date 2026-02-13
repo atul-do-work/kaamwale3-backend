@@ -14,6 +14,7 @@ const jobSchema = new mongoose.Schema({
   date: { type: Date, default: Date.now },
   startTime: String, // ✅ Start time like "09:00" or "9 AM"
   endTime: String, // ✅ End time like "18:00" or "6 PM"
+  numberOfDays: { type: Number, default: 1 }, // ✅ Job duration in days (1-30) - only for premium contractors
   status: { type: String, default: 'pending' },
   acceptedBy: String, // ✅ Legacy: first accepted worker phone
   acceptedWorker: { // ✅ Snapshot of worker data when accepted - legacy, use acceptedWorkers for bulk

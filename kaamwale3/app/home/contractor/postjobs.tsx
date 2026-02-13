@@ -20,6 +20,7 @@ interface JobPayload {
   lat: number;
   lon: number;
   date: string;
+  numberOfDays?: number;
   bulkHiring?: boolean;
   requiredWorkers?: number;
 }
@@ -55,6 +56,8 @@ export default function PostJobScreen() {
   const [hasPremium, setHasPremium] = useState(false); // ✅ Premium check
   const [bulkHiringEnabled, setBulkHiringEnabled] = useState(false); // ✅ Bulk hiring toggle
   const [requiredWorkers, setRequiredWorkers] = useState(1); // ✅ Number of workers needed
+  const [numberOfDays, setNumberOfDays] = useState(1); // ✅ Job duration in days (1-30)
+  const [showDaysDropdown, setShowDaysDropdown] = useState(false); // ✅ Days dropdown toggle
   const [gettingLocation, setGettingLocation] = useState(false); // ✅ Loading state for current location
   const [isPostingJob, setIsPostingJob] = useState(false); // ✅ Loading state for posting job
 
@@ -311,6 +314,7 @@ export default function PostJobScreen() {
         imageUrl,
         startTime: startTimeStr,
         endTime: endTimeStr,
+        numberOfDays: hasPremium ? numberOfDays : 1, // ✅ Include days for premium users, default 1 for free
         bulkHiring: bulkHiringEnabled, // ✅ Include bulk hiring flag
         requiredWorkers: bulkHiringEnabled ? requiredWorkers : 1, // ✅ Include required workers count
       };
@@ -350,6 +354,7 @@ export default function PostJobScreen() {
       setSelectedLocation(null);
       setStartTime(new Date());
       setEndTime(new Date());
+      setNumberOfDays(1); // ✅ Reset days
       setPriceError(false);
       setIsPostingJob(false); // ✅ Hide loading spinner
       
@@ -577,6 +582,29 @@ export default function PostJobScreen() {
                 </Text>
               </View>
             )}
+          </View>
+        )}
+
+        {/* ✅ Job Duration (Days) - Only for Premium Users */}
+        {hasPremium && (
+          <View style={styles.dropdownContainer}>
+            <Text style={styles.label}>Job Duration (Days)</Text>
+            <TouchableOpacity style={styles.dropdown} onPress={() => setShowDaysDropdown(!showDaysDropdown)}>
+              <Text style={[styles.dropdownText, { color: '#fff' }]}>{numberOfDays} {numberOfDays === 1 ? 'Day' : 'Days'}</Text>
+              <Ionicons name={showDaysDropdown ? 'chevron-up' : 'chevron-down'} size={20} color="#fff" />
+            </TouchableOpacity>
+            {showDaysDropdown && (
+              <View style={styles.dropdownMenu}>
+                {Array.from({ length: 30 }, (_, i) => i + 1).map((day) => (
+                  <TouchableOpacity key={day} style={styles.dropdownItem} onPress={() => { setNumberOfDays(day); setShowDaysDropdown(false); }}>
+                    <Text style={styles.dropdownItemText}>{day} {day === 1 ? 'Day' : 'Days'}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            )}
+            <Text style={{ color: '#999', fontSize: 12, marginTop: 8, paddingHorizontal: 16 }}>
+              Workers will know the expected job duration before accepting
+            </Text>
           </View>
         )}
 

@@ -87,10 +87,15 @@ interface Job {
   description: string;
   amount: string;
   contractorName: string;
+  contractorPhone?: string; // ✅ Contractor phone for help
   location?: string;
   lat: number;
   lon: number;
   timestamp: string;
+  date?: string; // ✅ Job date
+  startTime?: string; // ✅ Start time like "09:00"
+  endTime?: string; // ✅ End time like "18:00"
+  numberOfDays?: number; // ✅ Job duration in days
   distanceKm?: number;
   attendanceStatus?: "Present" | "Absent" | null;
   paymentStatus?: "Paid" | null;
@@ -1156,16 +1161,31 @@ function WorkerHome() {
         >
           <View style={styles.modalOverlay}>
             <View style={styles.modalContent}>
-              {/* Close Button */}
-              <TouchableOpacity 
-                style={styles.closeButton}
-                onPress={async () => {
-                  await cleanupJobAlert();
-                  setCurrentJob(null);
-                }}
-              >
-                <MaterialIcons name="close" size={28} color="#000" />
-              </TouchableOpacity>
+              {/* Top Row: Close Button and Need Help Phone Button */}
+              <View style={styles.topButtonsRow}>
+                <TouchableOpacity 
+                  style={styles.closeButton}
+                  onPress={async () => {
+                    await cleanupJobAlert();
+                    setCurrentJob(null);
+                  }}
+                >
+                  <MaterialIcons name="close" size={28} color="#000" />
+                </TouchableOpacity>
+
+                {/* Need Help Button */}
+                {currentJob.contractorPhone && (
+                  <TouchableOpacity 
+                    style={styles.helpButton}
+                    onPress={() => {
+                      Alert.alert('Help', `Call: ${currentJob.contractorPhone}`);
+                      // Could implement actual phone call here if desired
+                    }}
+                  >
+                    <MaterialIcons name="phone" size={28} color="#2ecc71" />
+                  </TouchableOpacity>
+                )}
+              </View>
 
               {/* Header Badge */}
               <View style={styles.badgeContainer}>
@@ -1196,27 +1216,66 @@ function WorkerHome() {
                   </View>
                 </View>
 
+                {/* Main Skill */}
+                <View style={styles.infoItem}>
+                  <MaterialIcons name="build" size={20} color="#f39c12" />
+                  <View style={styles.infoText}>
+                    <Text style={styles.infoLabel}>Main Skill</Text>
+                    <Text style={styles.infoValue}>{currentJob.description || "N/A"}</Text>
+                  </View>
+                </View>
+
+                {/* Worker Type (Secondary Skill) */}
+                {currentJob.workerType && (
+                  <View style={styles.infoItem}>
+                    <MaterialIcons name="work" size={20} color="#9b59b6" />
+                    <View style={styles.infoText}>
+                      <Text style={styles.infoLabel}>Secondary Skill</Text>
+                      <Text style={styles.infoValue}>{currentJob.workerType}</Text>
+                    </View>
+                  </View>
+                )}
+
+                {/* Job Date */}
+                {currentJob.date && (
+                  <View style={styles.infoItem}>
+                    <MaterialIcons name="event" size={20} color="#e67e22" />
+                    <View style={styles.infoText}>
+                      <Text style={styles.infoLabel}>Date</Text>
+                      <Text style={styles.infoValue}>{new Date(currentJob.date).toLocaleDateString()}</Text>
+                    </View>
+                  </View>
+                )}
+
+                {/* Start Time & End Time */}
+                {(currentJob.startTime || currentJob.endTime) && (
+                  <View style={styles.infoItem}>
+                    <MaterialIcons name="schedule" size={20} color="#3498db" />
+                    <View style={styles.infoText}>
+                      <Text style={styles.infoLabel}>Work Hours</Text>
+                      <Text style={styles.infoValue}>
+                        {currentJob.startTime || "N/A"} - {currentJob.endTime || "N/A"}
+                      </Text>
+                    </View>
+                  </View>
+                )}
+
+                {/* Number of Days */}
+                {currentJob.numberOfDays && (
+                  <View style={styles.infoItem}>
+                    <MaterialIcons name="timer" size={20} color="#e74c3c" />
+                    <View style={styles.infoText}>
+                      <Text style={styles.infoLabel}>Duration</Text>
+                      <Text style={styles.infoValue}>{currentJob.numberOfDays} {currentJob.numberOfDays === 1 ? 'day' : 'days'}</Text>
+                    </View>
+                  </View>
+                )}
+
                 <View style={styles.infoItem}>
                   <MaterialIcons name="location-on" size={20} color="#e74c3c" />
                   <View style={styles.infoText}>
                     <Text style={styles.infoLabel}>Location</Text>
                     <Text style={styles.infoValue}>{currentJob.location || "Loading..."}</Text>
-                  </View>
-                </View>
-
-                <View style={styles.infoItem}>
-                  <MaterialIcons name="description" size={20} color="#f39c12" />
-                  <View style={styles.infoText}>
-                    <Text style={styles.infoLabel}>Description</Text>
-                    <Text style={styles.infoValue}>{currentJob.description}</Text>
-                  </View>
-                </View>
-
-                <View style={styles.infoItem}>
-                  <MaterialIcons name="work" size={20} color="#9b59b6" />
-                  <View style={styles.infoText}>
-                    <Text style={styles.infoLabel}>Type</Text>
-                    <Text style={styles.infoValue}>{currentJob.workerType || "General"}</Text>
                   </View>
                 </View>
 
@@ -1628,9 +1687,23 @@ const styles = StyleSheet.create({
     shadowRadius: 15,
     elevation: 15,
   },
+  topButtonsRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 10,
+  },
   closeButton: {
-    alignSelf: "flex-end",
     padding: 5,
+  },
+  helpButton: {
+    padding: 5,
+    backgroundColor: "rgba(46, 204, 113, 0.1)",
+    borderRadius: 24,
+    width: 44,
+    height: 44,
+    justifyContent: "center",
+    alignItems: "center",
   },
   badgeContainer: {
     flexDirection: "row",

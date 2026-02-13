@@ -27,6 +27,7 @@ interface Job {
   imageUrl?: string; // ✅ Job image URL
   startTime?: string; // ✅ Start time like "09:00"
   endTime?: string; // ✅ End time like "18:00"
+  numberOfDays?: number; // ✅ Job duration in days
   lat: number;
   lon: number;
   date: string; // ✅ Job date from backend
@@ -367,6 +368,16 @@ export default function Jobs(): React.ReactElement {
                         </View>
                       )}
                     </View>
+
+                    {/* Duration (Days) - ✅ Show job duration */}
+                    {job.numberOfDays && (
+                      <View style={{ flexDirection: "row", alignItems: "center", marginBottom: 10 }}>
+                        <MaterialIcons name="timer" size={14} color="#999" />
+                        <Text style={{ color: "#666", fontSize: 12, marginLeft: 6 }}>
+                          Duration: {job.numberOfDays} {job.numberOfDays === 1 ? 'day' : 'days'}
+                        </Text>
+                      </View>
+                    )}
 
                     {/* Location */}
                     <TouchableOpacity

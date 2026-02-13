@@ -8,6 +8,7 @@ import styles from '../styles/RegisterScreenStyles';
 import { registerForPushNotificationsAsync } from '../services/notification';
 import { useLanguage } from '../context/LanguageContext';
 import { useAuth } from '../context/AuthContext';
+import TermsAndConditionsModal from '../components/TermsAndConditionsModal';
 
 type User = {
   name: string;
@@ -50,6 +51,7 @@ export default function Register() {
   const [role, setRole] = useState<'worker' | 'contractor'>('worker');
   const [isLoading, setIsLoading] = useState(false);
   const [agreedToTerms, setAgreedToTerms] = useState(false);
+  const [termsModalVisible, setTermsModalVisible] = useState(false);
 
   // ✅ FIX: Check if user is already logged in and redirect
   useEffect(() => {
@@ -232,9 +234,14 @@ export default function Register() {
             <MaterialIcons name="check" size={16} color="#fff" />
           )}
         </TouchableOpacity>
-        <Text style={{ marginLeft: 10, color: '#555', fontSize: 13, flex: 1 }}>
-          {t('agreeTerms')}
-        </Text>
+        <TouchableOpacity
+          style={{ marginLeft: 10, flex: 1 }}
+          onPress={() => setTermsModalVisible(true)}
+        >
+          <Text style={{ color: '#fff', fontSize: 13 }}>
+            {t('agreeTerms')}
+          </Text>
+        </TouchableOpacity>
       </View>
 
       <TouchableOpacity style={styles.registerButton} onPress={handleRegister} disabled={isLoading}>
@@ -244,6 +251,9 @@ export default function Register() {
           <Text style={styles.buttonText}>{t('register')}</Text>
         )}
       </TouchableOpacity>
+
+      {/* ✅ Terms and Conditions Modal */}
+      <TermsAndConditionsModal visible={termsModalVisible} onClose={() => setTermsModalVisible(false)} />
     </View>
   );
 }
