@@ -1255,9 +1255,15 @@ app.get("/users/profile", authenticateToken, async (req, res) => {
 // GET: Find nearby workers for contractor (uses worker's GeoJSON location)
 app.get('/workers/nearby', authenticateToken, async (req, res) => {
   try {
-    let lat = parseFloat(req.query.lat);
-    let lon = parseFloat(req.query.lon);
-    const maxMeters = parseInt((req.query.max || '10000'), 10);
+    let lat = req.query.lat ? parseFloat(req.query.lat) : null;
+    let lon = req.query.lon ? parseFloat(req.query.lon) : null;
+    const maxMeters = parseInt((req.query.max || '70000'), 10);
+
+    // Validate parsed coordinates are numbers (not NaN)
+    if (lat === null || lon === null || isNaN(lat) || isNaN(lon)) {
+      lat = null;
+      lon = null;
+    }
 
     // If lat/lon not provided, try user's stored location
     if ((!lat || !lon) && req.user && req.user.phone) {
@@ -1265,12 +1271,16 @@ app.get('/workers/nearby', authenticateToken, async (req, res) => {
       if (u && u.location && u.location.coordinates) {
         lon = u.location.coordinates[0];
         lat = u.location.coordinates[1];
+        console.log(`📍 Using stored user location: [${lon.toFixed(4)}, ${lat.toFixed(4)}]`);
       }
     }
 
     if (!lat || !lon) {
       return res.status(400).json({ success: false, message: 'Latitude and longitude required' });
     }
+
+    // ✅ DEBUG: Log input coordinates and max distance
+    console.log(`🔍 /workers/nearby query: lat=${lat}, lon=${lon}, maxMeters=${maxMeters}`);
 
     // ✅ ENHANCED: $geoNear aggregation pipeline with $lookup for efficient data enrichment
     // Finds workers within maxMeters (70km default) using spherical geometry
@@ -1345,7 +1355,16 @@ app.get('/workers/nearby', authenticateToken, async (req, res) => {
     ]);
 
     // ✅ Log query stats for monitoring
-    console.log(`✅ Found ${nearby.length} workers within ${(maxMeters || 70000) / 1000}km of (${lat}, ${lon})`);
+    console.log(`✅ Found ${nearby.length} workers within ${(maxMeters || 70000) / 1000}km of (${lat.toFixed(4)}, ${lon.toFixed(4)})`);
+    
+    if (nearby.length === 0) {
+      console.warn(`⚠️ No workers found. Checking Worker collection stats...`);
+      const totalWorkers = await WorkerModel.countDocuments();
+      const workersWithValidLocation = await WorkerModel.countDocuments({ 
+        'location.coordinates': { $ne: [0, 0] } 
+      });
+      console.warn(`   Total workers: ${totalWorkers}, Workers with valid location: ${workersWithValidLocation}`);
+    }
 
     return res.json({ 
       success: true, 
@@ -1354,7 +1373,7 @@ app.get('/workers/nearby', authenticateToken, async (req, res) => {
       workers: nearby 
     });
   } catch (err) {
-    console.error('workers/nearby error', err);
+    console.error('❌ workers/nearby error', err);
     return res.status(500).json({ success: false, message: 'Failed to fetch nearby workers', error: err.message });
   }
 });
@@ -3589,6 +3608,69 @@ app.post("/auth/refresh-fcm-token", authenticateToken, async (req, res) => {
 });
 
 
+
+// 🐛 DEBUG: List all workers with their locations (for troubleshooting)
+app.get('/debug/workers-locations', authenticateToken, async (req, res) => {
+  try {
+    const workers = await WorkerModel.find({}).select('phone name location isAvailable').lean();
+    const formattedWorkers = workers.map(w => ({
+      phone: w.phone,
+      name: w.name,
+      location: w.location?.coordinates || [0, 0],
+      isAvailable: w.isAvailable
+    }));
+    return res.json({ 
+      success: true, 
+      count: workers.length,
+      workers: formattedWorkers 
+    });
+  } catch (err) {
+    console.error('debug/workers-locations error', err);
+    return res.status(500).json({ success: false, message: 'Error fetching workers', error: err.message });
+  }
+});
+
+// 🐛 DEBUG: Check if 2dsphere index exists and test $geoNear query
+app.get('/debug/geo-test', authenticateToken, async (req, res) => {
+  try {
+    const { lat = 26.9988724, lon = 75.9130502 } = req.query;
+    
+    // Check indexes on Worker collection
+    const indexes = await WorkerModel.collection.getIndexes();
+    console.log('Worker collection indexes:', indexes);
+
+    // Try a simple $geoNear query
+    const result = await WorkerModel.aggregate([
+      {
+        $geoNear: {
+          near: { type: 'Point', coordinates: [parseFloat(lon), parseFloat(lat)] },
+          distanceField: 'distance',
+          maxDistance: 100000, // 100km for testing
+          spherical: true
+        }
+      },
+      { $limit: 10 }
+    ]);
+
+    console.log(`✅ $geoNear test: Found ${result.length} workers`);
+
+    return res.json({ 
+      success: true, 
+      message: '$geoNear query executed successfully',
+      indexes: indexes,
+      testCoordinates: [parseFloat(lon), parseFloat(lat)],
+      resultCount: result.length,
+      workers: result.slice(0, 5).map(w => ({
+        phone: w.phone,
+        distance: w.distance,
+        location: w.location?.coordinates
+      }))
+    });
+  } catch (err) {
+    console.error('❌ debug/geo-test error', err);
+    return res.status(500).json({ success: false, message: 'Geo test failed', error: err.message });
+  }
+});
 
 // ✅ Start leaderboard scheduler when server starts
 setTimeout(() => {

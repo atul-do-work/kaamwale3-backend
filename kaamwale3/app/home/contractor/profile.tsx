@@ -294,6 +294,16 @@ export default function ContractorProfile(): React.ReactElement {
     }, [accessToken])
   );
 
+  // ✅ Reload profile photo when screen is focused (instant update after photo selection)
+  useFocusEffect(
+    React.useCallback(() => {
+      (async () => {
+        const savedPhoto = await AsyncStorage.getItem("profilePhoto");
+        if (savedPhoto) setProfilePhoto(savedPhoto);
+      })();
+    }, [])
+  );
+
   const handleLogout = async () => {
     Alert.alert("Logout", "Are you sure you want to logout?", [
       { text: "Cancel", style: "cancel" },

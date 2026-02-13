@@ -188,6 +188,7 @@ function WorkerHome() {
   const [totalEarnings, setTotalEarnings] = useState<number>(0);
   const [notificationCount, setNotificationCount] = useState<number>(0);
   const [workerProfilePhoto, setWorkerProfilePhoto] = useState<string | null>(null); // ✅ Worker profile photo
+  const [showHelpModal, setShowHelpModal] = useState<boolean>(false); // ✅ Help modal state
 
   // Online/Offline toggle state
   const [isOnline, setIsOnline] = useState<boolean>(false);
@@ -1204,8 +1205,7 @@ function WorkerHome() {
                   <TouchableOpacity 
                     style={styles.helpButton}
                     onPress={() => {
-                      Alert.alert('Help', `Call: ${currentJob.contractorPhone}`);
-                      // Could implement actual phone call here if desired
+                      setShowHelpModal(true);
                     }}
                   >
                     <MaterialIcons name="phone" size={28} color="#2ecc71" />
@@ -1589,6 +1589,25 @@ function WorkerHome() {
         </TouchableOpacity>
       </Modal>
 
+      {/* ✅ Help Modal - "Team will call you in 5 minutes" */}
+      <Modal visible={showHelpModal} animationType="fade" transparent={true}>
+        <View style={styles.helpModalContainer}>
+          <View style={styles.helpModalContent}>
+            <MaterialIcons name="phone" size={48} color="#2ecc71" style={{ marginBottom: 16 }} />
+            <Text style={styles.helpModalTitle}>Help Request Sent!</Text>
+            <Text style={styles.helpModalMessage}>
+              The team will call you in 5 minutes
+            </Text>
+            <TouchableOpacity 
+              style={styles.helpModalButton}
+              onPress={() => setShowHelpModal(false)}
+            >
+              <Text style={styles.helpModalButtonText}>OK</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
       <FullContainer 
         todayEarnings={todayEarnings}
         timeOnOrder={timeOnOrder}
@@ -1888,6 +1907,53 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 4 },
     shadowRadius: 8,
     elevation: 5,
+  },
+  // ✅ Help Modal Styles
+  helpModalContainer: {
+    flex: 1,
+    backgroundColor: "rgba(0, 0, 0, 0.5)",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  helpModalContent: {
+    backgroundColor: "#fff",
+    borderRadius: 20,
+    paddingHorizontal: 24,
+    paddingVertical: 32,
+    alignItems: "center",
+    width: "85%",
+    maxWidth: 300,
+    shadowColor: "#000",
+    shadowOpacity: 0.25,
+    shadowOffset: { width: 0, height: 4 },
+    shadowRadius: 8,
+    elevation: 5,
+  },
+  helpModalTitle: {
+    fontSize: 20,
+    fontWeight: "700",
+    color: "#2ecc71",
+    marginBottom: 12,
+  },
+  helpModalMessage: {
+    fontSize: 16,
+    color: "#666",
+    textAlign: "center",
+    marginBottom: 24,
+    lineHeight: 22,
+  },
+  helpModalButton: {
+    backgroundColor: "#2ecc71",
+    paddingHorizontal: 40,
+    paddingVertical: 12,
+    borderRadius: 10,
+    minWidth: 120,
+    alignItems: "center",
+  },
+  helpModalButtonText: {
+    color: "#fff",
+    fontSize: 16,
+    fontWeight: "700",
   },
 });
 

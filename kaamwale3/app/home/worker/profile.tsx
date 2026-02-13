@@ -15,7 +15,7 @@ import styles from "../../../styles/WorkerProfileStyles";
 import { LinearGradient } from "expo-linear-gradient";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as ImagePicker from "expo-image-picker";
-import { useRouter } from "expo-router";
+import { useRouter, useFocusEffect } from "expo-router";
 import axios from "axios";
 import { API_BASE } from "../../../utils/config";
 import { clearAllUserData } from "../../../utils/socket";
@@ -84,6 +84,16 @@ export default function Profile(): React.ReactElement {
       }
     })();
   }, []);
+
+  // ✅ Reload profile photo when screen is focused (instant update after photo selection)
+  useFocusEffect(
+    React.useCallback(() => {
+      (async () => {
+        const profileStr = await AsyncStorage.getItem("profilePhoto");
+        if (profileStr) setProfilePhoto(profileStr);
+      })();
+    }, [])
+  );
 
   // ✅ Fetch earnings data when modal is opened
   const fetchEarningsData = async () => {
