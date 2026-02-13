@@ -385,10 +385,13 @@ export default function ContractorHome() {
         style={styles.headerContainer}
       >
         <View style={styles.headerContent}>
-          <View>
-            <Text style={styles.dashboardText}>{t('dashboard')}</Text>
-            <Text style={styles.greetingText}>{getGreeting()}, {userName}</Text>
-          </View>
+          {/* ✅ Circular Profile Photo on Left */}
+          <TouchableOpacity 
+            onPress={() => router.push('/home/contractor/profile' as any)}
+            style={styles.headerProfileContainer}
+          >
+            <Image source={userProfilePhoto} style={styles.headerProfilePhoto} />
+          </TouchableOpacity>
           <TouchableOpacity 
             style={styles.bellContainer}
             onPress={() => router.push("/NotificationHistory" as any)}

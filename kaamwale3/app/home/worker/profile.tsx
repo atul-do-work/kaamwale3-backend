@@ -7,9 +7,9 @@ import {
   Alert,
   Image,
   Platform,
-  SafeAreaView,
   Modal,
 } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { MaterialIcons, Ionicons } from "@expo/vector-icons";
 import styles from "../../../styles/WorkerProfileStyles";
 import { LinearGradient } from "expo-linear-gradient";
@@ -33,6 +33,7 @@ const WAGE_RANGES = [
 export default function Profile(): React.ReactElement {
   const { t } = useLanguage();
   const { logout } = useAuth();
+  const insets = useSafeAreaInsets();
   const [userName, setUserName] = useState<string>("Worker");
   const [workerId, setWorkerId] = useState<string>("0000");
   const [profilePhoto, setProfilePhoto] = useState<string | null>(null);
@@ -286,7 +287,7 @@ export default function Profile(): React.ReactElement {
   ];
 
   return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: "#f5f5f5" }}>
+    <View style={{ flex: 1, backgroundColor: "#f5f5f5", paddingTop: insets.top }}>
       <ScrollView style={styles.container}>
         {/* Header with Three-Dot Menu */}
         <View style={{ position: 'relative' }}>
@@ -608,6 +609,6 @@ export default function Profile(): React.ReactElement {
         </TouchableOpacity>
         </Modal>
       </ScrollView>
-    </SafeAreaView>
+    </View>
   );
 }

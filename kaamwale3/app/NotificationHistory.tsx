@@ -314,8 +314,7 @@ export default function NotificationHistoryScreen(): React.ReactElement {
             size={80}
             color="#D1D5DB"
           />
-          <Text style={styles.emptyTitle}>No Notifications</Text>
-                    <Text style={styles.emptyTitle}>{t('noNotifications')}</Text>
+          <Text style={styles.emptyTitle}>{t('noNotifications')}</Text>
           <Text style={styles.emptyText}>
             {filter === "unread"
               ? t('allCaughtUpNoUnread')

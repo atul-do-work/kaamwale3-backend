@@ -38,6 +38,20 @@ export default StyleSheet.create({
   dashboardText: { fontSize: 28, fontWeight: '800', color: '#fff', letterSpacing: 0.5 },
   greetingText: { fontSize: 14, color: '#d0dfe8', marginTop: 4, fontWeight: '500' },
 
+  // ✅ Profile Photo Styles
+  headerProfileContainer: {
+    width: 50,
+    height: 50,
+    borderRadius: 25,
+    overflow: 'hidden',
+    marginRight: 12,
+  },
+  headerProfilePhoto: {
+    width: 50,
+    height: 50,
+    borderRadius: 25,
+  },
+
   // BELL - Enhanced notification icon
   bellContainer: {
     backgroundColor: '#FFD700',

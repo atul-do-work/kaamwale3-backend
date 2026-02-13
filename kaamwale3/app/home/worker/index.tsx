@@ -9,6 +9,7 @@ import {
   Alert,
   Modal,
   Platform,
+  Image,
 } from "react-native";
 import * as Notifications from 'expo-notifications'; // ✅ For foreground notifications
 import { useFocusEffect } from "@react-navigation/native";
@@ -186,6 +187,7 @@ function WorkerHome() {
   const [historyCount, setHistoryCount] = useState<number>(0);
   const [totalEarnings, setTotalEarnings] = useState<number>(0);
   const [notificationCount, setNotificationCount] = useState<number>(0);
+  const [workerProfilePhoto, setWorkerProfilePhoto] = useState<string | null>(null); // ✅ Worker profile photo
 
   // Online/Offline toggle state
   const [isOnline, setIsOnline] = useState<boolean>(false);
@@ -274,12 +276,15 @@ function WorkerHome() {
         
         const userStr = await AsyncStorage.getItem("user");
         const storedToken = await AsyncStorage.getItem("token");
+        const profilePhotoStr = await AsyncStorage.getItem("profilePhoto"); // ✅ Load profile photo
 
         if (userStr) {
           const user = JSON.parse(userStr);
           if (user?.name) setWorkerName(user.name);
           if (user?.workerType) setWorkerType(user.workerType);
         }
+
+        if (profilePhotoStr) setWorkerProfilePhoto(profilePhotoStr); // ✅ Set profile photo
 
         if (storedToken) {
           setToken(storedToken);
@@ -1118,12 +1123,21 @@ function WorkerHome() {
       
       {error ? null : (
         <>
-          {/* Header with Notification Bell & Online Toggle */}
+          {/* Header with Profile Icon & Notification Bell & Online Toggle */}
           <View style={styles.headerContainer}>
-        <View>
-          <Text style={styles.dashboardText}>{t('dashboard')}</Text>
-          <Text style={styles.greetingText}>{getGreeting(t)}, {workerName}</Text>
-        </View>
+        {/* ✅ Circular Profile Photo on Left */}
+        <TouchableOpacity 
+          onPress={() => router.push('/home/worker/profile' as any)}
+          style={styles.headerProfileContainer}
+        >
+          {workerProfilePhoto ? (
+            <Image source={{ uri: workerProfilePhoto }} style={styles.headerProfilePhoto} />
+          ) : (
+            <View style={styles.headerProfilePlaceholder}>
+              <MaterialIcons name="person" size={24} color="#fff" />
+            </View>
+          )}
+        </TouchableOpacity>
         <View style={styles.headerRightContainer}>
           {/* Online/Offline Toggle */}
           <TouchableOpacity 
@@ -1218,71 +1232,74 @@ function WorkerHome() {
                   <Text style={styles.amountLabel}>💰 Payment</Text>
                   <Text style={styles.amountValue}>₹{currentJob.amount}</Text>
                 </View>
-
-                {/* Info Items */}
-                <View style={styles.infoItem}>
-                  <MaterialIcons name="person" size={20} color="#3498db" />
-                  <View style={styles.infoText}>
-                    <Text style={styles.infoLabel}>Contractor</Text>
-                    <Text style={styles.infoValue}>{currentJob.contractorName || "Unknown"}</Text>
+                {/* Info Items Grid - 2 columns */}
+                <View style={styles.infoGrid}>
+                  {/* Contractor */}
+                  <View style={styles.infoItemGrid}>
+                    <MaterialIcons name="person" size={20} color="#3498db" />
+                    <View style={styles.infoText}>
+                      <Text style={styles.infoLabel}>Contractor</Text>
+                      <Text style={styles.infoValue}>{currentJob.contractorName || "Unknown"}</Text>
+                    </View>
                   </View>
+
+                  {/* Main Skill */}
+                  <View style={styles.infoItemGrid}>
+                    <MaterialIcons name="build" size={20} color="#f39c12" />
+                    <View style={styles.infoText}>
+                      <Text style={styles.infoLabel}>Skill</Text>
+                      <Text style={styles.infoValue}>{currentJob.description || "N/A"}</Text>
+                    </View>
+                  </View>
+
+                  {/* Worker Type (Secondary Skill) */}
+                  {currentJob.workerType && (
+                    <View style={styles.infoItemGrid}>
+                      <MaterialIcons name="work" size={20} color="#9b59b6" />
+                      <View style={styles.infoText}>
+                        <Text style={styles.infoLabel}>Secondary</Text>
+                        <Text style={styles.infoValue}>{currentJob.workerType}</Text>
+                      </View>
+                    </View>
+                  )}
+
+                  {/* Job Date */}
+                  {currentJob.date && (
+                    <View style={styles.infoItemGrid}>
+                      <MaterialIcons name="event" size={20} color="#e67e22" />
+                      <View style={styles.infoText}>
+                        <Text style={styles.infoLabel}>Date</Text>
+                        <Text style={styles.infoValue}>{new Date(currentJob.date).toLocaleDateString()}</Text>
+                      </View>
+                    </View>
+                  )}
+
+                  {/* Start Time & End Time */}
+                  {(currentJob.startTime || currentJob.endTime) && (
+                    <View style={styles.infoItemGrid}>
+                      <MaterialIcons name="schedule" size={20} color="#3498db" />
+                      <View style={styles.infoText}>
+                        <Text style={styles.infoLabel}>Hours</Text>
+                        <Text style={styles.infoValue}>
+                          {currentJob.startTime || "N/A"} - {currentJob.endTime || "N/A"}
+                        </Text>
+                      </View>
+                    </View>
+                  )}
+
+                  {/* Number of Days */}
+                  {currentJob.numberOfDays && (
+                    <View style={styles.infoItemGrid}>
+                      <MaterialIcons name="timer" size={20} color="#e74c3c" />
+                      <View style={styles.infoText}>
+                        <Text style={styles.infoLabel}>Duration</Text>
+                        <Text style={styles.infoValue}>{currentJob.numberOfDays} {currentJob.numberOfDays === 1 ? 'day' : 'days'}</Text>
+                      </View>
+                    </View>
+                  )}
                 </View>
 
-                {/* Main Skill */}
-                <View style={styles.infoItem}>
-                  <MaterialIcons name="build" size={20} color="#f39c12" />
-                  <View style={styles.infoText}>
-                    <Text style={styles.infoLabel}>Main Skill</Text>
-                    <Text style={styles.infoValue}>{currentJob.description || "N/A"}</Text>
-                  </View>
-                </View>
-
-                {/* Worker Type (Secondary Skill) */}
-                {currentJob.workerType && (
-                  <View style={styles.infoItem}>
-                    <MaterialIcons name="work" size={20} color="#9b59b6" />
-                    <View style={styles.infoText}>
-                      <Text style={styles.infoLabel}>Secondary Skill</Text>
-                      <Text style={styles.infoValue}>{currentJob.workerType}</Text>
-                    </View>
-                  </View>
-                )}
-
-                {/* Job Date */}
-                {currentJob.date && (
-                  <View style={styles.infoItem}>
-                    <MaterialIcons name="event" size={20} color="#e67e22" />
-                    <View style={styles.infoText}>
-                      <Text style={styles.infoLabel}>Date</Text>
-                      <Text style={styles.infoValue}>{new Date(currentJob.date).toLocaleDateString()}</Text>
-                    </View>
-                  </View>
-                )}
-
-                {/* Start Time & End Time */}
-                {(currentJob.startTime || currentJob.endTime) && (
-                  <View style={styles.infoItem}>
-                    <MaterialIcons name="schedule" size={20} color="#3498db" />
-                    <View style={styles.infoText}>
-                      <Text style={styles.infoLabel}>Work Hours</Text>
-                      <Text style={styles.infoValue}>
-                        {currentJob.startTime || "N/A"} - {currentJob.endTime || "N/A"}
-                      </Text>
-                    </View>
-                  </View>
-                )}
-
-                {/* Number of Days */}
-                {currentJob.numberOfDays && (
-                  <View style={styles.infoItem}>
-                    <MaterialIcons name="timer" size={20} color="#e74c3c" />
-                    <View style={styles.infoText}>
-                      <Text style={styles.infoLabel}>Duration</Text>
-                      <Text style={styles.infoValue}>{currentJob.numberOfDays} {currentJob.numberOfDays === 1 ? 'day' : 'days'}</Text>
-                    </View>
-                  </View>
-                )}
-
+                {/* Location - Full Width */}
                 <View style={styles.infoItem}>
                   <MaterialIcons name="location-on" size={20} color="#e74c3c" />
                   <View style={styles.infoText}>
@@ -1611,6 +1628,26 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: "#e0e0e0",
   },
+  // ✅ Profile Photo Styles
+  headerProfileContainer: {
+    width: 50,
+    height: 50,
+    borderRadius: 25,
+    overflow: "hidden",
+  },
+  headerProfilePhoto: {
+    width: 50,
+    height: 50,
+    borderRadius: 25,
+  },
+  headerProfilePlaceholder: {
+    width: 50,
+    height: 50,
+    borderRadius: 25,
+    backgroundColor: "rgba(0, 0, 0, 0.2)",
+    justifyContent: "center",
+    alignItems: "center",
+  },
   dashboardText: {
     fontSize: 12,
     color: "#999",
@@ -1786,6 +1823,23 @@ const styles = StyleSheet.create({
     color: "#333",
     fontWeight: "600",
     lineHeight: 20,
+  },
+  // ✅ 2-Column Grid Styles
+  infoGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    marginBottom: 15,
+    gap: 10,
+  },
+  infoItemGrid: {
+    width: "48%", // 2 items per row with gap
+    flexDirection: "row",
+    alignItems: "flex-start",
+    paddingVertical: 10,
+    paddingHorizontal: 8,
+    backgroundColor: "#f8f8f8",
+    borderRadius: 10,
+    gap: 8,
   },
   timerBox: {
     flexDirection: "row",
