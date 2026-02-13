@@ -12,6 +12,7 @@ import { useAuth } from "../../../context/AuthContext";
 import { useLanguage } from '../../../context/LanguageContext';
 import api from '../../../utils/api';
 import { StyleSheet } from "react-native";
+import ViewWorkersModal from "../../../components/ViewWorkersModal";
 
 // ✅ Decorative Bubble Component
 const Bubble = ({
@@ -230,6 +231,7 @@ export default function ContractorProfile(): React.ReactElement {
   const [postedCount, setPostedCount] = useState(0);
   const [completedCount, setCompletedCount] = useState(0);
   const [inProgressCount, setInProgressCount] = useState(0);
+  const [viewWorkersModalVisible, setViewWorkersModalVisible] = useState(false); // ✅ Add modal state
   const router = useRouter();
 
   // Use configured API base
@@ -382,7 +384,10 @@ export default function ContractorProfile(): React.ReactElement {
   };
 
   const navigateTo = (path: string | null) => {
-    if (path) {
+    if (path === "VIEW_WORKERS") {
+      // ✅ Open View Workers Modal instead of navigating
+      setViewWorkersModalVisible(true);
+    } else if (path) {
       router.push(path as any);
     }
   };
@@ -393,7 +398,7 @@ export default function ContractorProfile(): React.ReactElement {
       icon: "work-outline",
       color: "#667eea",
       options: [
-        { name: "View Workers", icon: "people", screen: "/home/contractor/nearby-workers" },
+        { name: "View Workers", icon: "people", screen: "VIEW_WORKERS" }, // ✅ Changed to modal trigger
       ],
     },
     {
@@ -493,6 +498,17 @@ export default function ContractorProfile(): React.ReactElement {
         <Text style={styles.logoutText}>Logout</Text>
       </TouchableOpacity>
     </ScrollView>
+
+    {/* ✅ View Workers Modal */}
+    <ViewWorkersModal
+      visible={viewWorkersModalVisible}
+      onClose={() => setViewWorkersModalVisible(false)}
+      onRequestWorker={(worker) => {
+        console.log('Worker requested:', worker);
+        setViewWorkersModalVisible(false);
+        // TODO: Handle worker request (show premium modal if needed, send request to backend)
+      }}
+    />
     </SafeAreaView>
   );
 }

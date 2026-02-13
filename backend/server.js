@@ -1285,12 +1285,9 @@ app.get('/workers/nearby', authenticateToken, async (req, res) => {
         }
       },
       {
-        // Stage 2: Filter available workers only
-        $match: { 
-          isAvailable: true,
-          // Optional: add skill filtering if provided in query
-          ...(req.query.skill ? { skills: { $in: [req.query.skill] } } : {})
-        }
+        // Stage 2: No availability filter - show ALL workers within 70km radius
+        // Optional: add skill filtering if provided in query
+        $match: req.query.skill ? { skills: { $in: [req.query.skill] } } : {}
       },
       {
         // Stage 3: Join with User collection for profile details
