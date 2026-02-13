@@ -1271,7 +1271,7 @@ app.get('/workers/nearby', authenticateToken, async (req, res) => {
       if (u && u.location && u.location.coordinates) {
         lon = u.location.coordinates[0];
         lat = u.location.coordinates[1];
-        console.log(`📍 Using stored user location: [${lon.toFixed(4)}, ${lat.toFixed(4)}]`);
+        console.log(`📍 Using stored user location: [${lon?.toFixed?.(4) || lon}, ${lat?.toFixed?.(4) || lat}]`);
       }
     }
 
@@ -1355,7 +1355,7 @@ app.get('/workers/nearby', authenticateToken, async (req, res) => {
     ]);
 
     // ✅ Log query stats for monitoring
-    console.log(`✅ Found ${nearby.length} workers within ${(maxMeters || 70000) / 1000}km of (${lat.toFixed(4)}, ${lon.toFixed(4)})`);
+    console.log(`✅ Found ${nearby.length} workers within ${maxMeters / 1000}km of (${lat?.toFixed?.(4)}, ${lon?.toFixed?.(4)})`);
     
     if (nearby.length === 0) {
       console.warn(`⚠️ No workers found. Checking Worker collection stats...`);
