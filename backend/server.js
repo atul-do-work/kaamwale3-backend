@@ -7,7 +7,6 @@ const { Server } = require("socket.io");
 const jwt = require("jsonwebtoken");
 const bcrypt = require("bcrypt");
 const rateLimit = require("express-rate-limit");
-// const { v4: uuidv4 } = require("uuid"); // No longer needed - using MongoDB _id
 const { getDistanceFromLatLonInKm } = require("./utils/distance");
 const { authenticateToken } = require("./utils/auth"); // ✅ Centralized auth middleware
 const multer = require("multer"); // ✅ For profile photo uploads
@@ -1273,52 +1272,93 @@ app.get('/workers/nearby', authenticateToken, async (req, res) => {
       return res.status(400).json({ success: false, message: 'Latitude and longitude required' });
     }
 
-    // Use geoNear aggregation to get distance in meters
+    // ✅ ENHANCED: $geoNear aggregation pipeline with $lookup for efficient data enrichment
+    // Finds workers within maxMeters (70km default) using spherical geometry
     const nearby = await WorkerModel.aggregate([
       {
+        // Stage 1: Geo-proximity search with 70km radius (70000 meters)
         $geoNear: {
           near: { type: 'Point', coordinates: [lon, lat] },
-          distanceField: 'dist.calculated',
-          maxDistance: maxMeters,
-          spherical: true,
+          distanceField: 'distanceMeters',
+          maxDistance: maxMeters || 70000,  // Default 70km if not specified
+          spherical: true,  // Use spherical Earth geometry (accurate for long distances)
         }
       },
-      { $match: { isAvailable: true } },
-      { $project: { phone: 1, skills: 1, rating: 1, profilePhoto: 1, location: 1, dist: '$dist.calculated' } },
-      { $limit: 100 }
+      {
+        // Stage 2: Filter available workers only
+        $match: { 
+          isAvailable: true,
+          // Optional: add skill filtering if provided in query
+          ...(req.query.skill ? { skills: { $in: [req.query.skill] } } : {})
+        }
+      },
+      {
+        // Stage 3: Join with User collection for profile details
+        $lookup: {
+          from: 'users',
+          localField: 'phone',
+          foreignField: 'phone',
+          as: 'userProfile'
+        }
+      },
+      {
+        // Stage 4: Unwind user profile (convert array to object)
+        $unwind: {
+          path: '$userProfile',
+          preserveNullAndEmptyArrays: true  // Keep workers without user record
+        }
+      },
+      {
+        // Stage 5: Add computed fields (skills from main/expected wage from user)
+        $addFields: {
+          mainSkill: { $ifNull: ['$userProfile.mainSkill', 'Not specified'] },
+          expectedWage: { $ifNull: ['$userProfile.expectedWage', 'Negotiable'] },
+          distanceKm: {
+            $round: [{ $divide: ['$distanceMeters', 1000] }, 1]  // Convert to km, round to 1 decimal
+          }
+        }
+      },
+      {
+        // Stage 6: Sort by distance ascending (nearest workers first)
+        $sort: { distanceMeters: 1 }
+      },
+      {
+        // Stage 7: Limit results
+        $limit: 100
+      },
+      {
+        // Stage 8: Project final response shape
+        $project: {
+          _id: 0,  // Hide MongoDB _id
+          phone: 1,
+          name: '$userProfile.name',  // Get name from user profile
+          skills: 1,
+          mainSkill: 1,
+          expectedWage: 1,
+          rating: { $ifNull: ['$rating', 0] },
+          profilePhoto: { $ifNull: ['$userProfile.profilePhoto', '$profilePhoto'] },
+          distanceMeters: { $round: ['$distanceMeters', 0] },  // Round to nearest meter
+          distanceKm: 1,
+          location: 1,
+          isAvailable: 1,
+          // Add metadata for debugging/analytics
+          createdAt: { $dateToString: { format: '%Y-%m-%d', date: '$userProfile.createdAt' } }
+        }
+      }
     ]);
 
-    // Enrich with User fields (mainSkill, expectedWage)
-    const results = await Promise.all(nearby.map(async (w) => {
-      let extra = {};
-      try {
-        const user = await User.findOne({ phone: w.phone });
-        if (user) {
-          extra = {
-            profilePhoto: user.profilePhoto || w.profilePhoto,
-            mainSkill: user.mainSkill || '',
-            expectedWage: user.expectedWage || '',
-          };
-        }
-      } catch (e) {
-        // ignore
-      }
-      return {
-        phone: w.phone,
-        skills: w.skills || [],
-        rating: w.rating || 0,
-        profilePhoto: (extra).profilePhoto || null,
-        mainSkill: (extra).mainSkill || '',
-        expectedWage: (extra).expectedWage || '',
-        distanceMeters: w.dist || (w.dist && w.dist.calculated) || 0,
-        location: w.location || null,
-      };
-    }));
+    // ✅ Log query stats for monitoring
+    console.log(`✅ Found ${nearby.length} workers within ${(maxMeters || 70000) / 1000}km of (${lat}, ${lon})`);
 
-    return res.json({ success: true, workers: results });
+    return res.json({ 
+      success: true, 
+      count: nearby.length,
+      maxDistanceMeters: maxMeters || 70000,
+      workers: nearby 
+    });
   } catch (err) {
     console.error('workers/nearby error', err);
-    return res.status(500).json({ success: false, message: 'Failed to fetch nearby workers' });
+    return res.status(500).json({ success: false, message: 'Failed to fetch nearby workers', error: err.message });
   }
 });
 

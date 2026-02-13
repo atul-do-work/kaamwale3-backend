@@ -37,8 +37,17 @@ async function reverseGeocode(latitude, longitude) {
 
     let state = data.address?.state || 'Unknown';
 
-    // ✅ NEW: Normalize location to parent city
+    // ✅ NEW: Normalize location - if null, return failure
     const normalized = normalizeLocation(city, state);
+    
+    if (!normalized) {
+      console.warn(`⚠️ Location normalization failed for: city="${city}", state="${state}"`);
+      return {
+        city: 'Unknown',
+        state: 'Unknown',
+        success: false,
+      };
+    }
 
     return {
       city: normalized.city,
@@ -150,10 +159,18 @@ router.get('/city', authenticateToken, async (req, res) => {
     // Reverse geocode to get city
     const geoData = await reverseGeocode(parseFloat(latitude), parseFloat(longitude));
 
-    if (!geoData.success) {
+    if (!geoData.success || !geoData.city) {
       return res.status(400).json({
         success: false,
-        message: 'Could not determine city from coordinates',
+        message: 'Could not determine city from coordinates. Please try again or provide a valid location.',
+      });
+    }
+
+    // ✅ NEW: Reject "Unknown" locations - user must be in a mapped city
+    if (geoData.city === 'unknown' || geoData.state === 'unknown') {
+      return res.status(400).json({
+        success: false,
+        message: 'Your location is outside mapped regions. Please move to a city within our service areas.',
       });
     }
 
