@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback } from "react";
-import { useLanguage } from "../utils/auth";
+import { useLanguage } from "../context/LanguageContext";
 import {
   View,
   Text,

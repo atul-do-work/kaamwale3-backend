@@ -225,8 +225,7 @@ export default function NotificationHistoryScreen(): React.ReactElement {
           <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}>
             <Ionicons name="arrow-back" size={24} color="#fff" />
           </TouchableOpacity>
-          <Text style={styles.headerTitle}>Notifications</Text>
-                    <Text style={styles.headerTitle}>{t('notifications')}</Text>
+          <Text style={styles.headerTitle}>{t('notifications')}</Text>
           <View style={styles.headerRight}>
             {unreadCount > 0 && (
               <View style={styles.badgeCircle}>
