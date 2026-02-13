@@ -16,6 +16,7 @@ const WorkerModel = require("./models/Worker");
 const { findNearbyWorkers } = require("./services/matchingService");
 const fileUpload = require('express-fileupload'); // ✅ For job image uploads
 const { updateGigDataOnCompletion, updateGigDataOnCancellation, updateGigDataOnAcceptance, getWorkerGigsSummary } = require("./utils/gigsDataTracker"); // ✅ Gigs tracking
+const { sendNotificationToUserPhone } = require('./utils/push');
 
 // ---------------- CONFIG ----------------
 const PORT = process.env.PORT || 3000;
@@ -130,6 +131,8 @@ const connectedWorkers = new Map(); // Map to store: socketId -> { name, phone, 
 const trackingJobs = new Map();
 // Track pending jobs with auto-decline timeouts: jobId -> timeoutId
 const pendingJobTimeouts = new Map();
+// Track pending job expiration timers (30 minute overall expiry): jobId -> timeoutId
+const pendingJobExpirations = new Map();
 
 // ✅ HELPER: Update contractor stats for a given day
 async function updateContractorStats(phone) {
@@ -338,12 +341,24 @@ async function offerJobToNextWorker(job) {
         if (!workerSocket) continue;
 
         try {
-          workerSocket.emit("newJob", {
-            ...job.toObject(),
-            distance: candidate.distance,
-            totalNearbyWorkers: currentNearbyWorkers.length,
-            bulkOffer: true,
-          });
+          // Double-check distance server-side and stringify _id before emitting
+          try {
+            const realDist = getDistanceFromLatLonInKm(job.lat, job.lon, candidate.lat, candidate.lon);
+            if (realDist <= 10) {
+              workerSocket.emit("newJob", {
+                ...job.toObject(),
+                _id: job._id.toString(),
+                id: job._id.toString(),
+                distance: Math.round(realDist * 10) / 10,
+                totalNearbyWorkers: currentNearbyWorkers.length,
+                bulkOffer: true,
+              });
+            } else {
+              console.log(`❌ Skipping emit to ${candidate.name} due to distance ${realDist.toFixed(2)}km (>10km)`);
+            }
+          } catch (e) {
+            console.error('Error while verifying distance before emit (bulk):', e);
+          }
 
           // Send push notification if available
           try {
@@ -397,11 +412,23 @@ async function offerJobToNextWorker(job) {
 
     const workerSocket = io.sockets.sockets.get(nextWorker.socketId);
     if (workerSocket) {
-      workerSocket.emit("newJob", {
-        ...job.toObject(),
-        distance: nextWorker.distance,
-        totalNearbyWorkers: currentNearbyWorkers.length,
-      });
+      // Double-check distance server-side and make sure _id is a string
+      try {
+        const realDist = getDistanceFromLatLonInKm(job.lat, job.lon, nextWorker.lat, nextWorker.lon);
+        if (realDist <= 10) {
+          workerSocket.emit("newJob", {
+            ...job.toObject(),
+            _id: job._id.toString(),
+            id: job._id.toString(),
+            distance: Math.round(realDist * 10) / 10,
+            totalNearbyWorkers: currentNearbyWorkers.length,
+          });
+        } else {
+          console.log(`❌ Skipping emit to ${nextWorker.name} due to distance ${realDist.toFixed(2)}km (>10km)`);
+        }
+      } catch (e) {
+        console.error('Error while verifying distance before emit (single):', e);
+      }
       
       // ✅ ALSO SEND FIREBASE PUSH NOTIFICATION FOR FOREGROUND ALERT
       try {
@@ -748,6 +775,70 @@ io.on("connection", (socket) => {
           declinedBy: [],
         });
         await newJob.save();
+
+        // ✅ Set overall job expiry: expire offers after 30 minutes if no one accepts (socket job post)
+        try {
+          const EXPIRE_MS = (process.env.JOB_EXPIRE_MINUTES ? Number(process.env.JOB_EXPIRE_MINUTES) : 30) * 60 * 1000;
+          if (pendingJobExpirations.has(newJob._id.toString())) {
+            clearTimeout(pendingJobExpirations.get(newJob._id.toString()));
+            pendingJobExpirations.delete(newJob._id.toString());
+          }
+          const expireId = setTimeout(async () => {
+            try {
+              const jobCheck = await Job.findById(newJob._id);
+              if (!jobCheck) return;
+              const acceptedCount = jobCheck.bulkHiring ? (jobCheck.acceptedWorkers?.length || 0) : (jobCheck.acceptedBy ? 1 : 0);
+              if (jobCheck.status === 'pending' && acceptedCount === 0) {
+                jobCheck.status = 'expired';
+                await jobCheck.save();
+                io.emit('jobCancelled', { ...jobCheck.toObject(), _id: jobCheck._id.toString(), id: jobCheck._id.toString(), status: 'expired', expiredAt: new Date() });
+                if (pendingJobTimeouts.has(jobCheck._id.toString())) {
+                  clearTimeout(pendingJobTimeouts.get(jobCheck._id.toString()));
+                  pendingJobTimeouts.delete(jobCheck._id.toString());
+                }
+                pendingJobExpirations.delete(jobCheck._id.toString());
+              }
+            } catch (e) {
+              console.error('Error expiring job (socket post):', e);
+            }
+          }, EXPIRE_MS);
+          pendingJobExpirations.set(newJob._id.toString(), expireId);
+        } catch (e) {
+          console.error('Error scheduling job expiry (socket post):', e);
+        }
+
+        // ✅ Set overall job expiry: expire offers after 30 minutes if no one accepts
+        try {
+          const EXPIRE_MS = (process.env.JOB_EXPIRE_MINUTES ? Number(process.env.JOB_EXPIRE_MINUTES) : 30) * 60 * 1000;
+          if (pendingJobExpirations.has(newJob._id.toString())) {
+            clearTimeout(pendingJobExpirations.get(newJob._id.toString()));
+            pendingJobExpirations.delete(newJob._id.toString());
+          }
+          const expireId = setTimeout(async () => {
+            try {
+              const jobCheck = await Job.findById(newJob._id);
+              if (!jobCheck) return;
+              // Expire only if still pending and no acceptances
+              const acceptedCount = jobCheck.bulkHiring ? (jobCheck.acceptedWorkers?.length || 0) : (jobCheck.acceptedBy ? 1 : 0);
+              if (jobCheck.status === 'pending' && acceptedCount === 0) {
+                jobCheck.status = 'expired';
+                await jobCheck.save();
+                io.emit('jobCancelled', { ...jobCheck.toObject(), _id: jobCheck._id.toString(), id: jobCheck._id.toString(), status: 'expired', expiredAt: new Date() });
+                // Clear any retry timeouts
+                if (pendingJobTimeouts.has(jobCheck._id.toString())) {
+                  clearTimeout(pendingJobTimeouts.get(jobCheck._id.toString()));
+                  pendingJobTimeouts.delete(jobCheck._id.toString());
+                }
+                pendingJobExpirations.delete(jobCheck._id.toString());
+              }
+            } catch (e) {
+              console.error('Error expiring job:', e);
+            }
+          }, EXPIRE_MS);
+          pendingJobExpirations.set(newJob._id.toString(), expireId);
+        } catch (e) {
+          console.error('Error scheduling job expiry:', e);
+        }
 
         // ✅ Update contractor's current location when posting job
         // This keeps contractor location fresh and accurate for job prioritization
@@ -1148,12 +1239,138 @@ app.get("/users/profile", authenticateToken, async (req, res) => {
         role: user.role,
         profilePhoto: user.profilePhoto,
         city: user.city,
-        state: user.state
+        state: user.state,
+        premiumPlan: user.premiumPlan || { type: 'free' },
+        latitude: user.latitude || (user.location && user.location.coordinates ? user.location.coordinates[1] : 0),
+        longitude: user.longitude || (user.location && user.location.coordinates ? user.location.coordinates[0] : 0),
+        mainSkill: user.mainSkill || '',
+        expectedWage: user.expectedWage || '',
       }
     });
   } catch (err) {
     console.error("Profile error:", err);
     return res.status(500).json({ success: false, message: "Internal server error" });
+  }
+});
+
+// GET: Find nearby workers for contractor (uses worker's GeoJSON location)
+app.get('/workers/nearby', authenticateToken, async (req, res) => {
+  try {
+    let lat = parseFloat(req.query.lat);
+    let lon = parseFloat(req.query.lon);
+    const maxMeters = parseInt((req.query.max || '10000'), 10);
+
+    // If lat/lon not provided, try user's stored location
+    if ((!lat || !lon) && req.user && req.user.phone) {
+      const u = await User.findOne({ phone: req.user.phone });
+      if (u && u.location && u.location.coordinates) {
+        lon = u.location.coordinates[0];
+        lat = u.location.coordinates[1];
+      }
+    }
+
+    if (!lat || !lon) {
+      return res.status(400).json({ success: false, message: 'Latitude and longitude required' });
+    }
+
+    // Use geoNear aggregation to get distance in meters
+    const nearby = await WorkerModel.aggregate([
+      {
+        $geoNear: {
+          near: { type: 'Point', coordinates: [lon, lat] },
+          distanceField: 'dist.calculated',
+          maxDistance: maxMeters,
+          spherical: true,
+        }
+      },
+      { $match: { isAvailable: true } },
+      { $project: { phone: 1, skills: 1, rating: 1, profilePhoto: 1, location: 1, dist: '$dist.calculated' } },
+      { $limit: 100 }
+    ]);
+
+    // Enrich with User fields (mainSkill, expectedWage)
+    const results = await Promise.all(nearby.map(async (w) => {
+      let extra = {};
+      try {
+        const user = await User.findOne({ phone: w.phone });
+        if (user) {
+          extra = {
+            profilePhoto: user.profilePhoto || w.profilePhoto,
+            mainSkill: user.mainSkill || '',
+            expectedWage: user.expectedWage || '',
+          };
+        }
+      } catch (e) {
+        // ignore
+      }
+      return {
+        phone: w.phone,
+        skills: w.skills || [],
+        rating: w.rating || 0,
+        profilePhoto: (extra).profilePhoto || null,
+        mainSkill: (extra).mainSkill || '',
+        expectedWage: (extra).expectedWage || '',
+        distanceMeters: w.dist || (w.dist && w.dist.calculated) || 0,
+        location: w.location || null,
+      };
+    }));
+
+    return res.json({ success: true, workers: results });
+  } catch (err) {
+    console.error('workers/nearby error', err);
+    return res.status(500).json({ success: false, message: 'Failed to fetch nearby workers' });
+  }
+});
+
+// POST: Request a specific worker (sends socket event if connected)
+app.post('/workers/request', authenticateToken, async (req, res) => {
+  try {
+    const { workerPhone, message } = req.body || {};
+    if (!workerPhone) return res.status(400).json({ success: false, message: 'workerPhone required' });
+
+    const worker = await WorkerModel.findOne({ phone: workerPhone });
+    if (!worker) return res.status(404).json({ success: false, message: 'Worker not found' });
+
+    // Emit to worker if socketId present
+    if (worker.socketId) {
+      try {
+        io.to(worker.socketId).emit('workerRequested', { from: req.user.phone, message: message || '' });
+      } catch (e) {
+        console.warn('Could not emit workerRequested to socket:', e.message);
+      }
+    }
+
+    // Record notification history
+    try {
+      await NotificationHistory.create({ recipientPhone: workerPhone, phone: workerPhone, type: 'worker_request', message: `Requested by ${req.user.phone}: ${message || ''}` });
+    } catch (e) {
+      console.warn('Could not save notification history:', e.message);
+    }
+
+    // Send push notification to worker if possible
+    try {
+      const title = `Request from contractor`;
+      const body = `You have a new request from ${req.user.phone}`;
+      const payload = {
+        type: 'worker_request',
+        title,
+        body,
+        metadata: { from: req.user.phone, message: message || '' },
+      };
+      const pushRes = await sendNotificationToUserPhone(workerPhone, payload);
+      if (pushRes && pushRes.success) {
+        console.log('Push notification sent to', workerPhone);
+      } else {
+        console.log('Push not sent / no token for', workerPhone);
+      }
+    } catch (e) {
+      console.error('Error sending push for worker request:', e && e.message);
+    }
+
+    return res.json({ success: true, message: 'Request sent' });
+  } catch (err) {
+    console.error('workers/request error', err);
+    return res.status(500).json({ success: false, message: 'Failed to request worker' });
   }
 });
 
@@ -1848,6 +2065,10 @@ app.post("/jobs/accept/:id", authenticateToken, async (req, res) => {
           clearTimeout(pendingJobTimeouts.get(jobId));
           pendingJobTimeouts.delete(jobId);
         }
+        if (pendingJobExpirations.has(jobId)) {
+          clearTimeout(pendingJobExpirations.get(jobId));
+          pendingJobExpirations.delete(jobId);
+        }
 
         try {
           const TRACK_MINUTES = Number(process.env.TRACK_MINUTES) || 10;
@@ -1957,6 +2178,11 @@ app.post("/jobs/accept/:id", authenticateToken, async (req, res) => {
       clearTimeout(pendingJobTimeouts.get(jobId));
       pendingJobTimeouts.delete(jobId);
       console.log(`✅ Cancelled timeout for accepted job ${jobId}`);
+    }
+    if (pendingJobExpirations.has(jobId)) {
+      clearTimeout(pendingJobExpirations.get(jobId));
+      pendingJobExpirations.delete(jobId);
+      console.log(`✅ Cancelled expiry timer for accepted job ${jobId}`);
     }
 
     // Start forwarding location updates for this job for a limited time (10 minutes)
@@ -3025,10 +3251,26 @@ app.post('/jobs/cancel/:id', authenticateToken, async (req, res) => {
       cancelledBy,
       cancelledAt: new Date(),
     };
-    
+
     // ✅ Send to ALL connected sockets so all workers see it immediately
     io.emit('jobCancelled', cancellationPayload);
     console.log(`📤 Broadcasted job cancellation event for job ${jobId} to all users`);
+
+    // Clear any pending timeouts related to this job (retry/timeouts/expiry)
+    try {
+      if (pendingJobTimeouts.has(jobId)) {
+        clearTimeout(pendingJobTimeouts.get(jobId));
+        pendingJobTimeouts.delete(jobId);
+        console.log(`🧹 Cleared pending retry timeout for cancelled job ${jobId}`);
+      }
+      if (pendingJobExpirations.has(jobId)) {
+        clearTimeout(pendingJobExpirations.get(jobId));
+        pendingJobExpirations.delete(jobId);
+        console.log(`🧹 Cleared expiry timer for cancelled job ${jobId}`);
+      }
+    } catch (e) {
+      console.error('Error clearing timeouts on cancellation:', e);
+    }
     
     // Also specifically target workers who might have seen this job
     if (job.declinedBy && job.declinedBy.length > 0) {
@@ -3309,9 +3551,7 @@ app.post("/auth/refresh-fcm-token", authenticateToken, async (req, res) => {
   }
 });
 
-// ============================================================
-// START SERVER
-// ============================================================
+
 
 // ✅ Start leaderboard scheduler when server starts
 setTimeout(() => {

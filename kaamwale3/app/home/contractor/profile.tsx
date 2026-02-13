@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { View, Text, ScrollView, TouchableOpacity, Alert, Image, Platform , DimensionValue} from "react-native";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { MaterialIcons, Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
@@ -335,7 +336,7 @@ export default function ContractorProfile(): React.ReactElement {
       await AsyncStorage.setItem("profilePhoto", uri);
 
       // Upload to backend
-      if (token) {
+      if (accessToken) {
         try {
           const formData = new FormData();
           formData.append("photo", {
@@ -347,7 +348,7 @@ export default function ContractorProfile(): React.ReactElement {
           const response = await fetch(`${API_BASE}/users/photo`, {
             method: "POST",
             headers: {
-              Authorization: `Bearer ${token}`,
+              Authorization: `Bearer ${accessToken}`,
               // ⚠️ Do NOT set Content-Type: multipart/form-data
               // The browser will set it automatically with the correct boundary
             },
@@ -392,7 +393,7 @@ export default function ContractorProfile(): React.ReactElement {
       icon: "work-outline",
       color: "#667eea",
       options: [
-        { name: "View Workers", icon: "people", screen: null },
+        { name: "View Workers", icon: "people", screen: "/home/contractor/nearby-workers" },
       ],
     },
     {

@@ -398,6 +398,14 @@ function WorkerHome() {
         if (!user.mainSkill || !user.expectedWage) {
           console.log("🎯 Profile incomplete - showing one-time setup modal");
           setShowProfileSetupModal(true);
+        } else {
+          // If values are present but flag missing, mark as completed so modal doesn't reappear
+          try {
+            await AsyncStorage.setItem("profileSetupCompleted", "true");
+            console.log("✅ Profile appears complete - marking setupCompleted to avoid repeated modal");
+          } catch (e) {
+            console.warn('Could not persist profileSetupCompleted flag:', e);
+          }
         }
       } catch (err) {
         console.error("Failed to check profile completeness:", err);
@@ -617,6 +625,10 @@ function WorkerHome() {
         // If current job is cancelled, clear it
         if (currentJobId && cancelledJobId && cancelledJobId === currentJobId) {
           console.log("❌ Current job was cancelled, clearing from view");
+          // Stop any ongoing alert (sound/vibrate)
+          try {
+            cleanupJobAlert();
+          } catch (e) { /* ignore */ }
           setCurrentJob(null);
           Alert.alert("Job Cancelled", "The job you were viewing has been cancelled by the contractor.");
         } else if (currentJobId && cancelledJobId) {

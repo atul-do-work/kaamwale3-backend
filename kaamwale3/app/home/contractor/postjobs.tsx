@@ -199,10 +199,23 @@ export default function PostJobScreen() {
         return;
       }
       const location = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
+      // Try reverse geocode for human readable address; fallback to lat/lon string
+      let placeName = `${location.coords.latitude.toFixed(4)}, ${location.coords.longitude.toFixed(4)}`;
+      try {
+        const geo = await Location.reverseGeocodeAsync({ latitude: location.coords.latitude, longitude: location.coords.longitude });
+        if (geo && geo.length > 0) {
+          const g = geo[0];
+          const parts = [g.name, g.street, g.subregion || g.region || g.city, g.postalCode, g.country].filter(Boolean);
+          if (parts.length > 0) placeName = parts.join(', ');
+        }
+      } catch (e) {
+        // If reverse geocode fails, keep lat/lon string
+      }
+
       setSelectedLocation({
         lat: location.coords.latitude,
         lon: location.coords.longitude,
-        placeName: `${location.coords.latitude.toFixed(4)}, ${location.coords.longitude.toFixed(4)}`,
+        placeName,
       });
       Alert.alert('Success', 'Current location set');
     } catch (err) {
