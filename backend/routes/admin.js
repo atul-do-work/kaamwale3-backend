@@ -1101,3 +1101,5 @@ router.get('/debug/check-point', async (req, res) => {
     }
 });
 
+module.exports = router;
+
