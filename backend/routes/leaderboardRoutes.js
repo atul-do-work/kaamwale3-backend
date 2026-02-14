@@ -561,11 +561,10 @@ router.get('/contractors/by-district', authenticateToken, async (req, res) => {
       {
         $limit: 50,
       },
-      // Stage 6: Project final shape
+      // Stage 6: Project final shape (rank will be added manually after this aggregation)
       {
         $project: {
           _id: 0,
-          rank: { $meta: 'documentPosition' }, // Position in result set
           phone: 1,
           name: 1,
           profilePhoto: 1,
