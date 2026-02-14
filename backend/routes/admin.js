@@ -13,7 +13,7 @@ const VerificationDocument = require('../models/VerificationDocument');
 const ActivityLog = require('../models/ActivityLog');
 const CityLeaderboard = require('../models/CityLeaderboard');
 const SupportTicket = require('../models/SupportTicket');
-const District = require('../models/District'); // ✅ District model for GeoJSON import
+const District = require('../models/City'); // File is City.js, exports as "District" model for GeoJSON import
 
 // Middleware to check admin role
 const checkAdmin = (req, res, next) => {

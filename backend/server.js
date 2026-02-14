@@ -1025,7 +1025,7 @@ app.post("/users/register", async (req, res) => {
           newUser.locationLastUpdated = new Date();
 
           // ✅ NEW: Find district during registration
-          const District = require('./models/District');
+          const District = require('./models/City'); // File is City.js, exports as "District" model
           const point = {
             type: 'Point',
             coordinates: [parsedLon, parsedLat],
@@ -1148,7 +1148,7 @@ app.post("/login", loginLimiter, async (req, res) => {
           console.log(`📍 Finding district for contractor at: lat=${parsedLat}, lon=${parsedLon}`);
 
           // Find district polygon containing the contractor's GPS point
-          const District = require('./models/District');
+          const District = require('./models/City'); // File is City.js, exports as "District" model
           const point = {
             type: 'Point',
             coordinates: [parsedLon, parsedLat],
