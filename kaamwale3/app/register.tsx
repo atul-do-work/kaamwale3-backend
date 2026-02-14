@@ -3,6 +3,7 @@ import { View, Text, TextInput, TouchableOpacity, Alert, StatusBar, ActivityIndi
 import { MaterialIcons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as Location from 'expo-location';
 import { API_BASE } from '../utils/config';
 import styles from '../styles/RegisterScreenStyles';
 import { registerForPushNotificationsAsync } from '../services/notification';
@@ -38,6 +39,90 @@ async function waitForFcmToken(timeoutMs = 8000) {
 
   console.log('⏱️ FCM token timeout after', attempts, 'attempts');
   return null;
+}
+
+// ✅ HELPER: Request location with retries
+async function getLocationWithRetries(maxRetries = 3) {
+  // ✅ OPTIMIZATION: Check if we have recent location (< 24 hours old)
+  const LOCATION_CACHE_MS = 24 * 60 * 60 * 1000; // 24 hours
+  
+  try {
+    const cached = await AsyncStorage.getItem('lastKnownLocation');
+    if (cached) {
+      const { latitude, longitude, timestamp } = JSON.parse(cached);
+      const ageMs = Date.now() - (timestamp || 0);
+      
+      if (ageMs < LOCATION_CACHE_MS) {
+        const ageSeconds = Math.round(ageMs / 1000);
+        console.log(`✅ Using cached location from ${ageSeconds}s ago (no fresh GPS needed) 📍`);
+        return { latitude, longitude };
+      } else {
+        const ageHours = Math.round(ageMs / 3600000);
+        console.log(`⏰ Cached location is ${ageHours}h old, requesting fresh location...`);
+      }
+    }
+  } catch (err) {
+    console.warn('⚠️ Could not check cached location:', err);
+  }
+
+  // ✅ No cached location or too old - request fresh GPS
+  let lastError = null;
+  
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      console.log(`📍 Location request attempt ${attempt}/${maxRetries}...`);
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      
+      if (status !== 'granted') {
+        console.warn(`⚠️ Location permission denied on attempt ${attempt}`);
+        lastError = 'Permission denied';
+        // Don't retry if permission is explicitly denied
+        break;
+      }
+      
+      const location = await Location.getCurrentPositionAsync({
+        accuracy: Location.Accuracy.Balanced,
+      });
+      
+      const latitude = location.coords.latitude;
+      const longitude = location.coords.longitude;
+      
+      console.log(`✅ Location obtained on attempt ${attempt}:`, {
+        latitude,
+        longitude,
+      });
+      
+      // ✅ CACHE: Save fresh location for future logins
+      try {
+        await AsyncStorage.setItem('lastKnownLocation', JSON.stringify({
+          latitude,
+          longitude,
+          timestamp: Date.now(),
+        }));
+        console.log('💾 Location cached for future logins (24h TTL)');
+      } catch (cacheErr) {
+        console.warn('⚠️ Could not cache location:', cacheErr);
+      }
+      
+      return {
+        latitude,
+        longitude,
+      };
+    } catch (err) {
+      lastError = (err as Error).message;
+      console.warn(`⚠️ Location error on attempt ${attempt}:`, lastError);
+      
+      if (attempt < maxRetries) {
+        // Wait before retrying (exponential backoff)
+        const delayMs = 1000 * attempt;
+        console.log(`⏳ Retrying in ${delayMs}ms...`);
+        await new Promise(res => setTimeout(res, delayMs));
+      }
+    }
+  }
+  
+  console.warn(`❌ Location request failed after ${maxRetries} attempts:`, lastError);
+  return { latitude: null, longitude: null };
 }
 
 export default function Register() {
@@ -78,6 +163,37 @@ export default function Register() {
 
     setIsLoading(true); // ✅ Show loading spinner
     try {
+      // ✅ GET LOCATION - Request GPS coordinates during registration
+      let latitude = null;
+      let longitude = null;
+      
+      console.log('📍 Requesting location during registration...');
+      try {
+        const locationResult = await getLocationWithRetries(3);
+        latitude = locationResult.latitude;
+        longitude = locationResult.longitude;
+        
+        if (latitude !== null && longitude !== null) {
+          console.log(`✅ Location obtained during registration:`, { latitude, longitude });
+          // ✅ CACHE: Save location timestamp so login won't re-request if fresh
+          await AsyncStorage.setItem('lastKnownLocation', JSON.stringify({
+            latitude,
+            longitude,
+            timestamp: Date.now(),
+          }));
+          console.log('💾 Location cached for login reuse');
+        } else {
+          console.warn('⚠️ Location not available - user will need to enable location during login');
+          Alert.alert(
+            'Location Required',
+            'We need your location to show available jobs nearby. You can enable location in the next step or in Settings.',
+            [{ text: 'OK' }]
+          );
+        }
+      } catch (locErr) {
+        console.warn('⚠️ Error requesting location during registration:', (locErr as Error).message);
+      }
+
       // ✅ GET FCM TOKEN - Wait for it to be available (race condition fix)
       let fcmToken = null;
       console.log('📋 Starting registration process...');
@@ -107,7 +223,16 @@ export default function Register() {
       const res = await fetch(`${API_BASE}/users/register`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, phone: phoneTrim, password, role, agreedToTerms }), // ✅ Include agreedToTerms
+        body: JSON.stringify({ 
+          name, 
+          phone: phoneTrim, 
+          password, 
+          role, 
+          agreedToTerms,
+          latitude,  // ✅ NEW: Send location during registration
+          longitude, // ✅ NEW: Send location during registration
+          fcmToken,  // ✅ NEW: Send FCM token during registration
+        }),
       });
 
       const data = await res.json();

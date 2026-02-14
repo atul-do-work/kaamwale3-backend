@@ -18,6 +18,90 @@ import { useLanguage } from '../context/LanguageContext';
 import { useAuth } from '../context/AuthContext';
 //*******************2nd step */
 
+// ✅ HELPER: Request location with retries (improved version)
+async function getLocationWithRetries(maxRetries = 3) {
+  // ✅ OPTIMIZATION: Check if we have recent location (< 24 hours old) from registration
+  const LOCATION_CACHE_MS = 24 * 60 * 60 * 1000; // 24 hours
+  
+  try {
+    const cached = await AsyncStorage.getItem('lastKnownLocation');
+    if (cached) {
+      const { latitude, longitude, timestamp } = JSON.parse(cached);
+      const ageMs = Date.now() - (timestamp || 0);
+      
+      if (ageMs < LOCATION_CACHE_MS) {
+        const ageSeconds = Math.round(ageMs / 1000);
+        console.log(`✅ Using cached location from ${ageSeconds}s ago (no fresh GPS needed) 📍`);
+        return { latitude, longitude };
+      } else {
+        const ageHours = Math.round(ageMs / 3600000);
+        console.log(`⏰ Cached location is ${ageHours}h old, requesting fresh location...`);
+      }
+    }
+  } catch (err) {
+    console.warn('⚠️ Could not check cached location:', err);
+  }
+
+  // ✅ No cached location or too old - request fresh GPS
+  let lastError = null;
+  
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      console.log(`📍 Location request attempt ${attempt}/${maxRetries}...`);
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      
+      if (status !== 'granted') {
+        console.warn(`⚠️ Location permission denied on attempt ${attempt}`);
+        lastError = 'Permission denied';
+        // Don't retry if permission is explicitly denied
+        break;
+      }
+      
+      const location = await Location.getCurrentPositionAsync({
+        accuracy: Location.Accuracy.Balanced,
+      });
+      
+      const latitude = location.coords.latitude;
+      const longitude = location.coords.longitude;
+      
+      console.log(`✅ Location obtained on attempt ${attempt}:`, {
+        latitude,
+        longitude,
+      });
+      
+      // ✅ CACHE: Save fresh location for next login attempt
+      try {
+        await AsyncStorage.setItem('lastKnownLocation', JSON.stringify({
+          latitude,
+          longitude,
+          timestamp: Date.now(),
+        }));
+        console.log('💾 Location cached for future logins (24h TTL)');
+      } catch (cacheErr) {
+        console.warn('⚠️ Could not cache location:', cacheErr);
+      }
+      
+      return {
+        latitude,
+        longitude,
+      };
+    } catch (err) {
+      lastError = (err as Error).message;
+      console.warn(`⚠️ Location error on attempt ${attempt}:`, lastError);
+      
+      if (attempt < maxRetries) {
+        // Wait before retrying (exponential backoff)
+        const delayMs = 1000 * attempt;
+        console.log(`⏳ Retrying in ${delayMs}ms...`);
+        await new Promise(res => setTimeout(res, delayMs));
+      }
+    }
+  }
+  
+  console.warn(`❌ Location request failed after ${maxRetries} attempts:`, lastError);
+  return { latitude: null, longitude: null };
+}
+
 export default function LoginScreen() {
   const router = useRouter();
   const { t } = useLanguage();
@@ -64,21 +148,20 @@ export default function LoginScreen() {
         console.warn('⚠️ Could not get FCM token:', (err as Error).message);
       }
 
-      // ✅ NEW: Request location permission and get coordinates
+      // ✅ IMPROVED: Request location with retry logic
       let latitude = null;
       let longitude = null;
 
       try {
-        const { status } = await Location.requestForegroundPermissionsAsync();
-        if (status === 'granted') {
-          const location = await Location.getCurrentPositionAsync({
-            accuracy: Location.Accuracy.Balanced,
-          });
-          latitude = location.coords.latitude;
-          longitude = location.coords.longitude;
-          console.log('📍 Location obtained:', { latitude, longitude });
+        console.log('📍 Requesting location during login...');
+        const locationResult = await getLocationWithRetries(3);
+        latitude = locationResult.latitude;
+        longitude = locationResult.longitude;
+        
+        if (latitude !== null && longitude !== null) {
+          console.log(`✅ Location obtained during login:`, { latitude, longitude });
         } else {
-          console.warn('⚠️ Location permission denied');
+          console.warn('⚠️ Location not available during login - coordinates will default to [0,0]');
         }
       } catch (locError) {
         console.warn('⚠️ Could not get location:', (locError as Error).message);

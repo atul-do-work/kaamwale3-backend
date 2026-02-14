@@ -986,7 +986,7 @@ app.post("/users/update-profile", authenticateToken, async (req, res) => {
 // ---------------- USER ROUTES ----------------
 app.post("/users/register", async (req, res) => {
   try {
-    const { name, phone, password, role, agreedToTerms } = req.body; // ✅ Include agreedToTerms
+    const { name, phone, password, role, agreedToTerms, latitude, longitude, fcmToken } = req.body; // ✅ Include coordinates and fcmToken
     if (!name || !phone || !password || !role)
       return res.status(400).json({ success: false, message: "All fields required" });
 
@@ -1005,8 +1005,74 @@ app.post("/users/register", async (req, res) => {
       password: hashedPassword, 
       role,
       agreedToTerms: true, // ✅ Save agreement status
-      agreedToTermsAt: new Date() // ✅ Save when user agreed
+      agreedToTermsAt: new Date(), // ✅ Save when user agreed
+      fcmToken: fcmToken || null, // ✅ NEW: Store FCM token from registration
     });
+
+    // ✅ NEW: Store location during registration if provided
+    if (latitude !== undefined && latitude !== null && longitude !== undefined && longitude !== null) {
+      try {
+        const parsedLat = parseFloat(latitude);
+        const parsedLon = parseFloat(longitude);
+        
+        if (!isNaN(parsedLat) && !isNaN(parsedLon)) {
+          newUser.latitude = parsedLat;
+          newUser.longitude = parsedLon;
+          newUser.location = {
+            type: 'Point',
+            coordinates: [parsedLon, parsedLat],
+          };
+          newUser.locationLastUpdated = new Date();
+
+          // ✅ NEW: Find district during registration
+          const District = require('./models/District');
+          const point = {
+            type: 'Point',
+            coordinates: [parsedLon, parsedLat],
+          };
+
+          let district = await District.findOne({
+            geometry: {
+              $geoIntersects: {
+                $geometry: point,
+              },
+            },
+          }).lean();
+
+          // ✅ FALLBACK: Find nearest district by centroid if exact match not found
+          if (!district) {
+            district = await District.findOne(
+              {
+                centroid: {
+                  $nearSphere: {
+                    $geometry: point,
+                    $maxDistance: 50000,
+                  },
+                },
+              },
+              null,
+              { lean: true }
+            );
+          }
+
+          if (district) {
+            newUser.city = district.name;
+            newUser.state = district.state;
+            console.log(`✅ [Register] Location saved: ${district.name}, ${district.state} (${parsedLat}, ${parsedLon})`);
+          } else {
+            console.warn(`⚠️ [Register] No district found for [${parsedLon}, ${parsedLat}]`);
+            newUser.city = 'Unknown';
+            newUser.state = 'Unknown';
+          }
+        } else {
+          console.warn(`⚠️ [Register] Invalid coordinates: lat=${latitude}, lon=${longitude}`);
+        }
+      } catch (locErr) {
+        console.error('❌ [Register] Error processing location:', locErr.message);
+        // Continue with registration even if location processing fails
+      }
+    }
+
     await newUser.save();
 
     let wallet = await Wallet.findOne({ phone });
@@ -1024,7 +1090,7 @@ app.post("/users/register", async (req, res) => {
           skills: [],
           rating: 5,
           isAvailable: false,
-          location: { type: "Point", coordinates: [0, 0] },
+          location: newUser.location || { type: "Point", coordinates: [0, 0] },
         });
         await newWorker.save();
         console.log(`✅ Worker record created for ${name} (${phone})`);
@@ -1082,7 +1148,7 @@ app.post("/login", loginLimiter, async (req, res) => {
           console.log(`📍 Finding district for contractor at: lat=${parsedLat}, lon=${parsedLon}`);
 
           // Find district polygon containing the contractor's GPS point
-          const District = require('./models/City');
+          const District = require('./models/District');
           const point = {
             type: 'Point',
             coordinates: [parsedLon, parsedLat],
@@ -1102,7 +1168,7 @@ app.post("/login", loginLimiter, async (req, res) => {
             district = await District.findOne(
               {
                 centroid: {
-                  $near: {
+                  $nearSphere: {
                     $geometry: point,
                     $maxDistance: 50000, // 50km radius fallback
                   },

@@ -450,7 +450,7 @@ router.get('/contractors/by-district', authenticateToken, async (req, res) => {
     }
 
     // ✅ Find district polygon containing the contractor's GPS point
-    const District = require('../models/City');
+    const District = require('../models/District');
     const point = {
       type: 'Point',
       coordinates: [longitude, latitude],
@@ -470,7 +470,7 @@ router.get('/contractors/by-district', authenticateToken, async (req, res) => {
       district = await District.findOne(
         {
           centroid: {
-            $near: {
+            $nearSphere: {
               $geometry: point,
               $maxDistance: 50000, // 50km radius fallback
             },

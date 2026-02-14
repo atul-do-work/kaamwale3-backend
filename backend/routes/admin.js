@@ -13,7 +13,7 @@ const VerificationDocument = require('../models/VerificationDocument');
 const ActivityLog = require('../models/ActivityLog');
 const CityLeaderboard = require('../models/CityLeaderboard');
 const SupportTicket = require('../models/SupportTicket');
-const District = require('../models/City'); // ✅ District model for GeoJSON import
+const District = require('../models/District'); // ✅ District model for GeoJSON import
 
 // Middleware to check admin role
 const checkAdmin = (req, res, next) => {
@@ -1060,7 +1060,7 @@ router.get('/debug/check-point', async (req, res) => {
         const nearestDistrict = await District.findOne(
             {
                 centroid: {
-                    $near: {
+                    $nearSphere: {
                         $geometry: point,
                         $maxDistance: 100000, // 100km
                     },
