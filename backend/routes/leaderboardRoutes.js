@@ -456,13 +456,34 @@ router.get('/contractors/by-district', authenticateToken, async (req, res) => {
       coordinates: [longitude, latitude],
     };
 
-    const district = await District.findOne({
+    let district = await District.findOne({
       geometry: {
         $geoIntersects: {
           $geometry: point,
         },
       },
     }).lean();
+
+    // ✅ FALLBACK: If no exact district match, find nearest district by centroid
+    if (!district) {
+      console.warn(`⚠️ No district polygon found for [${longitude}, ${latitude}], trying nearest centroid...`);
+      district = await District.findOne(
+        {
+          centroid: {
+            $near: {
+              $geometry: point,
+              $maxDistance: 50000, // 50km radius fallback
+            },
+          },
+        },
+        null,
+        { lean: true }
+      );
+
+      if (district) {
+        console.log(`✅ Found nearest district by centroid: ${district.name}, ${district.state} (fallback match)`);
+      }
+    }
 
     if (!district) {
       return res.json({

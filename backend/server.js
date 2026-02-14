@@ -1069,51 +1069,80 @@ app.post("/login", loginLimiter, async (req, res) => {
     let cityLeaderboard = null;
     // ✅ NEW: Efficient location handling using district polygons
     // No Nominatim API needed - direct geospatial lookup
-    if (user.role === 'contractor' && latitude && longitude) {
+    // ✅ FIX: Use !== null instead of && to handle 0 coordinates correctly
+    if (user.role === 'contractor' && latitude !== undefined && latitude !== null && longitude !== undefined && longitude !== null) {
       try {
         const parsedLat = parseFloat(latitude);
         const parsedLon = parseFloat(longitude);
         
-        console.log(`📍 Finding district for contractor at: lat=${parsedLat}, lon=${parsedLon}`);
-
-        // Find district polygon containing the contractor's GPS point
-        const District = require('./models/City');
-        const point = {
-          type: 'Point',
-          coordinates: [parsedLon, parsedLat],
-        };
-
-        const district = await District.findOne({
-          geometry: {
-            $geoIntersects: {
-              $geometry: point,
-            },
-          },
-        }).lean();
-
-        // Update user location with coordinates and district info
-        user.latitude = parsedLat;
-        user.longitude = parsedLon;
-        user.location = {
-          type: 'Point',
-          coordinates: [parsedLon, parsedLat],
-        };
-        user.locationLastUpdated = new Date();
-
-        if (district) {
-          // Store district info for reference (optional, but useful)
-          user.city = district.name;
-          user.state = district.state;
-          console.log(`✅ Found district: ${district.name}, ${district.state}`);
+        // ✅ Skip if coordinates are invalid (NaN)
+        if (isNaN(parsedLat) || isNaN(parsedLon)) {
+          console.warn(`⚠️ Invalid coordinates: lat=${latitude}, lon=${longitude}`);
         } else {
-          console.warn(`⚠️ No district found for coordinates [${parsedLon}, ${parsedLat}]`);
-          user.city = 'Unknown';
-          user.state = 'Unknown';
-        }
+          console.log(`📍 Finding district for contractor at: lat=${parsedLat}, lon=${parsedLon}`);
 
-        await user.save();
+          // Find district polygon containing the contractor's GPS point
+          const District = require('./models/City');
+          const point = {
+            type: 'Point',
+            coordinates: [parsedLon, parsedLat],
+          };
+
+          let district = await District.findOne({
+            geometry: {
+              $geoIntersects: {
+                $geometry: point,
+              },
+            },
+          }).lean();
+
+          // ✅ FALLBACK: If no exact district match, find nearest district by centroid
+          if (!district) {
+            console.warn(`⚠️ No district polygon found for [${parsedLon}, ${parsedLat}], trying nearest centroid...`);
+            district = await District.findOne(
+              {
+                centroid: {
+                  $near: {
+                    $geometry: point,
+                    $maxDistance: 50000, // 50km radius fallback
+                  },
+                },
+              },
+              null,
+              { lean: true }
+            );
+
+            if (district) {
+              console.log(`✅ Found nearest district by centroid: ${district.name}, ${district.state} (fallback match)`);
+            }
+          }
+
+          // Update user location with coordinates and district info
+          user.latitude = parsedLat;
+          user.longitude = parsedLon;
+          user.location = {
+            type: 'Point',
+            coordinates: [parsedLon, parsedLat],
+          };
+          user.locationLastUpdated = new Date();
+
+          if (district) {
+            // Store district info for reference (optional, but useful)
+            user.city = district.name;
+            user.state = district.state;
+            console.log(`✅ Found district: ${district.name}, ${district.state}`);
+          } else {
+            console.warn(`⚠️ No district found for coordinates [${parsedLon}, ${parsedLat}] - using Unknown`);
+            user.city = 'Unknown';
+            user.state = 'Unknown';
+          }
+
+          // ✅ FIX: Save location updates immediately
+          await user.save();
+          console.log(`✅ Location saved for ${user.phone}: lat=${parsedLat}, lon=${parsedLon}, city=${user.city}`);
+        }
       } catch (err) {
-        console.warn('⚠️ Error finding district:', err.message);
+        console.error('❌ Error finding district:', err.message);
         // Continue with login even if district lookup fails
       }
     }

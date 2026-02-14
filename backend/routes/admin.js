@@ -1019,4 +1019,85 @@ router.post('/districts/import-geojson', authenticateToken, async (req, res) => 
     }
 });
 
-module.exports = router;
+// ✅ DEBUG: Check district coverage for a given coordinate
+// GET /admin/debug/check-point?lat=19.89&lon=75.36
+router.get('/debug/check-point', async (req, res) => {
+    try {
+        const { lat, lon } = req.query;
+
+        if (!lat || !lon) {
+            return res.status(400).json({
+                success: false,
+                message: 'Latitude and longitude required',
+            });
+        }
+
+        const latitude = parseFloat(lat);
+        const longitude = parseFloat(lon);
+
+        if (isNaN(latitude) || isNaN(longitude)) {
+            return res.status(400).json({
+                success: false,
+                message: 'Invalid latitude or longitude',
+            });
+        }
+
+        const point = {
+            type: 'Point',
+            coordinates: [longitude, latitude],
+        };
+
+        // Check 1: Exact polygon match
+        const exactDistrict = await District.findOne({
+            geometry: {
+                $geoIntersects: {
+                    $geometry: point,
+                },
+            },
+        }).lean();
+
+        // Check 2: Nearest centroid
+        const nearestDistrict = await District.findOne(
+            {
+                centroid: {
+                    $near: {
+                        $geometry: point,
+                        $maxDistance: 100000, // 100km
+                    },
+                },
+            },
+            null,
+            { lean: true }
+        );
+
+        // Check 3: Count total districts
+        const totalDistricts = await District.countDocuments();
+
+        // Check 4: Get some sample districts
+        const sampleDistricts = await District.find({}, { name: 1, state: 1, _id: 0 }).limit(5).lean();
+
+        return res.json({
+            success: true,
+            point: { latitude, longitude },
+            exactMatch: exactDistrict ? {
+                name: exactDistrict.name,
+                state: exactDistrict.state,
+            } : null,
+            nearestMatch: nearestDistrict ? {
+                name: nearestDistrict.name,
+                state: nearestDistrict.state,
+                distance: 'within 100km',
+            } : null,
+            totalDistrictsInDB: totalDistricts,
+            sampleDistricts: sampleDistricts,
+        });
+    } catch (err) {
+        console.error('Debug check error:', err);
+        res.status(500).json({
+            success: false,
+            message: 'Error checking point',
+            error: err.message,
+        });
+    }
+});
+
