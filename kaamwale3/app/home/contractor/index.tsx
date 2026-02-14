@@ -131,10 +131,10 @@ export default function ContractorHome() {
                 console.log('✅ Formatted leaderboard:', formattedLeaderboard);
                 setLeaderboard(formattedLeaderboard);
               } else {
-                // Fallback: try city endpoint if no cached data
+                // Fallback: try district-based leaderboard if no cached data
                 try {
                   const leaderboardRes = await fetch(
-                    `${SERVER_URL}/leaderboard/city?latitude=${currentUser?.latitude || 0}&longitude=${currentUser?.longitude || 0}`,
+                    `${SERVER_URL}/leaderboard/contractors/by-district?lat=${currentUser?.latitude || 0}&lon=${currentUser?.longitude || 0}`,
                     {
                       headers: { Authorization: `Bearer ${savedToken}` },
                     }
@@ -143,13 +143,13 @@ export default function ContractorHome() {
                   
                   if (leaderboardData.leaderboard && Array.isArray(leaderboardData.leaderboard)) {
                     const formattedLeaderboard = leaderboardData.leaderboard.map((contractor: any) => ({
-                      id: contractor.contractorId || contractor._id,
+                      id: contractor.contractorId || contractor._id || contractor.phone,
                       name: contractor.name,
                       points: contractor.score || 0,
                       profile: contractor.profilePhoto ? contractor.profilePhoto : null,
                       rank: contractor.rank,
-                      rating: contractor.avgRating,
-                      jobsPosted: contractor.totalJobsPosted,
+                      rating: contractor.rating,
+                      jobsPosted: contractor.jobCount,
                       tier: contractor.tier,
                     }));
                     setLeaderboard(formattedLeaderboard);

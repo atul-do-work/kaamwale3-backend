@@ -440,4 +440,179 @@ router.get('/stats/:contractorId', authenticateToken, async (req, res) => {
   }
 });
 
+// ✅ NEW: GET /leaderboard/contractors/by-district - Contractor leaderboard by district polygon + GPS location
+router.get('/contractors/by-district', authenticateToken, async (req, res) => {
+  try {
+    const { lat, lon } = req.query;
+
+    if (!lat || !lon) {
+      return res.status(400).json({
+        success: false,
+        message: 'Latitude and longitude required',
+      });
+    }
+
+    const latitude = parseFloat(lat);
+    const longitude = parseFloat(lon);
+
+    if (isNaN(latitude) || isNaN(longitude)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid latitude or longitude',
+      });
+    }
+
+    // ✅ Find district polygon containing the contractor's GPS point
+    const District = require('../models/City');
+    const point = {
+      type: 'Point',
+      coordinates: [longitude, latitude],
+    };
+
+    const district = await District.findOne({
+      geometry: {
+        $geoIntersects: {
+          $geometry: point,
+        },
+      },
+    }).lean();
+
+    if (!district) {
+      return res.json({
+        success: true,
+        district: null,
+        state: null,
+        leaderboard: [],
+        message: 'No district found for this location',
+      });
+    }
+
+    console.log(`📍 Found district: ${district.name}, ${district.state} for location (${latitude}, ${longitude})`);
+
+    // ✅ Aggregate contractors within the district polygon
+    // Score by: avgRating * totalSpent * activeDays * hireCount
+    const Job = require('../models/Jobs');
+    const User = require('../models/User');
+
+    const leaderboard = await User.aggregate([
+      // Stage 1: Match contractors whose location is within the district polygon
+      {
+        $match: {
+          role: 'contractor',
+          location: {
+            $geoWithin: {
+              $geometry: district.geometry,
+            },
+          },
+        },
+      },
+      // Stage 2: Lookup jobs posted by this contractor
+      {
+        $lookup: {
+          from: 'jobs',
+          localField: 'phone',
+          foreignField: 'contractorPhone',
+          as: 'jobs',
+        },
+      },
+      // Stage 3: Compute contractor metrics
+      {
+        $addFields: {
+          totalSpent: {
+            $sum: '$jobs.amount',
+          },
+          jobCount: {
+            $size: '$jobs',
+          },
+          avgRating: {
+            $cond: [
+              { $gt: ['$rating', 0] },
+              { $round: ['$rating', 1] },
+              0,
+            ],
+          },
+          activeDays: {
+            $cond: [
+              { $gt: ['$createdAt', null] },
+              {
+                $ceil: {
+                  $divide: [
+                    {
+                      $subtract: [new Date(), '$createdAt'],
+                    },
+                    86400000, // 1 day in ms
+                  ],
+                },
+              },
+              0,
+            ],
+          },
+          // Composite score: rating * totalSpent * (1 + log(jobCount)) * (1 + log(activeDays))
+          score: {
+            $cond: [
+              { $and: [{ $gt: ['$rating', 0] }, { $gt: ['$jobs', []] }] },
+              {
+                $multiply: [
+                  '$rating',
+                  { $max: [1, { $divide: ['$totalSpent', 100] }] }, // Normalized spend
+                  { $max: [1, { $add: [1, { $ln: { $max: [2, '$jobCount'] } }] }] }, // log boost
+                  { $max: [1, { $add: [1, { $ln: { $max: [2, '$activeDays'] } }] }] }, // activity boost
+                ],
+              },
+              0,
+            ],
+          },
+        },
+      },
+      // Stage 4: Sort by score descending
+      {
+        $sort: {
+          score: -1,
+        },
+      },
+      // Stage 5: Limit results
+      {
+        $limit: 50,
+      },
+      // Stage 6: Project final shape
+      {
+        $project: {
+          _id: 0,
+          rank: { $meta: 'documentPosition' }, // Position in result set
+          phone: 1,
+          name: 1,
+          profilePhoto: 1,
+          rating: '$avgRating',
+          totalSpent: 1,
+          jobCount: 1,
+          activeDays: 1,
+          score: { $round: ['$score', 2] },
+        },
+      },
+    ]);
+
+    // ✅ Add rank to each result
+    const rankedLeaderboard = leaderboard.map((contractor, index) => ({
+      ...contractor,
+      rank: index + 1,
+    }));
+
+    return res.json({
+      success: true,
+      district: district.name,
+      state: district.state,
+      leaderboard: rankedLeaderboard,
+      count: rankedLeaderboard.length,
+      timestamp: new Date().toISOString(),
+    });
+  } catch (err) {
+    console.error('❌ Error fetching contractor leaderboard:', err);
+    res.status(500).json({
+      success: false,
+      message: 'Error fetching leaderboard',
+      error: err.message,
+    });
+  }
+});
+
 module.exports = router;

@@ -13,6 +13,7 @@ const VerificationDocument = require('../models/VerificationDocument');
 const ActivityLog = require('../models/ActivityLog');
 const CityLeaderboard = require('../models/CityLeaderboard');
 const SupportTicket = require('../models/SupportTicket');
+const District = require('../models/City'); // ✅ District model for GeoJSON import
 
 // Middleware to check admin role
 const checkAdmin = (req, res, next) => {
@@ -864,6 +865,157 @@ router.post('/support-tickets/:ticketId/resolve', authenticateToken, checkAdmin,
     } catch (error) {
         console.error('Resolve ticket error:', error);
         res.status(500).json({ success: false, message: error.message });
+    }
+});
+
+// ============================
+// ✅ POST /admin/districts/import-geojson - Import district boundaries from GeoJSON
+// ============================
+router.post('/districts/import-geojson', authenticateToken, async (req, res) => {
+  try {
+    const { features } = req.body;
+
+    if (!Array.isArray(features)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid GeoJSON format. Expected features array.',
+      });
+    }
+
+    const importedDistricts = [];
+    const errors = []; // ✅ FIXED: Initialize errors array
+
+        // Helper: Calculate centroid from polygon/multipolygon coordinates
+        const calculateCentroid = (geometry) => {
+            let allCoords = [];
+
+            if (geometry.type === 'Polygon') {
+                allCoords = geometry.coordinates[0]; // Outer ring
+            } else if (geometry.type === 'MultiPolygon') {
+                // Use first polygon's outer ring
+                allCoords = geometry.coordinates[0][0];
+            } else {
+                return null;
+            }
+
+            if (allCoords.length === 0) return null;
+
+            const [lonSum, latSum] = allCoords.reduce(
+                ([lon, lat], [clng, clat]) => [lon + clng, lat + clat],
+                [0, 0]
+            );
+
+            return [lonSum / allCoords.length, latSum / allCoords.length];
+        };
+
+        // Helper: Calculate bounding box
+        const calculateBbox = (geometry) => {
+            let allCoords = [];
+
+            if (geometry.type === 'Polygon') {
+                allCoords = geometry.coordinates.flat();
+            } else if (geometry.type === 'MultiPolygon') {
+                allCoords = geometry.coordinates.flat(2);
+            } else {
+                return null;
+            }
+
+            const lngs = allCoords.map(([lng]) => lng);
+            const lats = allCoords.map(([, lat]) => lat);
+
+            return {
+                minLon: Math.min(...lngs),
+                maxLon: Math.max(...lngs),
+                minLat: Math.min(...lats),
+                maxLat: Math.max(...lats),
+            };
+        };
+
+        // Process each feature
+        for (const feature of features) {
+            try {
+                const { properties, geometry } = feature;
+
+                if (!geometry || !properties) {
+                    errors.push(`Skipped feature: Missing geometry or properties`);
+                    continue;
+                }
+
+                // For Indian district GeoJSON: DISTRICT="Adilabad", ST_NM="Andhra Pradesh"
+                const districtName = properties.DISTRICT || properties.name;
+                const stateName = properties.ST_NM || properties.state;
+
+                if (!districtName || !stateName) {
+                    errors.push(`Skipped feature: Missing DISTRICT or ST_NM property`);
+                    continue;
+                }
+
+                // Validate geometry type
+                if (!['Polygon', 'MultiPolygon'].includes(geometry.type)) {
+                    errors.push(`Skipped ${districtName}: Unsupported geometry type ${geometry.type}`);
+                    continue;
+                }
+
+                const centroid = calculateCentroid(geometry);
+                const bbox = calculateBbox(geometry);
+
+                if (!centroid || !bbox) {
+                    errors.push(`Skipped ${districtName}: Could not calculate centroid/bbox`);
+                    continue;
+                }
+
+                // Create or update district
+                const districtSlug = `${districtName}-${stateName}`.toLowerCase().replace(/\s+/g, '-');
+
+                const districtData = {
+                    name: districtName,
+                    slug: districtSlug,
+                    state: stateName,
+                    geometry: geometry,
+                    centroid: centroid,
+                    bbox: bbox,
+                    properties: {
+                        stateCensuscode: properties.ST_CEN_CD,
+                        districtCensuscode: properties.DT_CEN_CD,
+                        censuscode: properties.censuscode,
+                    },
+                };
+
+                const district = await District.findOneAndUpdate(
+                    { slug: districtSlug },
+                    districtData,
+                    { upsert: true, new: true }
+                );
+
+                importedDistricts.push({
+                    name: district.name,
+                    state: district.state,
+                    slug: district.slug,
+                    centroid: district.centroid,
+                });
+
+                console.log(`✅ Imported district: ${district.name}, ${district.state}`);
+            } catch (featureError) {
+                errors.push(`Error processing feature: ${featureError.message}`);
+                console.error('Feature import error:', featureError);
+            }
+        }
+
+        res.json({
+            success: true,
+            message: `Imported ${importedDistricts.length} districts`,
+            importedDistricts: importedDistricts,
+            errors: errors,
+            count: importedDistricts.length,
+            timestamp: new Date().toISOString(),
+        });
+    } catch (error) {
+        console.error('❌ GeoJSON import error:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Error importing GeoJSON',
+            error: error.message,
+        });
     }
 });
 
