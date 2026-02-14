@@ -62,15 +62,19 @@ export default function ContractorHome() {
             // ✅ If premiumPlan not in localStorage, fetch fresh from backend
             if (!currentUser?.premiumPlan) {
               try {
-                const response = await fetch(`${SERVER_URL}/contractor/profile`, {
+                const response = await fetch(`${SERVER_URL}/users/profile`, {
                   headers: { Authorization: `Bearer ${savedToken}` },
                 });
-                const data = await response.json();
-                
-                if (data.success && data.user) {
-                  currentUser = { ...currentUser, ...data.user };
-                  // Update AsyncStorage with fresh data
-                  await AsyncStorage.setItem('user', JSON.stringify(currentUser));
+                if (response.ok) {
+                  const data = await response.json();
+                  
+                  if (data.success && data.user) {
+                    currentUser = { ...currentUser, ...data.user };
+                    // Update AsyncStorage with fresh data
+                    await AsyncStorage.setItem('user', JSON.stringify(currentUser));
+                  }
+                } else {
+                  console.warn(`⚠️ Profile fetch returned status ${response.status}`);
                 }
               } catch (err) {
                 console.warn('Could not fetch fresh user data:', err);
@@ -169,6 +173,54 @@ export default function ContractorHome() {
               socket.auth = { token: savedToken };
               socket.connect();
             }
+
+            // ✅ NEW: Listen for premium subscription updates from other contractors
+            // This triggers instant leaderboard refresh when any contractor buys premium
+            socket.on('premiumSubscriptionUpdate', async (data) => {
+              console.log(`📢 Premium subscription update received from contractor ${data.contractorPhone}`);
+              
+              // Refresh leaderboard immediately
+              try {
+                const userStr = await AsyncStorage.getItem('user');
+                let latitude = 0, longitude = 0;
+                if (userStr) {
+                  const u = JSON.parse(userStr);
+                  latitude = u.latitude || 0;
+                  longitude = u.longitude || 0;
+                }
+                
+                const leaderboardRes = await fetch(
+                  `${SERVER_URL}/leaderboard/contractors/by-district?lat=${latitude}&lon=${longitude}`,
+                  {
+                    headers: { Authorization: `Bearer ${savedToken}` },
+                  }
+                );
+                
+                if (!leaderboardRes.ok) {
+                  console.warn(`⚠️ Leaderboard refresh failed with status ${leaderboardRes.status}`);
+                  return;
+                }
+                
+                const leaderboardData = await leaderboardRes.json();
+                
+                if (leaderboardData.leaderboard && Array.isArray(leaderboardData.leaderboard)) {
+                  const formattedLeaderboard = leaderboardData.leaderboard.map((contractor: any) => ({
+                    id: contractor.phone,
+                    name: contractor.name,
+                    points: contractor.score || 0,
+                    profile: contractor.profilePhoto ? contractor.profilePhoto : null,
+                    rank: contractor.rank,
+                    rating: contractor.rating,
+                    jobsPosted: contractor.jobCount,
+                    tier: contractor.tier,
+                  }));
+                  setLeaderboard(formattedLeaderboard);
+                  console.log('✅ Leaderboard refreshed after premium subscription update:', formattedLeaderboard);
+                }
+              } catch (err) {
+                console.error('Error refreshing leaderboard on subscription update:', (err as Error).message);
+              }
+            });
 
             // Fetch wallet balance and jobs
             await fetchWalletBalance();
@@ -308,11 +360,13 @@ export default function ContractorHome() {
         const response = await fetch(`${SERVER_URL}/users/profile`, {
           headers: { Authorization: `Bearer ${savedToken}` },
         });
-        const data = await response.json();
-        if (data.success && data.user) {
-          // Update user in AsyncStorage with fresh data including premium plan
-          await AsyncStorage.setItem('user', JSON.stringify(data.user));
-          console.log('✅ Updated user data with premium plan:', data.user.premiumPlan);
+        if (response.ok) {
+          const data = await response.json();
+          if (data.success && data.user) {
+            // Update user in AsyncStorage with fresh data including premium plan
+            await AsyncStorage.setItem('user', JSON.stringify(data.user));
+            console.log('✅ Updated user data with premium plan:', data.user.premiumPlan);
+          }
         }
       } catch (err) {
         console.warn('Could not fetch fresh user data after plan purchase:', err);
@@ -324,7 +378,7 @@ export default function ContractorHome() {
       // Set premium status immediately
       setHasPremium(true);
       
-      // ✅ FETCH FRESH LEADERBOARD FROM BACKEND (NOT CACHE) AFTER PREMIUM PURCHASE
+      // ✅ FETCH FRESH LEADERBOARD FROM NEW DISTRICT ENDPOINT AFTER PREMIUM PURCHASE
       try {
         const userStr = await AsyncStorage.getItem('user');
         let latitude = 0, longitude = 0;
@@ -335,29 +389,35 @@ export default function ContractorHome() {
         }
         
         const leaderboardRes = await fetch(
-          `${SERVER_URL}/leaderboard/city?latitude=${latitude}&longitude=${longitude}`,
+          `${SERVER_URL}/leaderboard/contractors/by-district?lat=${latitude}&lon=${longitude}`,
           {
             headers: { Authorization: `Bearer ${savedToken}` },
           }
         );
+        
+        if (!leaderboardRes.ok) {
+          console.warn(`⚠️ Leaderboard fetch failed with status ${leaderboardRes.status}`);
+          return;
+        }
+        
         const leaderboardData = await leaderboardRes.json();
         
         if (leaderboardData.leaderboard && Array.isArray(leaderboardData.leaderboard)) {
           const formattedLeaderboard = leaderboardData.leaderboard.map((contractor: any) => ({
-            id: contractor.contractorId || contractor._id,
+            id: contractor.phone,
             name: contractor.name,
             points: contractor.score || 0,
             profile: contractor.profilePhoto ? { uri: contractor.profilePhoto } : userProfilePhoto,
             rank: contractor.rank,
-            rating: contractor.avgRating,
-            jobsPosted: contractor.totalJobsPosted,
+            rating: contractor.rating,
+            jobsPosted: contractor.jobCount,
             tier: contractor.tier,
           }));
           setLeaderboard(formattedLeaderboard);
           
           // ✅ ALSO CACHE THE FRESH DATA FOR LATER USE
           await AsyncStorage.setItem('leaderboard', JSON.stringify(leaderboardData));
-          console.log('✅ Fresh leaderboard fetched from backend after premium purchase:', formattedLeaderboard);
+          console.log('✅ Fresh leaderboard fetched from new district endpoint after premium purchase:', formattedLeaderboard);
         } else {
           console.warn('⚠️ No leaderboard data from backend after premium purchase');
         }

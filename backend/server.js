@@ -1454,6 +1454,19 @@ app.post("/premium/subscribe", authenticateToken, async (req, res) => {
       status: "success",
     });
 
+    // ✅ NEW: Emit socket event to notify all contractors about premium subscription
+    // This triggers frontend to refresh leaderboard immediately
+    const io = global.io;
+    if (io) {
+      io.emit('premiumSubscriptionUpdate', {
+        contractorPhone: req.user.phone,
+        contractorName: user.name,
+        planType: planId,
+        timestamp: new Date(),
+      });
+      console.log(`📤 Emitted premiumSubscriptionUpdate for contractor ${req.user.phone}`);
+    }
+
     res.json({
       success: true,
       message: `Successfully subscribed to ${planId} plan`,

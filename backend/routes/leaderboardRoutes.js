@@ -583,6 +583,34 @@ router.get('/contractors/by-district', authenticateToken, async (req, res) => {
       rank: index + 1,
     }));
 
+    // ✅ NEW: Save leaderboard snapshot to CityLeaderboard model for caching/historical tracking
+    try {
+      const leaderboardEntry = await CityLeaderboard.findOneAndUpdate(
+        { city: district.name, state: district.state },
+        {
+          city: district.name,
+          state: district.state,
+          totalContractors: rankedLeaderboard.length,
+          leaderboard: rankedLeaderboard.map(c => ({
+            phone: c.phone,
+            name: c.name,
+            rank: c.rank,
+            score: c.score,
+            avgRating: c.rating,
+            totalJobsPosted: c.jobCount,
+            daysActive: c.activeDays,
+            totalSpent: c.totalSpent,
+          })),
+          updatedAt: new Date(),
+        },
+        { upsert: true, new: true }
+      );
+      console.log(`✅ Saved leaderboard for district: ${district.name}, ${district.state}`);
+    } catch (err) {
+      console.error(`⚠️ Error saving leaderboard to database: ${err.message}`);
+      // Don't fail response even if save fails
+    }
+
     return res.json({
       success: true,
       district: district.name,
