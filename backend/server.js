@@ -68,9 +68,9 @@ const io = new Server(server, {
 app.set('io', io);
 
 app.use(cors());
-// Increase body size limits to allow base64 image uploads from mobile clients
-app.use(express.json({ limit: '10mb'}));
-app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+// Increase body size limits to allow large GeoJSON uploads (557 districts from Full_india.json)
+app.use(express.json({ limit: '50mb'}));
+app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 // ⚠️ IMPORTANT: Do NOT use fileUpload() globally - it conflicts with multer!
 // We'll use fileUpload only on specific routes where needed
 app.use("/uploads", express.static(path.join(__dirname, "uploads"))); 
@@ -1067,100 +1067,54 @@ app.post("/login", loginLimiter, async (req, res) => {
 
     // ✅ NEW: Handle location for contractors
     let cityLeaderboard = null;
+    // ✅ NEW: Efficient location handling using district polygons
+    // No Nominatim API needed - direct geospatial lookup
     if (user.role === 'contractor' && latitude && longitude) {
       try {
-        const axios = require('axios');
-        const { normalizeLocation } = require('./utils/cityHierarchy');
+        const parsedLat = parseFloat(latitude);
+        const parsedLon = parseFloat(longitude);
         
-        console.log(`📍 Fetching location for contractor: lat=${latitude}, lon=${longitude}`);
-        
-        // Add delay to avoid Nominatim rate limiting
-        await new Promise(resolve => setTimeout(resolve, 1000));
-        
-        const geoResponse = await axios.get(
-          `https://nominatim.openstreetmap.org/reverse?format=json&lat=${latitude}&lon=${longitude}&zoom=10&addressdetails=1`,
-          {
-            headers: { 
-              'User-Agent': 'KaamwaleApp/1.0 (contact@kaamwale.com)',
-              'Accept': 'application/json'
-            },
-            timeout: 8000,
-          }
-        ).catch(err => {
-          console.warn('⚠️ Nominatim API timeout/error, using fallback:', err.message);
-          return null;
-        });
+        console.log(`📍 Finding district for contractor at: lat=${parsedLat}, lon=${parsedLon}`);
 
-        if (!geoResponse || !geoResponse.data) {
-          console.log('ℹ️ Using existing location data for contractor');
-          // Use existing location if API fails
+        // Find district polygon containing the contractor's GPS point
+        const District = require('./models/City');
+        const point = {
+          type: 'Point',
+          coordinates: [parsedLon, parsedLat],
+        };
+
+        const district = await District.findOne({
+          geometry: {
+            $geoIntersects: {
+              $geometry: point,
+            },
+          },
+        }).lean();
+
+        // Update user location with coordinates and district info
+        user.latitude = parsedLat;
+        user.longitude = parsedLon;
+        user.location = {
+          type: 'Point',
+          coordinates: [parsedLon, parsedLat],
+        };
+        user.locationLastUpdated = new Date();
+
+        if (district) {
+          // Store district info for reference (optional, but useful)
+          user.city = district.name;
+          user.state = district.state;
+          console.log(`✅ Found district: ${district.name}, ${district.state}`);
         } else {
-          const geoData = geoResponse.data;
-          let detectedCity = (
-            geoData.address?.city ||
-            geoData.address?.town ||
-            geoData.address?.village ||
-            geoData.address?.county ||
-            'Unknown'
-          );
-          let detectedState = (geoData.address?.state || 'Unknown');
-
-          // ✅ NEW: Normalize to parent city (e.g., Mulshi → Pune)
-          const normalized = normalizeLocation(detectedCity, detectedState);
-          const city = normalized.city;
-          const state = normalized.state;
-
-          // Update user's location with normalized city
-          user.city = city;
-          user.state = state;
-          user.latitude = parseFloat(latitude);
-          user.longitude = parseFloat(longitude);
-          user.locationLastUpdated = new Date();
-          await user.save();
-
-          console.log(`📍 Location: ${detectedCity} → ${city}, ${state}${normalized.isMapped ? ' (mapped)' : ''}`);
-
-          // ✅ NEW: Auto-invalidate old cache for this city when new contractor logs in
-          // This ensures fresh leaderboard calculation with latest contractors
-          const CityLeaderboard = require('./models/CityLeaderboard');
-          await CityLeaderboard.deleteOne({ city, state });
-          console.log(`🔄 Cleared old leaderboard cache for ${city}, ${state}`);
-
-          // Fetch city leaderboard (will calculate fresh since cache was cleared)
-          const { calculateCityLeaderboard } = require('./services/leaderboardService');
-          const leaderboardData = await calculateCityLeaderboard(city, state);
-
-          let leaderboard = await CityLeaderboard.findOneAndUpdate(
-            { city, state },
-            {
-              city,
-              state,
-              leaderboard: leaderboardData,
-              totalContractors: leaderboardData.length,
-              calculatedAt: new Date(),
-              expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
-            },
-            { upsert: true, new: true }
-          );
-
-          const currentUserRank = leaderboard.leaderboard.find(
-            (item) => item.contractorId.toString() === user._id.toString()
-          );
-
-          cityLeaderboard = {
-            city,
-            state,
-            totalContractors: leaderboard.totalContractors,
-            leaderboard: leaderboard.leaderboard,
-            myRank: currentUserRank?.rank || null,
-            myScore: currentUserRank?.score || 0,
-          };
-
-          console.log(`✅ Updated location for contractor: ${city}, ${state}`);
+          console.warn(`⚠️ No district found for coordinates [${parsedLon}, ${parsedLat}]`);
+          user.city = 'Unknown';
+          user.state = 'Unknown';
         }
+
+        await user.save();
       } catch (err) {
-        console.warn('⚠️ Could not get city leaderboard:', err.message);
-        console.warn('Stack trace:', err.stack);
+        console.warn('⚠️ Error finding district:', err.message);
+        // Continue with login even if district lookup fails
       }
     }
 

@@ -4,7 +4,7 @@ const { authenticateToken } = require('../utils/auth');
 const User = require('../models/User');
 const CityLeaderboard = require('../models/CityLeaderboard');
 const { calculateCityLeaderboard } = require('../services/leaderboardService');
-const { normalizeLocation } = require('../utils/cityHierarchy');
+// ✅ cityHierarchy no longer needed - district-based leaderboard uses pure geospatial queries
 
 const router = express.Router();
 
@@ -37,24 +37,11 @@ async function reverseGeocode(latitude, longitude) {
 
     let state = data.address?.state || 'Unknown';
 
-    // ✅ NEW: Normalize location - if null, return failure
-    const normalized = normalizeLocation(city, state);
-    
-    if (!normalized) {
-      console.warn(`⚠️ Location normalization failed for: city="${city}", state="${state}"`);
-      return {
-        city: 'Unknown',
-        state: 'Unknown',
-        success: false,
-      };
-    }
-
+    // ✅ No normalization needed for district-based system
+    // Districts are matched via geospatial queries, not city names
     return {
-      city: normalized.city,
-      state: normalized.state,
-      region: normalized.region,
-      originalLocation: normalized.originalLocation,
-      isMapped: normalized.isMapped,
+      city: city,
+      state: state,
       success: true,
     };
   } catch (err) {
