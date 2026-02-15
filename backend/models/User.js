@@ -49,6 +49,8 @@ const userSchema = new mongoose.Schema({
   },
   // Leaderboard points for premium users
   points: { type: Number, default: 0 },
+  // ✅ Average rating from completed jobs
+  avgRating: { type: Number, default: 0, min: 0, max: 5 },
   // ✅ Worker Profile - Main Skill & Expected Wages
   mainSkill: { type: String, default: '' }, // Labour, Mason, Engineer, ITI/Technician
   expectedWage: { type: String, default: '' }, // 0-400, 400-550, 550-700, 700-max

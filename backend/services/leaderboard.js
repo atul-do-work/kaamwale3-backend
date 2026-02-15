@@ -12,7 +12,6 @@
  */
 
 const express = require('express');
-const axios = require('axios');
 const { authenticateToken } = require('../utils/auth');
 const User = require('../models/User');
 const Job = require('../models/Jobs');
@@ -23,11 +22,10 @@ const CityLeaderboard = require('../models/CityLeaderboard');
 // ========================================
 
 const WEIGHTS = {
-  jobsPosted: 0.30,
-  rating: 0.25,
-  daysActive: 0.15,
-  completionRate: 0.20,
-  responseTime: 0.10,
+  rating: 0.50,          // 50% - Average rating
+  jobsPosted: 0.1667,    // 16.67% - Total jobs posted
+  daysActive: 0.1667,    // 16.67% - Days active
+  completionRate: 0.1667, // 16.67% - Completion rate
 };
 
 const TIER_THRESHOLDS = {
@@ -44,6 +42,51 @@ let leaderboardSchedulerRunning = false;
 // ========================================
 // UTILITY FUNCTIONS
 // ========================================
+
+/**
+ * Get district by GPS coordinates using MongoDB geospatial query
+ * Returns district name, state, and geometry
+ */
+async function getDistrictByCoordinates(latitude, longitude) {
+  try {
+    const District = require('../models/City');
+    const point = {
+      type: 'Point',
+      coordinates: [longitude, latitude],
+    };
+
+    // Try exact polygon match first
+    let district = await District.findOne({
+      geometry: {
+        $geoIntersects: {
+          $geometry: point,
+        },
+      },
+    }).lean();
+
+    // Fallback: nearest centroid (50km)
+    if (!district) {
+      console.warn(`⚠️ No exact district match for [${longitude}, ${latitude}], using nearest centroid`);
+      district = await District.findOne(
+        {
+          centroid: {
+            $nearSphere: {
+              $geometry: point,
+              $maxDistance: 50000,
+            },
+          },
+        },
+        null,
+        { lean: true }
+      );
+    }
+
+    return district;
+  } catch (err) {
+    console.error('❌ Error getting district by coordinates:', err.message);
+    return null;
+  }
+}
 
 /**
  * Get tier based on score
@@ -76,51 +119,6 @@ function getDaysActive(createdAtDate) {
   const diffTime = Math.abs(now - created);
   const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
   return Math.min(diffDays, 365); // Cap at 365 days for fair comparison
-}
-
-/**
- * Reverse geocoding using OpenStreetMap Nominatim API
- */
-async function reverseGeocode(latitude, longitude) {
-  try {
-    // Add delay to respect Nominatim rate limiting (1 request per second)
-    await new Promise(resolve => setTimeout(resolve, 1000));
-    
-    const response = await axios.get(
-      `https://nominatim.openstreetmap.org/reverse?format=json&lat=${latitude}&lon=${longitude}&zoom=10&addressdetails=1`,
-      {
-        headers: {
-          'User-Agent': 'KaamwaleApp/1.0 (contact@kaamwale.com)',
-          'Accept': 'application/json'
-        },
-        timeout: 8000,
-      }
-    );
-
-    const data = response.data;
-
-    let city =
-      data.address?.city ||
-      data.address?.town ||
-      data.address?.village ||
-      data.address?.county ||
-      'Unknown';
-
-    let state = data.address?.state || 'Unknown';
-
-    return {
-      city: city,
-      state: state,
-      success: true,
-    };
-  } catch (err) {
-    console.error('❌ Reverse geocoding error:', err.message);
-    return {
-      city: 'Unknown',
-      state: 'Unknown',
-      success: false,
-    };
-  }
 }
 
 // ========================================
@@ -179,19 +177,20 @@ async function calculateContractorScore(userId) {
     if (!stats) return 0;
 
     // Normalize values to 0-100 scale
-    const normalizedJobsPosted = Math.min(stats.totalJobsPosted, 100);
-    const normalizedRating = (stats.avgRating / 5) * 100;
-    const normalizedDaysActive = Math.min(stats.daysActive, 100);
-    const normalizedCompletionRate = stats.completionRate;
-    const normalizedResponseTime = getResponseTimeScore(stats.avgResponseTime);
+    const normalizedRating = (stats.avgRating / 5) * 100;           // 0-100 based on 5-star rating
+    const normalizedJobsPosted = Math.min(stats.totalJobsPosted, 100); // 0-100 (cap at 100 jobs)
+    const normalizedDaysActive = Math.min(stats.daysActive, 365);    // 0-365 days (normalize to percentage)
+    const normalizedCompletionRate = stats.completionRate;           // Already 0-100
 
-    // Apply weights and calculate final score
+    // Convert daysActive to percentage (assume 1 year = 100%)
+    const daysActivePercent = (normalizedDaysActive / 365) * 100;
+
+    // Apply weights and calculate final score (0-100)
     const finalScore =
-      WEIGHTS.jobsPosted * normalizedJobsPosted +
       WEIGHTS.rating * normalizedRating +
-      WEIGHTS.daysActive * normalizedDaysActive +
-      WEIGHTS.completionRate * normalizedCompletionRate +
-      WEIGHTS.responseTime * normalizedResponseTime;
+      WEIGHTS.jobsPosted * normalizedJobsPosted +
+      WEIGHTS.daysActive * daysActivePercent +
+      WEIGHTS.completionRate * normalizedCompletionRate;
 
     return Math.round(finalScore * 10) / 10;
   } catch (err) {
@@ -233,40 +232,24 @@ async function calculateCityLeaderboard(city, state) {
 
           return {
             contractorId: contractor._id,
-            phone: contractor.phone,
             name: contractor.name,
-            score,
-            avgRating: stats?.avgRating || 0,
-            totalJobsPosted: stats?.totalJobsPosted || 0,
-            completedJobs: stats?.completedJobs || 0,
-            daysActive: stats?.daysActive || 0,
-            completionRate: stats?.completionRate || 0,
-            avgResponseTime: stats?.avgResponseTime || 0,
-            profilePhoto: contractor.profilePhoto,
+            points: Math.round(score),
             tier: getTierByScore(score),
           };
         } catch (contractorErr) {
           console.warn(`⚠️ [Leaderboard] Error calculating score for ${contractor.name}:`, contractorErr.message);
           return {
             contractorId: contractor._id,
-            phone: contractor.phone,
             name: contractor.name,
-            score: 0,
-            avgRating: 0,
-            totalJobsPosted: 0,
-            completedJobs: 0,
-            daysActive: 0,
-            completionRate: 0,
-            avgResponseTime: 0,
-            profilePhoto: contractor.profilePhoto,
+            points: 0,
             tier: 'new',
           };
         }
       })
     );
 
-    // Sort by score descending and add rank
-    leaderboardData.sort((a, b) => b.score - a.score);
+    // Sort by points descending and add rank
+    leaderboardData.sort((a, b) => b.points - a.points);
     leaderboardData.forEach((item, index) => {
       item.rank = index + 1;
     });
@@ -437,9 +420,8 @@ router.get('/my-city', authenticateToken, async (req, res) => {
       totalContractors: leaderboard.totalContractors,
       leaderboard: leaderboard.leaderboard,
       myRank: currentUserRank?.rank || null,
-      myScore: currentUserRank?.score || 0,
+      myPoints: currentUserRank?.points || 0,
       myTier: currentUserRank?.tier || 'new',
-      calculatedAt: leaderboard.calculatedAt,
     });
   } catch (err) {
     console.error('[Leaderboard] Error fetching my-city:', err);
@@ -453,7 +435,7 @@ router.get('/my-city', authenticateToken, async (req, res) => {
 
 /**
  * GET /leaderboard/city
- * Get leaderboard for a city (auto-detect from lat/lon)
+ * Get leaderboard for a city (auto-detect from lat/lon using MongoDB geospatial)
  */
 router.get('/city', authenticateToken, async (req, res) => {
   try {
@@ -466,41 +448,37 @@ router.get('/city', authenticateToken, async (req, res) => {
       });
     }
 
-    // Reverse geocode to get city
-    const geoData = await reverseGeocode(parseFloat(latitude), parseFloat(longitude));
+    // Get district using geospatial query instead of Nominatim API
+    const district = await getDistrictByCoordinates(parseFloat(latitude), parseFloat(longitude));
 
-    if (!geoData.success || !geoData.city) {
-      return res.status(400).json({
-        success: false,
-        message: 'Could not determine city from coordinates',
-      });
-    }
-
-    if (geoData.city === 'unknown' || geoData.state === 'unknown') {
-      return res.status(400).json({
-        success: false,
-        message: 'Location outside mapped regions',
+    if (!district) {
+      return res.json({
+        success: true,
+        city: null,
+        state: null,
+        leaderboard: [],
+        message: 'Location outside mapped districts',
       });
     }
 
     // Try to get from cache first
     let leaderboard = await CityLeaderboard.findOne({
-      city: new RegExp(`^${geoData.city}$`, 'i'),
-      state: new RegExp(`^${geoData.state}$`, 'i'),
+      city: new RegExp(`^${district.name}$`, 'i'),
+      state: new RegExp(`^${district.state}$`, 'i'),
     });
 
     // If not in cache or expired, calculate fresh
     if (!leaderboard || new Date() > leaderboard.expiresAt) {
-      const leaderboardData = await calculateCityLeaderboard(geoData.city, geoData.state);
+      const leaderboardData = await calculateCityLeaderboard(district.name, district.state);
 
       leaderboard = await CityLeaderboard.findOneAndUpdate(
         { 
-          city: new RegExp(`^${geoData.city}$`, 'i'),
-          state: new RegExp(`^${geoData.state}$`, 'i')
+          city: district.name,
+          state: district.state
         },
         {
-          city: geoData.city,
-          state: geoData.state,
+          city: district.name,
+          state: district.state,
           leaderboard: leaderboardData,
           totalContractors: leaderboardData.length,
           calculatedAt: new Date(),
@@ -517,13 +495,13 @@ router.get('/city', authenticateToken, async (req, res) => {
 
     res.json({
       success: true,
-      city: geoData.city,
-      state: geoData.state,
+      city: district.name,
+      state: district.state,
       totalContractors: leaderboard.totalContractors,
       leaderboard: leaderboard.leaderboard,
       myRank: currentUserRank?.rank || null,
-      myScore: currentUserRank?.score || 0,
-      calculatedAt: leaderboard.calculatedAt,
+      myPoints: currentUserRank?.points || 0,
+      myTier: currentUserRank?.tier || 'new',
     });
   } catch (err) {
     console.error('[Leaderboard] Error fetching city:', err);
@@ -595,8 +573,8 @@ router.get('/city/:cityName', authenticateToken, async (req, res) => {
       totalContractors: leaderboard.totalContractors,
       leaderboard: leaderboard.leaderboard,
       myRank: currentUserRank?.rank || null,
-      myScore: currentUserRank?.score || 0,
-      calculatedAt: leaderboard.calculatedAt,
+      myPoints: currentUserRank?.points || 0,
+      myTier: currentUserRank?.tier || 'new',
     });
   } catch (err) {
     console.error('[Leaderboard] Error fetching city by name:', err);
@@ -610,7 +588,7 @@ router.get('/city/:cityName', authenticateToken, async (req, res) => {
 
 /**
  * PUT /leaderboard/update-location
- * Update contractor's location
+ * Update contractor's location using MongoDB geospatial query
  */
 router.put('/update-location', authenticateToken, async (req, res) => {
   try {
@@ -623,15 +601,22 @@ router.put('/update-location', authenticateToken, async (req, res) => {
       });
     }
 
-    // Reverse geocode
-    const geoData = await reverseGeocode(parseFloat(latitude), parseFloat(longitude));
+    // Get district using geospatial query
+    const district = await getDistrictByCoordinates(parseFloat(latitude), parseFloat(longitude));
+
+    if (!district) {
+      return res.status(400).json({
+        success: false,
+        message: 'Location outside mapped districts',
+      });
+    }
 
     // Update user's location
     const user = await User.findByIdAndUpdate(
       req.user.id,
       {
-        city: geoData.city,
-        state: geoData.state,
+        city: district.name,
+        state: district.state,
         latitude: parseFloat(latitude),
         longitude: parseFloat(longitude),
         locationLastUpdated: new Date(),
@@ -641,21 +626,21 @@ router.put('/update-location', authenticateToken, async (req, res) => {
 
     // Get new city leaderboard
     let leaderboard = await CityLeaderboard.findOne({
-      city: new RegExp(`^${geoData.city}$`, 'i'),
-      state: new RegExp(`^${geoData.state}$`, 'i'),
+      city: new RegExp(`^${district.name}$`, 'i'),
+      state: new RegExp(`^${district.state}$`, 'i'),
     });
 
     if (!leaderboard || new Date() > leaderboard.expiresAt) {
-      const leaderboardData = await calculateCityLeaderboard(geoData.city, geoData.state);
+      const leaderboardData = await calculateCityLeaderboard(district.name, district.state);
 
       leaderboard = await CityLeaderboard.findOneAndUpdate(
         { 
-          city: new RegExp(`^${geoData.city}$`, 'i'),
-          state: new RegExp(`^${geoData.state}$`, 'i')
+          city: district.name,
+          state: district.state
         },
         {
-          city: geoData.city,
-          state: geoData.state,
+          city: district.name,
+          state: district.state,
           leaderboard: leaderboardData,
           totalContractors: leaderboardData.length,
           calculatedAt: new Date(),
@@ -680,7 +665,8 @@ router.put('/update-location', authenticateToken, async (req, res) => {
       },
       leaderboard: leaderboard.leaderboard,
       myRank: currentUserRank?.rank || null,
-      myScore: currentUserRank?.score || 0,
+      myPoints: currentUserRank?.points || 0,
+      myTier: currentUserRank?.tier || 'new',
     });
   } catch (err) {
     console.error('[Leaderboard] Error updating location:', err);
@@ -842,121 +828,146 @@ router.get('/contractors/by-district', authenticateToken, async (req, res) => {
           as: 'jobs',
         },
       },
-      // Stage 3: Compute contractor metrics
+      // Stage 3: Compute contractor metrics using standardized WEIGHTS formula
       {
         $addFields: {
-          totalSpent: {
-            $sum: '$jobs.amount',
+          jobCount: { $size: '$jobs' },
+          // Rating normalized to 0-100 scale
+          normalizedRating: {
+            $cond: [{ $gt: ['$avgRating', 0] }, { $multiply: [{ $divide: ['$avgRating', 5] }, 100] }, 0],
           },
-          jobCount: {
-            $size: '$jobs',
+          // Jobs posted (cap at 100, normalized)
+          normalizedJobsPosted: {
+            $cond: [{ $gt: [{ $size: '$jobs' }, 0] }, { $min: [{ $size: '$jobs' }, 100] }, 0],
           },
-          avgRating: {
-            $cond: [
-              { $gt: ['$rating', 0] },
-              { $round: ['$rating', 1] },
-              0,
-            ],
-          },
+          // Days active since account creation
           activeDays: {
             $cond: [
               { $gt: ['$createdAt', null] },
               {
                 $ceil: {
-                  $divide: [
-                    {
-                      $subtract: [new Date(), '$createdAt'],
-                    },
-                    86400000, // 1 day in ms
-                  ],
+                  $divide: [{ $subtract: [new Date(), '$createdAt'] }, 86400000],
                 },
               },
               0,
             ],
           },
-          // Composite score: rating * totalSpent * (1 + log(jobCount)) * (1 + log(activeDays))
+          // Completion rate (assume 100% if jobs exist)
+          completionRate: {
+            $cond: [{ $gt: [{ $size: '$jobs' }, 0] }, 100, 0],
+          },
+        },
+      },
+      // Stage 3.5: Calculate normalized days active percentage
+      {
+        $addFields: {
+          daysActivePercent: {
+            $min: [{ $multiply: [{ $divide: ['$activeDays', 365] }, 100] }, 100],
+          },
+        },
+      },
+      // Stage 3.6: Calculate final score using WEIGHTS formula (0-100 scale)
+      {
+        $addFields: {
           score: {
-            $cond: [
-              { $and: [{ $gt: ['$rating', 0] }, { $gt: ['$jobs', []] }] },
+            $round: [
               {
-                $multiply: [
-                  '$rating',
-                  { $max: [1, { $divide: ['$totalSpent', 100] }] },
-                  { $max: [1, { $add: [1, { $ln: { $max: [2, '$jobCount'] } }] }] },
-                  { $max: [1, { $add: [1, { $ln: { $max: [2, '$activeDays'] } }] }] },
+                $add: [
+                  { $multiply: [0.5, '$normalizedRating'] },           // 50% rating weight
+                  { $multiply: [0.1667, '$normalizedJobsPosted'] },    // 16.67% jobs weight
+                  { $multiply: [0.1667, '$daysActivePercent'] },       // 16.67% days active weight
+                  { $multiply: [0.1667, '$completionRate'] },          // 16.67% completion weight
                 ],
               },
-              0,
+              1,
             ],
           },
         },
       },
       // Stage 4: Sort by score descending
       {
-        $sort: {
-          score: -1,
-        },
+        $sort: { score: -1 },
       },
       // Stage 5: Limit results
       {
-        $limit: 50,
+        $limit: 100,
       },
-      // Stage 6: Project final shape
+      // Stage 6: Project final shape (standardized format matching city leaderboard)
       {
         $project: {
           _id: 0,
-          phone: 1,
           name: 1,
-          profilePhoto: 1,
-          rating: '$avgRating',
-          totalSpent: 1,
-          jobCount: 1,
-          activeDays: 1,
-          score: { $round: ['$score', 2] },
+          points: '$score',
+          tier: {
+            $cond: [
+              { $gte: ['$score', 80] },
+              'gold',
+              {
+                $cond: [
+                  { $gte: ['$score', 60] },
+                  'silver',
+                  {
+                    $cond: [
+                      { $gte: ['$score', 40] },
+                      'bronze',
+                      { $cond: [{ $gte: ['$score', 20] }, 'rising-star', 'new'] },
+                    ],
+                  },
+                ],
+              },
+            ],
+          },
         },
       },
     ]);
 
-    // Add rank to each result
-    const rankedLeaderboard = leaderboard.map((contractor, index) => ({
-      ...contractor,
+    // Add rank to each contractor
+    const rankedLeaderboard = leaderboard.map((item, index) => ({
+      ...item,
       rank: index + 1,
     }));
 
-    // Save leaderboard snapshot to database for caching
-    try {
-      await CityLeaderboard.findOneAndUpdate(
-        { city: district.name, state: district.state },
-        {
-          city: district.name,
-          state: district.state,
-          totalContractors: rankedLeaderboard.length,
-          leaderboard: rankedLeaderboard.map(c => ({
-            phone: c.phone,
-            name: c.name,
-            rank: c.rank,
-            score: c.score,
-            avgRating: c.rating,
-            totalJobsPosted: c.jobCount,
-            daysActive: c.activeDays,
-            totalSpent: c.totalSpent,
-          })),
-          updatedAt: new Date(),
-        },
-        { upsert: true, new: true }
-      );
-      console.log(`✅ [Leaderboard] Saved leaderboard snapshot for: ${district.name}, ${district.state}`);
-    } catch (err) {
-      console.error(`⚠️ [Leaderboard] Error saving to database:`, err.message);
-    }
+    // Add current user's rank if they're in the leaderboard
+    const currentUserRank = rankedLeaderboard.find(
+      (item) => item.name === req.user.name || item.name === (req.user.phone)
+    );
 
-    return res.json({
+    // Return leaderboard with standardized format
+    res.json({
       success: true,
-      district: district.name,
+      city: district.name,
       state: district.state,
+      totalContractors: rankedLeaderboard.length,
       leaderboard: rankedLeaderboard,
-      count: rankedLeaderboard.length,
-      timestamp: new Date().toISOString(),
+      myRank: currentUserRank?.rank || null,
+      myPoints: currentUserRank?.points || 0,
+      myTier: currentUserRank?.tier || 'new',
+    });
+
+    // Save leaderboard snapshot to database for caching (async, non-blocking)
+    setImmediate(async () => {
+      try {
+        await CityLeaderboard.findOneAndUpdate(
+          { city: district.name, state: district.state },
+          {
+            city: district.name,
+            state: district.state,
+            totalContractors: rankedLeaderboard.length,
+            leaderboard: rankedLeaderboard.map(c => ({
+              rank: c.rank,
+              name: c.name,
+              points: c.points,
+              tier: c.tier,
+            })),
+            calculatedAt: new Date(),
+            expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
+          },
+          { upsert: true, new: true }
+        );
+        console.log(`✅ [Leaderboard] Cached leaderboard for: ${district.name}, ${district.state}`);
+      } catch (err) {
+        console.error(`⚠️ [Leaderboard] Error caching leaderboard:`, err.message);
+      }
     });
   } catch (err) {
     console.error('❌ [Leaderboard] Error fetching by-district:', err);
