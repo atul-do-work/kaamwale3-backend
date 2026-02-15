@@ -437,7 +437,7 @@ export default function ContractorHome() {
   };
 
   return (
-    <SafeAreaView style={styles.container}>
+    <SafeAreaView edges={['top', 'left', 'right']} style={styles.container}>
       {/* Header with Gradient */}
       <LinearGradient 
         colors={['#1a2f4d', '#2d5a8c']} 

@@ -299,7 +299,7 @@ export default function Jobs(): React.ReactElement {
   }, [workerName, token]);
 
   return (
-    <SafeAreaView style={{ flex: 1 }}>
+    <SafeAreaView edges={['top', 'left', 'right']} style={{ flex: 1 }}>
       <ScrollView style={styles.container} contentContainerStyle={{ paddingVertical: 12 }}>
         {loading ? (
           <Text style={styles.loadingText}>Loading jobs...</Text>

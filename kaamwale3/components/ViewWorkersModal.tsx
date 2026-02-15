@@ -100,7 +100,7 @@ export default function ViewWorkersModal({
 
   return (
     <Modal visible={visible} animationType="slide" transparent={false}>
-      <SafeAreaView style={styles.container}>
+      <SafeAreaView edges={['top', 'left', 'right']} style={styles.container}>
         {/* Header */}
         <View style={styles.header}>
           <TouchableOpacity onPress={onClose}>

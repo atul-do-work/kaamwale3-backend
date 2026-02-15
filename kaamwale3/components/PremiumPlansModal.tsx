@@ -82,6 +82,13 @@ export default function PremiumPlansModal({
       const data = res.data;
 
       if (data.success) {
+        // ✅ Update user premium status instantly in context
+        const { updateUserPremium } = useAuth();
+        if (data.premiumPlan) {
+          await updateUserPremium(data.premiumPlan);
+          console.log('✅ Premium activated instantly:', data.premiumPlan);
+        }
+        
         onPlanSelected(planId);
         onClose();
       } else {

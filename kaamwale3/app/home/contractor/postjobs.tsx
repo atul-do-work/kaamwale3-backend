@@ -381,7 +381,7 @@ export default function PostJobScreen() {
   };
 
   return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: '#f3f3f3' }}>
+    <SafeAreaView edges={['top', 'left', 'right']} style={{ flex: 1, backgroundColor: '#f3f3f3' }}>
       <ScrollView contentContainerStyle={styles.scroll}>
       <View style={styles.container}>
         <Text style={styles.header}>Post a New Job</Text>

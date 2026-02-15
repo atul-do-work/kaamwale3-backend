@@ -121,6 +121,19 @@ function getDaysActive(createdAtDate) {
   return Math.min(diffDays, 365); // Cap at 365 days for fair comparison
 }
 
+/**
+ * Check if user has active premium plan
+ */
+function isPremiumActive(user) {
+  if (!user || !user.premiumPlan) return false;
+  
+  const { type, expiryDate } = user.premiumPlan;
+  if (!type || type === 'free') return false;
+  
+  // Check if premium hasn't expired
+  return expiryDate && new Date() < new Date(expiryDate);
+}
+
 // ========================================
 // SCORING & CALCULATION FUNCTIONS
 // ========================================
@@ -365,11 +378,20 @@ const router = express.Router();
 
 /**
  * GET /leaderboard/my-city
- * Get leaderboard for the current user's city
+ * Get leaderboard for the current user's city (PREMIUM ONLY)
  */
 router.get('/my-city', authenticateToken, async (req, res) => {
   try {
     const user = await User.findById(req.user.id);
+
+    // ✅ Check premium status
+    if (!isPremiumActive(user)) {
+      return res.status(403).json({
+        success: false,
+        message: 'Leaderboard feature requires an active premium plan',
+        upgradePlanUrl: '/premium/plans',
+      });
+    }
 
     if (!user || !user.city) {
       return res.status(400).json({
@@ -435,10 +457,20 @@ router.get('/my-city', authenticateToken, async (req, res) => {
 
 /**
  * GET /leaderboard/city
- * Get leaderboard for a city (auto-detect from lat/lon using MongoDB geospatial)
+ * Get leaderboard for a city (auto-detect from lat/lon) - PREMIUM ONLY
  */
 router.get('/city', authenticateToken, async (req, res) => {
   try {
+    // ✅ Check premium status
+    const user = await User.findById(req.user.id);
+    if (!isPremiumActive(user)) {
+      return res.status(403).json({
+        success: false,
+        message: 'Leaderboard feature requires an active premium plan',
+        upgradePlanUrl: '/premium/plans',
+      });
+    }
+
     const { latitude, longitude } = req.query;
 
     if (!latitude || !longitude) {
@@ -588,7 +620,7 @@ router.get('/city/:cityName', authenticateToken, async (req, res) => {
 
 /**
  * PUT /leaderboard/update-location
- * Update contractor's location using MongoDB geospatial query
+ * Update contractor's location + return leaderboard if premium
  */
 router.put('/update-location', authenticateToken, async (req, res) => {
   try {
@@ -624,7 +656,24 @@ router.put('/update-location', authenticateToken, async (req, res) => {
       { new: true }
     );
 
-    // Get new city leaderboard
+    // ✅ Return leaderboard only if user has premium
+    const hasPremium = isPremiumActive(user);
+
+    if (!hasPremium) {
+      return res.json({
+        success: true,
+        message: 'Location updated. Premium required to view leaderboard.',
+        user: {
+          city: user.city,
+          state: user.state,
+          latitude: user.latitude,
+          longitude: user.longitude,
+        },
+        requiresPremium: true,
+      });
+    }
+
+    // Get new city leaderboard (only for premium users)
     let leaderboard = await CityLeaderboard.findOne({
       city: new RegExp(`^${district.name}$`, 'i'),
       state: new RegExp(`^${district.state}$`, 'i'),
@@ -733,10 +782,20 @@ router.get('/stats/:contractorId', authenticateToken, async (req, res) => {
 
 /**
  * GET /leaderboard/contractors/by-district
- * Contractor leaderboard by district polygon + GPS location
+ * Contractor leaderboard by district polygon + GPS location (PREMIUM ONLY)
  */
 router.get('/contractors/by-district', authenticateToken, async (req, res) => {
   try {
+    // ✅ Check premium status
+    const user = await User.findById(req.user.id);
+    if (!isPremiumActive(user)) {
+      return res.status(403).json({
+        success: false,
+        message: 'Leaderboard feature requires an active premium plan',
+        upgradePlanUrl: '/premium/plans',
+      });
+    }
+
     const { lat, lon } = req.query;
 
     if (!lat || !lon) {

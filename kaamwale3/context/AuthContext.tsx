@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useEffect, useState, ReactNode } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { secureSet, secureGet, secureDelete } from '../utils/secureStore';
-// API_BASE not required here (AuthProvider uses SecureStore and AsyncStorage)
+import { socket } from '../utils/socket';
 
 type AuthContextType = {
   accessToken: string | null;
@@ -9,6 +9,10 @@ type AuthContextType = {
   loading: boolean;
   saveTokens: (accessToken: string | null, refreshToken?: string | null, user?: any) => Promise<void>;
   logout: () => Promise<void>;
+  /**
+   * ✅ Update user premium status instantly (called when premium subscription received)
+   */
+  updateUserPremium: (premiumPlan: any) => Promise<void>;
 };
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -17,6 +21,35 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const [accessToken, setAccessToken] = useState<string | null>(null);
   const [user, setUser] = useState<any | null>(null);
   const [loading, setLoading] = useState(true);
+
+  // ✅ Listen for premium subscription updates via socket
+  useEffect(() => {
+    socket.on('premiumSubscriptionUpdate', async (data: any) => {
+      console.log('📡 Received premium subscription update:', data);
+      
+      // Update current user if it's them
+      if (user && user.phone === data.contractorPhone) {
+        // Fetch fresh user data to get updated premium plan
+        try {
+          const response = await fetch('http://192.168.1.1/user/profile', {
+            headers: { 'Authorization': `Bearer ${accessToken}` },
+          }).catch(() => null);
+          
+          if (response?.ok) {
+            const userData = await response.json();
+            await updateUserPremium(userData.premiumPlan);
+            console.log('✅ Premium status updated instantly');
+          }
+        } catch (err) {
+          console.warn('Could not fetch updated user data:', err);
+        }
+      }
+    });
+
+    return () => {
+      socket.off('premiumSubscriptionUpdate');
+    };
+  }, [user, accessToken]);
 
   useEffect(() => {
     (async () => {
@@ -66,6 +99,22 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     }
   };
 
+  /**
+   * ✅ Update user premium instantly when subscription completes
+   */
+  const updateUserPremium = async (premiumPlan: any) => {
+    try {
+      if (user) {
+        const updatedUser = { ...user, premiumPlan };
+        setUser(updatedUser);
+        await AsyncStorage.setItem('user', JSON.stringify(updatedUser));
+        console.log('✅ User premium status updated in AuthContext');
+      }
+    } catch (e) {
+      console.warn('updateUserPremium error', e);
+    }
+  };
+
   const logout = async () => {
     try {
       setAccessToken(null);
@@ -79,7 +128,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   };
 
   return (
-    <AuthContext.Provider value={{ accessToken, user, loading, saveTokens, logout }}>
+    <AuthContext.Provider value={{ accessToken, user, loading, saveTokens, logout, updateUserPremium }}>
       {children}
     </AuthContext.Provider>
   );
