@@ -2,7 +2,7 @@ const mongoose = require("mongoose");
 
 const districtSchema = new mongoose.Schema(
   {
-    name: { type: String, required: true, unique: true, trim: true }, // District name (e.g., "Adilabad")
+    name: { type: String, required: true, trim: true }, // District name (e.g., "Adilabad")
     slug: { type: String, required: true, unique: true, lowercase: true }, // URL-safe name
     state: { type: String, required: true }, // State name (e.g., "Andhra Pradesh")
     properties: {
@@ -115,6 +115,8 @@ districtSchema.pre("save", function (next) {
 districtSchema.index({ geometry: "2dsphere" });
 // Index on centroid for $nearSphere fallback (find nearest district)
 districtSchema.index({ centroid: "2dsphere" });
+// Compound unique index: (name, state) - allows same name in different states
+districtSchema.index({ name: 1, state: 1 }, { unique: true });
 // Text index for district name and state search
 districtSchema.index({ name: "text", slug: "text", state: "text" });
 

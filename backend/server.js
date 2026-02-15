@@ -84,8 +84,8 @@ app.use("/wallet", walletRoutes);
 const razorpayRoutes = require("./routes/razorpay");
 app.use("/api/payment", razorpayRoutes);
 
-// ✅ Mount leaderboard routes
-const leaderboardRoutes = require("./routes/leaderboardRoutes");
+// ✅ Mount leaderboard routes (consolidated service with scheduler)
+const { router: leaderboardRoutes, startLeaderboardScheduler } = require("./services/leaderboard");
 app.use("/leaderboard", leaderboardRoutes);
 
 // ✅ Mount payout routes for earnings & payouts
@@ -99,9 +99,6 @@ app.use("/admin", adminRoutes);
 // ✅ Mount upload routes for profile photos and documents
 const uploadRoutes = require("./routes/Upload");
 app.use("/upload", uploadRoutes);
-
-// ✅ Import and start leaderboard scheduler
-const { startLeaderboardScheduler } = require("./services/leaderboardScheduler");
 
 // Ensure uploads folder exists
 const fs = require("fs").promises;
@@ -1031,36 +1028,59 @@ app.post("/users/register", async (req, res) => {
             coordinates: [parsedLon, parsedLat],
           };
 
-          let district = await District.findOne({
-            geometry: {
-              $geoIntersects: {
-                $geometry: point,
-              },
-            },
-          }).lean();
-
-          // ✅ FALLBACK: Find nearest district by centroid if exact match not found
-          if (!district) {
-            district = await District.findOne(
-              {
-                centroid: {
-                  $nearSphere: {
+          // ✅ DEBUG: Check district count in DB
+          try {
+            const districtCount = await District.countDocuments();
+            console.log(`📊 Total districts in DB: ${districtCount}`);
+            
+            if (districtCount === 0) {
+              console.warn(`⚠️ [Register] No districts found in database! Import GeoJSON first via POST /admin/districts/import-geojson`);
+              newUser.city = 'Unknown';
+              newUser.state = 'Unknown';
+            } else {
+              let district = await District.findOne({
+                geometry: {
+                  $geoIntersects: {
                     $geometry: point,
-                    $maxDistance: 50000,
                   },
                 },
-              },
-              null,
-              { lean: true }
-            );
-          }
+              }).lean();
 
-          if (district) {
-            newUser.city = district.name;
-            newUser.state = district.state;
-            console.log(`✅ [Register] Location saved: ${district.name}, ${district.state} (${parsedLat}, ${parsedLon})`);
-          } else {
-            console.warn(`⚠️ [Register] No district found for [${parsedLon}, ${parsedLat}]`);
+              // ✅ FALLBACK: Find nearest district by centroid if exact match not found
+              if (!district) {
+                console.warn(`⚠️ [Register] No exact polygon match for [${parsedLon}, ${parsedLat}], trying nearest centroid...`);
+                district = await District.findOne(
+                  {
+                    centroid: {
+                      $nearSphere: {
+                        $geometry: point,
+                        $maxDistance: 50000,
+                      },
+                    },
+                  },
+                  null,
+                  { lean: true }
+                );
+
+                if (district) {
+                  console.log(`✅ [Register] Found nearest district by centroid: ${district.name}, ${district.state}`);
+                } else {
+                  console.warn(`⚠️ [Register] No district found within 50km for [${parsedLon}, ${parsedLat}]`);
+                }
+              }
+
+              if (district) {
+                newUser.city = district.name;
+                newUser.state = district.state;
+                console.log(`✅ [Register] Location saved: ${district.name}, ${district.state} (${parsedLat}, ${parsedLon})`);
+              } else {
+                console.warn(`⚠️ [Register] No district found for [${parsedLon}, ${parsedLat}] - using Unknown`);
+                newUser.city = 'Unknown';
+                newUser.state = 'Unknown';
+              }
+            }
+          } catch (distErr) {
+            console.error('❌ [Register] Error querying districts:', distErr.message);
             newUser.city = 'Unknown';
             newUser.state = 'Unknown';
           }
@@ -1106,8 +1126,17 @@ app.post("/users/register", async (req, res) => {
 
     return res.json({ success: true, user: { name, phone, role }, accessToken, refreshToken });
   } catch (err) {
-    console.error("Register error", err);
-    return res.status(500).json({ success: false, message: "Internal server error" });
+    // ✅ HANDLE: E11000 duplicate key error
+    if (err.code === 11000) {
+      const field = Object.keys(err.keyPattern || {})[0];
+      console.error(`❌ E11000 Duplicate Key Error: ${field} already exists`, err.keyValue);
+      return res.status(400).json({ 
+        success: false, 
+        message: `${field} already registered. Please login instead.`
+      });
+    }
+    console.error("Register error", err.message || err);
+    return res.status(500).json({ success: false, message: "Registration failed. Please try again." });
   }
 });
 
@@ -1154,36 +1183,60 @@ app.post("/login", loginLimiter, async (req, res) => {
             coordinates: [parsedLon, parsedLat],
           };
 
-          let district = await District.findOne({
-            geometry: {
-              $geoIntersects: {
-                $geometry: point,
-              },
-            },
-          }).lean();
-
-          // ✅ FALLBACK: If no exact district match, find nearest district by centroid
-          if (!district) {
-            console.warn(`⚠️ No district polygon found for [${parsedLon}, ${parsedLat}], trying nearest centroid...`);
-            district = await District.findOne(
-              {
-                centroid: {
-                  $nearSphere: {
+          // ✅ DEBUG: Check district count
+          try {
+            const districtCount = await District.countDocuments();
+            if (districtCount === 0) {
+              console.warn(`⚠️ [Login] No districts in database - import via POST /admin/districts/import-geojson`);
+              user.city = 'Unknown';
+              user.state = 'Unknown';
+            } else {
+              let district = await District.findOne({
+                geometry: {
+                  $geoIntersects: {
                     $geometry: point,
-                    $maxDistance: 50000, // 50km radius fallback
                   },
                 },
-              },
-              null,
-              { lean: true }
-            );
+              }).lean();
 
-            if (district) {
-              console.log(`✅ Found nearest district by centroid: ${district.name}, ${district.state} (fallback match)`);
+              // ✅ FALLBACK: If no exact district match, find nearest district by centroid
+              if (!district) {
+                console.warn(`⚠️ [Login] No exact polygon match for [${parsedLon}, ${parsedLat}], trying nearest centroid...`);
+                district = await District.findOne(
+                  {
+                    centroid: {
+                      $nearSphere: {
+                        $geometry: point,
+                        $maxDistance: 50000, // 50km radius fallback
+                      },
+                    },
+                  },
+                  null,
+                  { lean: true }
+                );
+
+                if (district) {
+                  console.log(`✅ [Login] Found nearest district by centroid: ${district.name}, ${district.state} (fallback match)`);
+                }
+              }
+
+              if (district) {
+                user.city = district.name;
+                user.state = district.state;
+                console.log(`✅ [Login] Found district: ${district.name}, ${district.state}`);
+              } else {
+                console.warn(`⚠️ [Login] No district found for coordinates [${parsedLon}, ${parsedLat}] - using Unknown`);
+                user.city = 'Unknown';
+                user.state = 'Unknown';
+              }
             }
+          } catch (distErr) {
+            console.error('❌ [Login] Error querying districts:', distErr.message);
+            user.city = 'Unknown';
+            user.state = 'Unknown';
           }
 
-          // Update user location with coordinates and district info
+          // ✅ Always update coordinates and save after district lookup
           user.latitude = parsedLat;
           user.longitude = parsedLon;
           user.location = {
@@ -1191,21 +1244,13 @@ app.post("/login", loginLimiter, async (req, res) => {
             coordinates: [parsedLon, parsedLat],
           };
           user.locationLastUpdated = new Date();
-
-          if (district) {
-            // Store district info for reference (optional, but useful)
-            user.city = district.name;
-            user.state = district.state;
-            console.log(`✅ Found district: ${district.name}, ${district.state}`);
-          } else {
-            console.warn(`⚠️ No district found for coordinates [${parsedLon}, ${parsedLat}] - using Unknown`);
-            user.city = 'Unknown';
-            user.state = 'Unknown';
+          
+          try {
+            await user.save();
+            console.log(`✅ [Login] Location saved: lat=${parsedLat}, lon=${parsedLon}, city=${user.city}`);
+          } catch (saveErr) {
+            console.error('⚠️ [Login] Error saving location:', saveErr.message);
           }
-
-          // ✅ FIX: Save location updates immediately
-          await user.save();
-          console.log(`✅ Location saved for ${user.phone}: lat=${parsedLat}, lon=${parsedLon}, city=${user.city}`);
         }
       } catch (err) {
         console.error('❌ Error finding district:', err.message);

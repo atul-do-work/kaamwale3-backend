@@ -885,6 +885,32 @@ router.post('/districts/import-geojson', authenticateToken, async (req, res) => 
     const importedDistricts = [];
     const errors = []; // ✅ FIXED: Initialize errors array
 
+        // Helper: Remove duplicate vertices from polygon rings
+        const removeDuplicateVertices = (coords) => {
+            const unique = [];
+            const seen = new Set();
+
+            for (const [lng, lat] of coords) {
+                const key = `${lng}-${lat}`;
+                if (!seen.has(key)) {
+                    seen.add(key);
+                    unique.push([lng, lat]);
+                }
+            }
+
+            // Ensure polygon is closed
+            if (unique.length > 0) {
+                const first = unique[0];
+                const last = unique[unique.length - 1];
+
+                if (first[0] !== last[0] || first[1] !== last[1]) {
+                    unique.push(first);
+                }
+            }
+
+            return unique;
+        };
+
         // Helper: Calculate centroid from polygon/multipolygon coordinates
         const calculateCentroid = (geometry) => {
             let allCoords = [];
@@ -956,6 +982,21 @@ router.post('/districts/import-geojson', authenticateToken, async (req, res) => 
                     continue;
                 }
 
+                // Clean geometry: Remove duplicate vertices
+                if (geometry.type === 'Polygon') {
+                    geometry.coordinates = geometry.coordinates.map(ring =>
+                        removeDuplicateVertices(ring)
+                    );
+                }
+
+                if (geometry.type === 'MultiPolygon') {
+                    geometry.coordinates = geometry.coordinates.map(polygon =>
+                        polygon.map(ring =>
+                            removeDuplicateVertices(ring)
+                        )
+                    );
+                }
+
                 const centroid = calculateCentroid(geometry);
                 const bbox = calculateBbox(geometry);
 
@@ -972,7 +1013,10 @@ router.post('/districts/import-geojson', authenticateToken, async (req, res) => 
                     slug: districtSlug,
                     state: stateName,
                     geometry: geometry,
-                    centroid: centroid,
+                    centroid: {
+                        type: "Point",
+                        coordinates: centroid
+                    },
                     bbox: bbox,
                     properties: {
                         stateCensuscode: properties.ST_CEN_CD,
@@ -984,7 +1028,11 @@ router.post('/districts/import-geojson', authenticateToken, async (req, res) => 
                 const district = await District.findOneAndUpdate(
                     { slug: districtSlug },
                     districtData,
-                    { upsert: true, new: true }
+                    { 
+                        upsert: true, 
+                        new: true,
+                        runValidators: true
+                    }
                 );
 
                 importedDistricts.push({
@@ -1097,6 +1145,94 @@ router.get('/debug/check-point', async (req, res) => {
             success: false,
             message: 'Error checking point',
             error: err.message,
+        });
+    }
+});
+
+// ✅ DEBUG: Check geospatial queries for specific coordinates
+router.get('/debug/geospatial/:lat/:lon', async (req, res) => {
+    try {
+        const lat = parseFloat(req.params.lat);
+        const lon = parseFloat(req.params.lon);
+
+        if (isNaN(lat) || isNaN(lon)) {
+            return res.status(400).json({ success: false, message: 'Invalid latitude or longitude' });
+        }
+
+        console.log(`🔍 [GeospatialDebug] Checking point: [${lon}, ${lat}]`);
+
+        const point = { type: 'Point', coordinates: [lon, lat] };
+
+        // Check 1: Exact polygon match
+        const exactMatch = await District.findOne({
+            geometry: { $geoIntersects: { $geometry: point } }
+        }).lean();
+
+        // Check 2: Nearest centroid (50km)
+        const nearestCentroid = await District.findOne(
+            {
+                centroid: {
+                    $nearSphere: {
+                        $geometry: point,
+                        $maxDistance: 50000
+                    }
+                }
+            },
+            null,
+            { lean: true }
+        );
+
+        // Check 3: All districts within 100km
+        const withinHundredKm = await District.find(
+            {
+                centroid: {
+                    $nearSphere: {
+                        $geometry: point,
+                        $maxDistance: 100000
+                    }
+                }
+            },
+            { name: 1, state: 1, centroid: 1 },
+            { limit: 10, lean: true }
+        );
+
+        // Check 4: Total districts in DB and geospatial indexes
+        const totalDistricts = await District.countDocuments();
+        const indexInfo = await District.collection.getIndexes();
+        const hasGeoIndex = Object.values(indexInfo).some(idx => 
+            idx.key && (idx.key.geometry === '2dsphere' || idx.key.centroid === '2dsphere')
+        );
+
+        res.json({
+            coordinates: { latitude: lat, longitude: lon },
+            geospatialIndexExists: hasGeoIndex,
+            totalDistrictsInDB: totalDistricts,
+            exactPolygonMatch: exactMatch ? {
+                name: exactMatch.name,
+                state: exactMatch.state,
+                matchType: 'EXACT (inside polygon)'
+            } : null,
+            nearestCentroidWithin50km: nearestCentroid ? {
+                name: nearestCentroid.name,
+                state: nearestCentroid.state,
+                distance: 'unknown',
+                matchType: 'FALLBACK (nearest centroid)'
+            } : null,
+            districtsWith100kmRadius: withinHundredKm.map(d => ({
+                name: d.name,
+                state: d.state
+            })),
+            indexes: Object.keys(indexInfo).map(name => ({
+                name,
+                fields: indexInfo[name].key
+            }))
+        });
+    } catch (err) {
+        console.error('❌ Geospatial debug error:', err);
+        res.status(500).json({
+            success: false,
+            message: 'Error checking geospatial data',
+            error: err.message
         });
     }
 });
