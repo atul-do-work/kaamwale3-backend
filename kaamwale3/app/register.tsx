@@ -9,7 +9,7 @@ import styles from '../styles/RegisterScreenStyles';
 import { registerForPushNotificationsAsync } from '../services/notification';
 import { useLanguage } from '../context/LanguageContext';
 import { useAuth } from '../context/AuthContext';
-import TermsAndConditionsModal from '../components/TermsAndConditionsModal';
+import LegalModal from '../components/LegalModal';
 
 type User = {
   name: string;
@@ -359,14 +359,19 @@ export default function Register() {
             <MaterialIcons name="check" size={16} color="#fff" />
           )}
         </TouchableOpacity>
-        <TouchableOpacity
-          style={{ marginLeft: 10, flex: 1 }}
-          onPress={() => setTermsModalVisible(true)}
-        >
-          <Text style={{ color: '#fff', fontSize: 13 }}>
-            {t('agreeTerms')}
+        <View style={{ marginLeft: 10, flex: 1 }}>
+          <Text style={{ color: '#aaa', fontSize: 13 }}>
+            I agree to the{' '}
+            <TouchableOpacity
+              onPress={() => setTermsModalVisible(true)}
+              style={{ padding: 2 }}
+            >
+              <Text style={{ color: '#007AFF', fontSize: 13, textDecorationLine: 'underline', fontWeight: '600' }}>
+                Terms & Conditions and Privacy Policy
+              </Text>
+            </TouchableOpacity>
           </Text>
-        </TouchableOpacity>
+        </View>
       </View>
 
       <TouchableOpacity style={styles.registerButton} onPress={handleRegister} disabled={isLoading}>
@@ -377,8 +382,8 @@ export default function Register() {
         )}
       </TouchableOpacity>
 
-      {/* ✅ Terms and Conditions Modal */}
-      <TermsAndConditionsModal visible={termsModalVisible} onClose={() => setTermsModalVisible(false)} />
+      {/* ✅ Legal Modal - Terms & Conditions + Privacy Policy */}
+      <LegalModal visible={termsModalVisible} onClose={() => setTermsModalVisible(false)} />
     </View>
   );
 }

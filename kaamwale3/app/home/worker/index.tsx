@@ -229,6 +229,13 @@ function WorkerHome() {
         const userStr = await AsyncStorage.getItem("user");
         const userPhone = userStr ? JSON.parse(userStr).phone : null;
         
+        // ✅ RELOAD PROFILE PHOTO when screen comes into focus (after profile update)
+        const profilePhotoStr = await AsyncStorage.getItem("profilePhoto");
+        if (profilePhotoStr) {
+          setWorkerProfilePhoto(profilePhotoStr);
+          console.log("📸 Profile photo reloaded on focus");
+        }
+        
         // If user changed (compare with ref, not state), reset everything immediately
         if (userPhone && userPhone !== previousUserPhoneRef.current) {
           console.log(`👤 Worker Home: User changed from ${previousUserPhoneRef.current} to ${userPhone}, resetting metrics`);

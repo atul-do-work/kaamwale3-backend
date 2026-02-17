@@ -284,8 +284,7 @@ export default function NotificationHistoryScreen(): React.ReactElement {
               onPress={handleMarkAllAsRead}
             >
               <Ionicons name="checkmark-done" size={18} color="#1a2f4d" />
-              <Text style={styles.markAllText}>Mark all as read</Text>
-                          <Text style={styles.markAllText}>{t('markAllAsRead')}</Text>
+              <Text style={styles.markAllText}>{t('markAllAsRead')}</Text>
             </TouchableOpacity>
           )}
 

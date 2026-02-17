@@ -22,7 +22,7 @@ const PORT = process.env.PORT || 3000;
 const JWT_SECRET = process.env.JWT_SECRET || "supersecretkey";
 
 // ---------------- MONGODB CONNECTION ----------------
-mongoose.connect(process.env.MONGO_URI || "mongodb://127.0.0.1:27017/kaamwale")
+mongoose.connect(process.env.MONGO_URI || "mongodb://127.0.0.1:27017/IndianWorker")
   .then(async () => {
     console.log("MongoDB Connected");
     
