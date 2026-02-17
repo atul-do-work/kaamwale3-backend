@@ -5,7 +5,7 @@ import {
   ScrollView,
   TouchableOpacity,
   Image,
-  Alert,
+  Modal,
   StyleSheet,
   ActivityIndicator,
   Platform,
@@ -42,6 +42,19 @@ export default function DocumentsAndPolicies() {
   const [documents, setDocuments] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [uploading, setUploading] = useState(false);
+  
+  // ✅ Modal state for alerts
+  const [modalVisible, setModalVisible] = useState(false);
+  const [modalTitle, setModalTitle] = useState("");
+  const [modalMessage, setModalMessage] = useState("");
+  const [modalType, setModalType] = useState<"success" | "error" | "info">("success");
+  
+  const showModal = (type: "success" | "error" | "info", title: string, message: string) => {
+    setModalType(type);
+    setModalTitle(title);
+    setModalMessage(message);
+    setModalVisible(true);
+  };
 
   React.useEffect(() => {
     fetchDocuments();
@@ -78,7 +91,7 @@ export default function DocumentsAndPolicies() {
         uploadDocument(result.assets[0], documentType);
       }
     } catch (err) {
-      Alert.alert('Error', 'Failed to pick image');
+      showModal('error', 'Error', 'Failed to pick image');
     }
   };
 
@@ -94,7 +107,7 @@ export default function DocumentsAndPolicies() {
         uploadDocument(result.assets[0], documentType);
       }
     } catch (err) {
-      Alert.alert('Error', 'Failed to take photo');
+      showModal('error', 'Error', 'Failed to take photo');
     }
   };
 
@@ -118,14 +131,14 @@ export default function DocumentsAndPolicies() {
       });
 
       if (res.ok) {
-        Alert.alert('Success', `${documentType.toUpperCase()} uploaded successfully!`);
+        showModal('success', 'Success', `${documentType.toUpperCase()} uploaded successfully!`);
         await logActivity(accessToken, 'DOCUMENT_UPLOAD', `Uploaded ${documentType} document`);
         fetchDocuments();
       } else {
-        Alert.alert('Error', 'Failed to upload document');
+        showModal('error', 'Error', 'Failed to upload document');
       }
     } catch (err) {
-      Alert.alert('Error', 'Upload failed. Please try again.');
+      showModal('error', 'Error', 'Upload failed. Please try again.');
       console.error('Upload error:', err);
     } finally {
       setUploading(false);
@@ -261,6 +274,62 @@ export default function DocumentsAndPolicies() {
           </TouchableOpacity>
         </ScrollView>
       )}
+
+      {/* ✅ Custom Alert Modal */}
+      <Modal
+        transparent={true}
+        animationType="fade"
+        visible={modalVisible}
+        onRequestClose={() => setModalVisible(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContainer}>
+            {/* Modal Header with Icon */}
+            <View style={[
+              styles.modalHeader,
+              {
+                backgroundColor: modalType === "success" ? "#10B98120" : modalType === "error" ? "#EF444420" : "#3B82F620",
+              }
+            ]}>
+              <View style={[
+                styles.modalIconBg,
+                {
+                  backgroundColor: modalType === "success" ? "#10B981" : modalType === "error" ? "#EF4444" : "#3B82F6",
+                }
+              ]}>
+                <MaterialIcons
+                  name={
+                    modalType === "success" ? "check-circle" :
+                    modalType === "error" ? "error" :
+                    "info"
+                  }
+                  size={32}
+                  color="#fff"
+                />
+              </View>
+            </View>
+
+            {/* Modal Content */}
+            <View style={styles.modalContent}>
+              <Text style={styles.modalTitle}>{modalTitle}</Text>
+              <Text style={styles.modalMessage}>{modalMessage}</Text>
+            </View>
+
+            {/* Modal Footer - OK Button */}
+            <TouchableOpacity
+              style={[
+                styles.modalButton,
+                {
+                  backgroundColor: modalType === "success" ? "#10B981" : modalType === "error" ? "#EF4444" : "#3B82F6",
+                }
+              ]}
+              onPress={() => setModalVisible(false)}
+            >
+              <Text style={styles.modalButtonText}>OK</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -432,5 +501,77 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     fontSize: 14,
     marginLeft: 8,
+  },
+
+  // ✅ Modal Styles
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0, 0, 0, 0.5)",
+    justifyContent: "center",
+    alignItems: "center",
+    paddingHorizontal: 20,
+  },
+
+  modalContainer: {
+    backgroundColor: "#fff",
+    borderRadius: 16,
+    overflow: "hidden",
+    width: "100%",
+    maxWidth: 320,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.25,
+    shadowRadius: 8,
+    elevation: 8,
+  },
+
+  modalHeader: {
+    paddingVertical: 24,
+    alignItems: "center",
+  },
+
+  modalIconBg: {
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+
+  modalContent: {
+    paddingHorizontal: 20,
+    paddingVertical: 20,
+    alignItems: "center",
+  },
+
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: "700",
+    color: "#1A1A1A",
+    marginBottom: 8,
+    textAlign: "center",
+  },
+
+  modalMessage: {
+    fontSize: 14,
+    color: "#666",
+    textAlign: "center",
+    lineHeight: 20,
+  },
+
+  modalButton: {
+    paddingVertical: 12,
+    paddingHorizontal: 20,
+    marginHorizontal: 20,
+    marginBottom: 20,
+    borderRadius: 10,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+
+  modalButtonText: {
+    color: "#fff",
+    fontSize: 16,
+    fontWeight: "700",
   },
 });

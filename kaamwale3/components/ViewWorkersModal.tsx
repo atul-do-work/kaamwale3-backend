@@ -4,6 +4,7 @@ import {
   Text,
   Modal,
   TouchableOpacity,
+  FlatList,
   ScrollView,
   Image,
   ActivityIndicator,
@@ -25,6 +26,7 @@ interface Worker {
   rating: number;
   skills: string[];
   profilePhoto?: string;
+  isAvailable?: boolean; // ✅ Online status
 }
 
 interface ViewWorkersModalProps {
@@ -38,51 +40,138 @@ export default function ViewWorkersModal({
   onClose,
   onRequestWorker,
 }: ViewWorkersModalProps) {
-  const { accessToken } = useAuth();
+  const { accessToken, user: authUser } = useAuth();
   const [workers, setWorkers] = useState<Worker[]>([]);
   const [loading, setLoading] = useState(false);
-  const [selectedDistance, setSelectedDistance] = useState<number | null>(null); // null = All
   const [userLocation, setUserLocation] = useState<{ lat: number; lon: number } | null>(null);
+  
+  // ✅ Filter states
+  const [selectedSkill, setSelectedSkill] = useState<string>('All Skills');
+  const [selectedWageRange, setSelectedWageRange] = useState<string>('All Wages');
+  const [skillDropdownOpen, setSkillDropdownOpen] = useState(false);
+  const [wageDropdownOpen, setWageDropdownOpen] = useState(false);
+  
+  // ✅ Phase 3: Pagination states
+  const [page, setPage] = useState(1);
+  const [hasMore, setHasMore] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
 
-  // Fetch user location and nearby workers
+  // ✅ STEP 1: Get location ONCE when modal opens (not on every filter change)
   useEffect(() => {
-    if (visible) {
-      fetchNearbyWorkers();
-    }
-  }, [visible, selectedDistance]);
+    if (!visible) return;
 
-  const fetchNearbyWorkers = async () => {
-    try {
-      setLoading(true);
-
-      // Get current location
-      const { status } = await Location.requestForegroundPermissionsAsync();
-      if (status !== 'granted') {
-        console.warn('Location permission denied');
-        setLoading(false);
+    const initializeLocation = async () => {
+      // ✅ Priority 1: Use user's stored location from login
+      if (authUser?.location?.coordinates) {
+        const [lon, lat] = authUser.location.coordinates;
+        setUserLocation({ lat, lon });
+        console.log(`📍 Using stored user location from login: [${lon}, ${lat}]`);
         return;
       }
 
-      const location = await Location.getCurrentPositionAsync({});
-      const { latitude: lat, longitude: lon } = location.coords;
-      setUserLocation({ lat, lon });
+      // ✅ Priority 2: Request GPS location as fallback
+      try {
+        const { status } = await Location.requestForegroundPermissionsAsync();
+        if (status !== 'granted') {
+          console.warn('Location permission denied');
+          return;
+        }
 
-      // Fetch nearby workers
-      const maxMeters = selectedDistance ? selectedDistance * 1000 : 70000; // Convert km to meters, default 70km
-      const query = `?lat=${lat}&lon=${lon}&max=${maxMeters}`;
+        const location = await Location.getCurrentPositionAsync({});
+        const { latitude: lat, longitude: lon } = location.coords;
+        setUserLocation({ lat, lon });
+        console.log(`📍 Using current GPS location: [${lon}, ${lat}]`);
+      } catch (err) {
+        console.error('Error getting location:', err);
+      }
+    };
 
+    initializeLocation();
+  }, [visible, authUser]);  // Only runs when modal opens or authUser changes
+
+  // ✅ PHASE 2: Reset filters when modal closes
+  useEffect(() => {
+    if (!visible) {
+      setSelectedSkill('All Skills');
+      setSelectedWageRange('All Wages');
+      setWorkers([]);
+      setPage(1);
+      setHasMore(true);
+      setLoadingMore(false);
+    }
+  }, [visible]);
+
+  // ✅ STEP 2: Fetch workers ONLY when filters change (debounced)
+  // Location is already set, so just send filters
+  // Reset page to 1 when filters change
+  useEffect(() => {
+    if (!visible || !userLocation) return;
+
+    setPage(1);
+    setWorkers([]);
+    setHasMore(true);
+
+    const debounceTimer = setTimeout(() => {
+      fetchNearbyWorkers(1);
+    }, 500);  // Wait 500ms after last filter change
+
+    return () => clearTimeout(debounceTimer);
+  }, [visible, selectedSkill, selectedWageRange, userLocation]);
+
+  const fetchNearbyWorkers = async (pageNum: number = page) => {
+    if (!userLocation) return;
+
+    try {
+      // ✅ Set appropriate loading state
+      if (pageNum === 1) {
+        setLoading(true);
+      } else {
+        setLoadingMore(true);
+      }
+
+      // ✅ Build query with ALREADY-SET location and pagination
+      let query = `?lat=${userLocation.lat}&lon=${userLocation.lon}&max=70000&page=${pageNum}&limit=20`;
+      
+      // Add skill filter if not "All Skills"
+      if (selectedSkill !== 'All Skills') {
+        query += `&skill=${encodeURIComponent(selectedSkill)}`;
+      }
+      
+      // Add wage range filter if not "All Wages"
+      if (selectedWageRange !== 'All Wages') {
+        const wageRangeMap: { [key: string]: [number, number] } = {
+          '100-300': [100, 300],
+          '300-500': [300, 500],
+          '500-1000': [500, 1000],
+          '1000+': [1000, 999999],
+        };
+        const [wageMin, wageMax] = wageRangeMap[selectedWageRange] || [];
+        if (wageMin) query += `&wageMin=${wageMin}`;
+        if (wageMax && wageMax !== 999999) query += `&wageMax=${wageMax}`;
+      }
+
+      console.log(`🔍 Fetching workers page ${pageNum} with query: ${query}`);
       const response = await fetch(`${SERVER_URL}/workers/nearby${query}`, {
         headers: { Authorization: `Bearer ${accessToken}` },
       });
 
       const data = await response.json();
       if (data.success) {
-        setWorkers(data.workers || []);
+        const newWorkers = data.workers || [];
+        // Append if loading more pages, replace if first page
+        setWorkers(pageNum === 1 ? newWorkers : prev => [...prev, ...newWorkers]);
+        // Check if there are more results
+        setHasMore(newWorkers.length === 20);
       }
     } catch (err) {
       console.error('Error fetching nearby workers:', err);
     } finally {
-      setLoading(false);
+      // ✅ Reset appropriate loading state
+      if (pageNum === 1) {
+        setLoading(false);
+      } else {
+        setLoadingMore(false);
+      }
     }
   };
 
@@ -92,11 +181,22 @@ export default function ViewWorkersModal({
     }
   };
 
-  const distanceFilters = [
-    { label: 'All', value: null },
-  ];
+  // ✅ Get unique skills from fetched workers (for dropdown options)
+  const getUniqueSkills = (): string[] => {
+    const skillSet = new Set<string>();
+    skillSet.add('All Skills');
+    workers.forEach((worker) => {
+      if (worker.mainSkill) {
+        skillSet.add(worker.mainSkill);
+      }
+      if (worker.skills && Array.isArray(worker.skills)) {
+        worker.skills.forEach((skill) => skillSet.add(skill));
+      }
+    });
+    return Array.from(skillSet).sort();
+  };
 
-  const filteredWorkers = workers; // ✅ Show all workers - no filtering
+  const wageRanges = ['All Wages', '100-300', '300-500', '500-1000', '1000+'];
 
   return (
     <Modal visible={visible} animationType="slide" transparent={false}>
@@ -110,8 +210,92 @@ export default function ViewWorkersModal({
           <View style={{ width: 28 }} /> {/* Spacer for alignment */}
         </View>
 
-        {/* Distance Filter Buttons - REMOVED */}
-        {/* All workers within 70km are shown by default */}
+        {/* ✅ Filters Section */}
+        <View style={styles.filtersContainer}>
+          {/* Skill Filter */}
+          <View style={styles.filterSection}>
+            <Text style={styles.filterLabel}>Skill</Text>
+            <TouchableOpacity 
+              style={styles.dropdownButton}
+              onPress={() => {
+                setSkillDropdownOpen(!skillDropdownOpen);
+                setWageDropdownOpen(false);
+              }}
+            >
+              <Text style={styles.dropdownButtonText}>{selectedSkill}</Text>
+              <MaterialIcons name={skillDropdownOpen ? "expand-less" : "expand-more"} size={20} color="#667eea" />
+            </TouchableOpacity>
+            
+            {/* Skill Dropdown */}
+            {skillDropdownOpen && (
+              <View style={styles.dropdownMenu}>
+                <ScrollView style={styles.dropdownScroll} nestedScrollEnabled={true}>
+                  {getUniqueSkills().map((skill) => (
+                    <TouchableOpacity
+                      key={skill}
+                      style={[
+                        styles.dropdownItem,
+                        selectedSkill === skill && styles.dropdownItemActive,
+                      ]}
+                      onPress={() => {
+                        setSelectedSkill(skill);
+                        setSkillDropdownOpen(false);
+                      }}
+                    >
+                      <Text style={[
+                        styles.dropdownItemText,
+                        selectedSkill === skill && styles.dropdownItemTextActive,
+                      ]}>
+                        {skill}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </ScrollView>
+              </View>
+            )}
+          </View>
+
+          {/* Wage Filter */}
+          <View style={styles.filterSection}>
+            <Text style={styles.filterLabel}>Wage Range</Text>
+            <TouchableOpacity 
+              style={styles.dropdownButton}
+              onPress={() => {
+                setWageDropdownOpen(!wageDropdownOpen);
+                setSkillDropdownOpen(false);
+              }}
+            >
+              <Text style={styles.dropdownButtonText}>{selectedWageRange}</Text>
+              <MaterialIcons name={wageDropdownOpen ? "expand-less" : "expand-more"} size={20} color="#667eea" />
+            </TouchableOpacity>
+
+            {/* Wage Dropdown */}
+            {wageDropdownOpen && (
+              <View style={styles.dropdownMenu}>
+                {wageRanges.map((range) => (
+                  <TouchableOpacity
+                    key={range}
+                    style={[
+                      styles.dropdownItem,
+                      selectedWageRange === range && styles.dropdownItemActive,
+                    ]}
+                    onPress={() => {
+                      setSelectedWageRange(range);
+                      setWageDropdownOpen(false);
+                    }}
+                  >
+                    <Text style={[
+                      styles.dropdownItemText,
+                      selectedWageRange === range && styles.dropdownItemTextActive,
+                    ]}>
+                      {range}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            )}
+          </View>
+        </View>
 
         {/* Workers List */}
         {loading ? (
@@ -119,36 +303,51 @@ export default function ViewWorkersModal({
             <ActivityIndicator size="large" color="#667eea" />
             <Text style={styles.loadingText}>Finding nearby workers...</Text>
           </View>
-        ) : filteredWorkers.length === 0 ? (
+        ) : workers.length === 0 ? (
           <View style={styles.centerContainer}>
             <MaterialIcons name="people-outline" size={60} color="#ccc" />
-            <Text style={styles.emptyText}>No workers found nearby</Text>
+            <Text style={styles.emptyText}>No workers match your filters</Text>
           </View>
         ) : (
-          <ScrollView style={styles.workersListContainer}>
-            {filteredWorkers.map((worker, index) => (
-              <View key={`${worker.phone}-${index}`} style={styles.workerCard}>
-                {/* Profile Photo */}
-                <Image
-                  source={
-                    worker.profilePhoto
-                      ? { uri: worker.profilePhoto }
-                      : require('../assets/oip2.jpg')
-                  }
-                  style={styles.profilePhoto}
-                />
+          <FlatList
+            data={workers}
+            keyExtractor={(item, index) => `${item.phone}-${index}`}
+            refreshing={loading}
+            onRefresh={() => fetchNearbyWorkers(1)}
+            renderItem={({ item: worker }) => (
+              <View style={styles.workerCard}>
+                {/* Profile Photo Container */}
+                <View style={styles.photoContainer}>
+                  <Image
+                    source={
+                      worker.profilePhoto
+                        ? { uri: worker.profilePhoto }
+                        : require('../assets/oip2.jpg')
+                    }
+                    style={styles.profilePhoto}
+                  />
+                  {/* ✅ Online Indicator */}
+                  {worker.isAvailable && (
+                    <View style={styles.onlineIndicator}>
+                      <View style={styles.onlineDot} />
+                    </View>
+                  )}
+                </View>
 
                 {/* Worker Info */}
                 <View style={styles.workerInfo}>
-                  <Text style={styles.workerName}>{worker.name || 'Unknown'}</Text>
+                  <View style={styles.nameRow}>
+                    <Text style={styles.workerName}>{worker.name || 'Unknown'}</Text>
+                    {worker.isAvailable && <Text style={styles.onlineLabel}>Online</Text>}
+                  </View>
                   <Text style={styles.workerSkill}>{worker.mainSkill || 'Multi-skilled'}</Text>
                   <View style={styles.ratingRow}>
                     <MaterialIcons name="star" size={14} color="#FFB800" />
                     <Text style={styles.ratingText}>{worker.rating || 0}/5</Text>
-                    <Text style={styles.distanceText}>• {worker.distanceKm} km away</Text>
+                    <Text style={styles.distanceText}>• {worker.distanceKm} km</Text>
                   </View>
                   <Text style={styles.wageText}>
-                    Expected: <Text style={styles.wageBold}>{worker.expectedWage}</Text>
+                    Wage: <Text style={styles.wageBold}>{worker.expectedWage}</Text>
                   </Text>
                 </View>
 
@@ -160,10 +359,27 @@ export default function ViewWorkersModal({
                   <MaterialIcons name="person-add" size={20} color="#fff" />
                 </TouchableOpacity>
               </View>
-            ))}
-            {/* Bottom spacing */}
-            <View style={{ height: 20 }} />
-          </ScrollView>
+            )}
+            contentContainerStyle={styles.flatListContainer}
+            onEndReached={() => {
+              if (hasMore && !loadingMore && !loading) {
+                setPage(prev => {
+                  const nextPage = prev + 1;
+                  fetchNearbyWorkers(nextPage);
+                  return nextPage;
+                });
+              }
+            }}
+            onEndReachedThreshold={0.5}
+            ListFooterComponent={
+              loadingMore ? (
+                <View style={styles.loadMoreContainer}>
+                  <ActivityIndicator size="small" color="#667eea" />
+                  <Text style={styles.loadMoreText}>Loading more workers...</Text>
+                </View>
+              ) : null
+            }
+          />
         )}
       </SafeAreaView>
     </Modal>
@@ -190,33 +406,126 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: '#333',
   },
-  filterContainer: {
+  
+  // ✅ Filter Styles
+  filtersContainer: {
+    flexDirection: 'row',
     paddingHorizontal: 12,
-    paddingVertical: 10,
+    paddingVertical: 12,
     backgroundColor: '#fff',
     borderBottomWidth: 1,
     borderBottomColor: '#f0f0f0',
+    gap: 10,
   },
-  filterButton: {
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    marginHorizontal: 4,
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: '#ddd',
-    backgroundColor: '#fff',
+  
+  filterSection: {
+    flex: 1,
   },
-  filterButtonActive: {
-    borderColor: '#667eea',
-    backgroundColor: '#667eea',
-  },
-  filterButtonText: {
-    fontSize: 13,
+  
+  filterLabel: {
+    fontSize: 11,
+    fontWeight: '600',
     color: '#666',
-    fontWeight: '500',
+    marginBottom: 4,
   },
-  filterButtonTextActive: {
-    color: '#fff',
+  
+  dropdownButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#f5f5f5',
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderWidth: 1,
+    borderColor: '#e0e0e0',
+  },
+  
+  dropdownButtonText: {
+    fontSize: 13,
+    fontWeight: '500',
+    color: '#333',
+    flex: 1,
+  },
+  
+  dropdownMenu: {
+    position: 'absolute',
+    top: 62,
+    left: 12,
+    right: 12,
+    backgroundColor: '#fff',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#e0e0e0',
+    shadowColor: '#000',
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3,
+    zIndex: 1000,
+    maxHeight: 200,
+  },
+  
+  dropdownScroll: {
+    maxHeight: 200,
+  },
+  
+  dropdownItem: {
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f5f5f5',
+  },
+  
+  dropdownItemActive: {
+    backgroundColor: '#667eea20',
+  },
+  
+  dropdownItemText: {
+    fontSize: 13,
+    color: '#333',
+  },
+  
+  dropdownItemTextActive: {
+    color: '#667eea',
+    fontWeight: '600',
+  },
+  
+  photoContainer: {
+    position: 'relative',
+    marginRight: 12,
+  },
+  
+  onlineIndicator: {
+    position: 'absolute',
+    bottom: -2,
+    right: -2,
+    width: 14,
+    height: 14,
+    borderRadius: 7,
+    backgroundColor: '#fff',
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 2,
+    borderColor: '#fff',
+  },
+  
+  onlineDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: '#10B981',
+  },
+  
+  onlineLabel: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#10B981',
+    marginLeft: 4,
+  },
+  
+  nameRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
   },
   centerContainer: {
     flex: 1,
@@ -238,6 +547,22 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingTop: 10,
   },
+  flatListContainer: {
+    paddingHorizontal: 0,
+    paddingTop: 10,
+    paddingBottom: 20,
+  },
+  loadMoreContainer: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingVertical: 12,
+    gap: 8,
+  },
+  loadMoreText: {
+    fontSize: 12,
+    color: '#999',
+  },
   workerCard: {
     flexDirection: 'row',
     backgroundColor: '#fff',
@@ -248,17 +573,17 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.08,
     shadowRadius: 4,
     elevation: 2,
-    alignItems: 'center',
+    alignItems: 'flex-start',
   },
   profilePhoto: {
     width: 50,
     height: 50,
     borderRadius: 25,
     backgroundColor: '#e0e0e0',
-    marginRight: 12,
   },
   workerInfo: {
     flex: 1,
+    marginLeft: 12,
   },
   workerName: {
     fontSize: 15,
@@ -268,7 +593,7 @@ const styles = StyleSheet.create({
   workerSkill: {
     fontSize: 12,
     color: '#666',
-    marginTop: 2,
+    marginTop: 3,
   },
   ratingRow: {
     flexDirection: 'row',

@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { View, Text, Modal, TouchableOpacity, ActivityIndicator, Alert } from 'react-native';
+import { View, Text, Modal, TouchableOpacity, ActivityIndicator, StyleSheet } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import MapLibreGL from '@maplibre/maplibre-react-native';
 import * as Location from 'expo-location';
@@ -51,6 +51,19 @@ export default function JobLocationMap({
   const [distance, setDistance] = useState<number>(0);
   const [jobLocationName, setJobLocationName] = useState<string>('Job Location');
   const [currentLocationName, setCurrentLocationName] = useState<string>('Your Location');
+  
+  // ✅ Modal state for alerts
+  const [modalVisible, setModalVisible] = useState(false);
+  const [modalTitle, setModalTitle] = useState("");
+  const [modalMessage, setModalMessage] = useState("");
+  const [modalType, setModalType] = useState<"success" | "error" | "info">("success");
+  
+  const showModal = (type: "success" | "error" | "info", title: string, message: string) => {
+    setModalType(type);
+    setModalTitle(title);
+    setModalMessage(message);
+    setModalVisible(true);
+  };
 
   useEffect(() => {
     if (!visible) return;
@@ -62,7 +75,7 @@ export default function JobLocationMap({
         // Get current location
         const { status } = await Location.requestForegroundPermissionsAsync();
         if (status !== 'granted') {
-          Alert.alert('Permission Denied', 'Location permission is required to show the map');
+          showModal('error', 'Permission Denied', 'Location permission is required to show the map');
           return;
         }
 
@@ -102,7 +115,7 @@ export default function JobLocationMap({
         setLoading(false);
       } catch (err) {
         console.error('Error getting location:', err);
-        Alert.alert('Error', 'Could not get current location');
+        showModal('error', 'Error', 'Could not get current location');
         setLoading(false);
       }
     })();
@@ -114,7 +127,7 @@ export default function JobLocationMap({
     // Open in Google Maps
     const url = `https://www.google.com/maps/dir/?api=1&origin=${currentLocation.latitude},${currentLocation.longitude}&destination=${jobLat},${jobLon}`;
     Linking.openURL(url).catch(() => {
-      Alert.alert('Error', 'Could not open Maps');
+      showModal('error', 'Error', 'Could not open Maps');
     });
   };
 
@@ -285,6 +298,136 @@ export default function JobLocationMap({
           </TouchableOpacity>
         </View>
       </View>
+
+      {/* ✅ Custom Alert Modal */}
+      <Modal
+        transparent={true}
+        animationType="fade"
+        visible={modalVisible}
+        onRequestClose={() => setModalVisible(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContainer}>
+            {/* Modal Header with Icon */}
+            <View style={[
+              styles.modalHeader,
+              {
+                backgroundColor: modalType === "success" ? "#10B98120" : modalType === "error" ? "#EF444420" : "#3B82F620",
+              }
+            ]}>
+              <View style={[
+                styles.modalIconBg,
+                {
+                  backgroundColor: modalType === "success" ? "#10B981" : modalType === "error" ? "#EF4444" : "#3B82F6",
+                }
+              ]}>
+                <MaterialIcons
+                  name={
+                    modalType === "success" ? "check-circle" :
+                    modalType === "error" ? "error" :
+                    "info"
+                  }
+                  size={32}
+                  color="#fff"
+                />
+              </View>
+            </View>
+
+            {/* Modal Content */}
+            <View style={styles.modalContent}>
+              <Text style={styles.modalTitle}>{modalTitle}</Text>
+              <Text style={styles.modalMessage}>{modalMessage}</Text>
+            </View>
+
+            {/* Modal Footer - OK Button */}
+            <TouchableOpacity
+              style={[
+                styles.modalButton,
+                {
+                  backgroundColor: modalType === "success" ? "#10B981" : modalType === "error" ? "#EF4444" : "#3B82F6",
+                }
+              ]}
+              onPress={() => setModalVisible(false)}
+            >
+              <Text style={styles.modalButtonText}>OK</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </Modal>
   );
 }
+
+const styles = StyleSheet.create({
+  // ✅ Modal Styles
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0, 0, 0, 0.5)",
+    justifyContent: "center",
+    alignItems: "center",
+    paddingHorizontal: 20,
+  },
+
+  modalContainer: {
+    backgroundColor: "#fff",
+    borderRadius: 16,
+    overflow: "hidden",
+    width: "100%",
+    maxWidth: 320,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.25,
+    shadowRadius: 8,
+    elevation: 8,
+  },
+
+  modalHeader: {
+    paddingVertical: 24,
+    alignItems: "center",
+  },
+
+  modalIconBg: {
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+
+  modalContent: {
+    paddingHorizontal: 20,
+    paddingVertical: 20,
+    alignItems: "center",
+  },
+
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: "700",
+    color: "#1A1A1A",
+    marginBottom: 8,
+    textAlign: "center",
+  },
+
+  modalMessage: {
+    fontSize: 14,
+    color: "#666",
+    textAlign: "center",
+    lineHeight: 20,
+  },
+
+  modalButton: {
+    paddingVertical: 12,
+    paddingHorizontal: 20,
+    marginHorizontal: 20,
+    marginBottom: 20,
+    borderRadius: 10,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+
+  modalButtonText: {
+    color: "#fff",
+    fontSize: 16,
+    fontWeight: "700",
+  },
+});

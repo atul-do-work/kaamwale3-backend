@@ -5,10 +5,10 @@ import {
   TextInput,
   TouchableOpacity,
   StatusBar,
-  Alert,
+  Modal,
   ActivityIndicator,
 } from "react-native";
-import { MaterialIcons } from "@expo/vector-icons";
+import { MaterialIcons, Ionicons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { API_BASE } from '../utils/config';
 import { useRouter } from "expo-router";
@@ -110,6 +110,19 @@ export default function LoginScreen() {
   const [password, setPassword] = useState("");
   const [passwordVisible, setPasswordVisible] = useState(false);
   const [loading, setLoading] = useState(false);
+  
+  // ✅ Modal state for alerts
+  const [modalVisible, setModalVisible] = useState(false);
+  const [modalTitle, setModalTitle] = useState("");
+  const [modalMessage, setModalMessage] = useState("");
+  const [modalType, setModalType] = useState<"success" | "error" | "info">("success");
+  
+  const showModal = (type: "success" | "error" | "info", title: string, message: string) => {
+    setModalType(type);
+    setModalTitle(title);
+    setModalMessage(message);
+    setModalVisible(true);
+  };
 
   // ✅ FIX: Check if user is already logged in when screen mounts
   useEffect(() => {
@@ -121,14 +134,14 @@ export default function LoginScreen() {
 
   const handleLogin = async () => {
     if (!phone || !password) {
-      Alert.alert(t('required'), t('required'));
+      showModal('error', t('required'), t('required'));
       return;
     }
 
     // Validate phone (10 digits)
     const phoneTrim = phone.trim();
     if (!/^\d{10}$/.test(phoneTrim)) {
-      Alert.alert(t('invalidPhone'), t('invalidPhone'));
+      showModal('error', t('invalidPhone'), t('invalidPhone'));
       return;
     }
 
@@ -182,7 +195,7 @@ export default function LoginScreen() {
       const data = await response.json();
 
       if (!data.success) {
-        Alert.alert("Login Failed", data.message || "Invalid credentials");
+        showModal('error', "Login Failed", data.message || "Invalid credentials");
         setLoading(false);
         return;
       }
@@ -218,18 +231,18 @@ export default function LoginScreen() {
       
       console.log(`✅ Login successful for ${data.user.role}: ${data.user.phone}`);
 
-      Alert.alert(t('success'), `Logged in as ${data.user.role}`);
+      showModal('success', t('success'), `Logged in as ${data.user.role}`);
 
-      // ------------------------
+      // " + "------------------------
       //  NAVIGATION BASED ON ROLE
-      // ------------------------
+      // " + "------------------------
       console.log(`🚀 [Login] Navigating to /home after login`);
       // Navigate to /home which will then redirect to /home/worker or /home/contractor
       // Don't navigate directly - let home/index.tsx handle the role-based routing
       router.replace("/home");
     } catch (error) {
       console.error("Login error:", error);
-      Alert.alert(t('error'), (error as Error).message || "Server not responding");
+      showModal('error', t('error'), (error as Error).message || "Server not responding");
     } finally {
       setLoading(false);
     }
@@ -287,6 +300,62 @@ export default function LoginScreen() {
           Don't have an account? {t('register')}
         </Text>
       </TouchableOpacity>
+
+      {/* ✅ Custom Alert Modal */}
+      <Modal
+        transparent={true}
+        animationType="fade"
+        visible={modalVisible}
+        onRequestClose={() => setModalVisible(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContainer}>
+            {/* Modal Header with Icon */}
+            <View style={[
+              styles.modalHeader,
+              {
+                backgroundColor: modalType === "success" ? "#10B98120" : modalType === "error" ? "#EF444420" : "#3B82F620",
+              }
+            ]}>
+              <View style={[
+                styles.modalIconBg,
+                {
+                  backgroundColor: modalType === "success" ? "#10B981" : modalType === "error" ? "#EF4444" : "#3B82F6",
+                }
+              ]}>
+                <MaterialIcons
+                  name={
+                    modalType === "success" ? "check-circle" :
+                    modalType === "error" ? "error" :
+                    "info"
+                  }
+                  size={32}
+                  color="#fff"
+                />
+              </View>
+            </View>
+
+            {/* Modal Content */}
+            <View style={styles.modalContent}>
+              <Text style={styles.modalTitle}>{modalTitle}</Text>
+              <Text style={styles.modalMessage}>{modalMessage}</Text>
+            </View>
+
+            {/* Modal Footer - OK Button */}
+            <TouchableOpacity
+              style={[
+                styles.modalButton,
+                {
+                  backgroundColor: modalType === "success" ? "#10B981" : modalType === "error" ? "#EF4444" : "#3B82F6",
+                }
+              ]}
+              onPress={() => setModalVisible(false)}
+            >
+              <Text style={styles.modalButtonText}>OK</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }

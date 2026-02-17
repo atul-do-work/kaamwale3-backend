@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { View, Text, ScrollView, TouchableOpacity, Alert, Image, Platform , DimensionValue} from "react-native";
+import { View, Text, ScrollView, TouchableOpacity, Modal, Image, Platform , DimensionValue} from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { MaterialIcons, Ionicons } from "@expo/vector-icons";
@@ -219,6 +219,83 @@ const styles = StyleSheet.create({
   spacer: {
     height: 20,
   },
+  
+  // ✅ Modal Styles
+  modalOverlay: {
+    flex: 1,
+    justifyContent: "center",
+    alignItems: "center",
+    paddingHorizontal: 20,
+  },
+  
+  modalContainer: {
+    backgroundColor: "#fff",
+    borderRadius: 16,
+    overflow: "hidden",
+    width: "100%",
+    maxWidth: 340,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.25,
+    shadowRadius: 8,
+    elevation: 8,
+  },
+  
+  modalHeader: {
+    paddingVertical: 24,
+    alignItems: "center",
+  },
+  
+  modalIconBg: {
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  
+  modalContent: {
+    paddingHorizontal: 20,
+    paddingVertical: 20,
+    alignItems: "center",
+  },
+  
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: "700",
+    color: "#1A1A1A",
+    marginBottom: 8,
+    textAlign: "center",
+  },
+  
+  modalMessage: {
+    fontSize: 14,
+    color: "#666",
+    textAlign: "center",
+    lineHeight: 20,
+  },
+  
+  modalButton: {
+    paddingVertical: 12,
+    paddingHorizontal: 20,
+    borderRadius: 10,
+    justifyContent: "center",
+    alignItems: "center",
+    flex: 1,
+  },
+  
+  modalButtonText: {
+    color: "#fff",
+    fontSize: 16,
+    fontWeight: "700",
+  },
+  
+  modalButtonsRow: {
+    flexDirection: "row",
+    gap: 10,
+    marginHorizontal: 20,
+    marginBottom: 20,
+  },
 });
 
 export default function ContractorProfile(): React.ReactElement {
@@ -227,33 +304,35 @@ export default function ContractorProfile(): React.ReactElement {
   const [userName, setUserName] = useState<string>("Contractor");
   const [contractorId, setContractorId] = useState<string>("0000");
   const [profilePhoto, setProfilePhoto] = useState<string | null>(null);
-  const [walletBalance, setWalletBalance] = useState<number>(0);
   const [postedCount, setPostedCount] = useState(0);
   const [completedCount, setCompletedCount] = useState(0);
   const [inProgressCount, setInProgressCount] = useState(0);
-  const [viewWorkersModalVisible, setViewWorkersModalVisible] = useState(false); // ✅ Add modal state
+  const [viewWorkersModalVisible, setViewWorkersModalVisible] = useState(false);
+  
+  // ✅ Custom modal state with explicit type definition
+  type ModalType = "confirm" | "info" | "success" | "error";
+  const [logoutModalVisible, setLogoutModalVisible] = useState(false);
+  const [modalTitle, setModalTitle] = useState("");
+  const [modalMessage, setModalMessage] = useState("");
+  const [modalType, setModalType] = useState<ModalType>("info");
+  const [pendingAction, setPendingAction] = useState<(() => void) | null>(null);
+  
   const router = useRouter();
 
   // Use configured API base
 
+  // ✅ OPTIMIZED: Fetch stats from dedicated endpoint instead of all jobs
   const fetchJobStats = async (authToken: string) => {
     try {
-      const res = await api.get(`/jobs`);
+      const res = await api.get(`/contractor/stats?range=all`);
       const data = res.data;
       
-      if (data && Array.isArray(data)) {
-        const jobs = data;
-        
-        // Count statistics
-        const posted = jobs.length;
-        // ✅ FIXED: Completed = Jobs with paymentStatus === "Paid"
-        const completed = jobs.filter((j: any) => j.paymentStatus === "Paid").length;
-        // ✅ FIXED: In Progress = Jobs accepted but paymentStatus is NOT "Paid"
-        const inProgress = jobs.filter((j: any) => j.acceptedBy && j.paymentStatus !== "Paid").length;
-
-        setPostedCount(posted);
-        setCompletedCount(completed);
-        setInProgressCount(inProgress);
+      if (data && data.success && data.aggregated) {
+        // ✅ Backend returns pre-calculated stats - no frontend guessing
+        setPostedCount(data.aggregated.totalJobsPosted || 0);
+        setCompletedCount(data.aggregated.totalJobsCompleted || 0);
+        // ✅ Use backend in-progress count (accounts for cancelled, rejected, etc.)
+        setInProgressCount(data.aggregated.totalJobsInProgress || 0);
       }
     } catch (err) {
       console.error("Failed to fetch job stats", err);
@@ -266,14 +345,15 @@ export default function ContractorProfile(): React.ReactElement {
         if (authUser) {
           setUserName(authUser.name || "Contractor");
           setContractorId(authUser.phone || "0000");
+          // ✅ Use backend profile photo URL directly
+          if (authUser.profilePhoto) {
+            setProfilePhoto(authUser.profilePhoto);
+          }
         }
 
-        // Fetch wallet balance
+        // ✅ Removed: Wallet fetch is not needed since wallet UI is hidden
+        // If wallet is not shown → don't fetch it
         if (accessToken) {
-          const res = await api.get(`/wallet`);
-          const data = res.data;
-          if (data && data.success) setWalletBalance(data.wallet?.balance || 0);
-
           // Fetch job stats
           await fetchJobStats(accessToken);
         }
@@ -294,43 +374,39 @@ export default function ContractorProfile(): React.ReactElement {
     }, [accessToken])
   );
 
-  // ✅ Reload profile photo when screen is focused (instant update after photo selection)
-  useFocusEffect(
-    React.useCallback(() => {
-      (async () => {
-        const savedPhoto = await AsyncStorage.getItem("profilePhoto");
-        if (savedPhoto) setProfilePhoto(savedPhoto);
-      })();
-    }, [])
-  );
-
-  const handleLogout = async () => {
-    Alert.alert("Logout", "Are you sure you want to logout?", [
-      { text: "Cancel", style: "cancel" },
-      {
-        text: "Logout",
-        style: "destructive",
-        onPress: async () => {
-          try {
-            // ✅ Clear socket state
-            await clearAllUserData();
-            // ✅ Clear AuthContext state (CRITICAL - this clears AsyncStorage and state)
-            await logout();
-            router.replace("/");
-          } catch (err) {
-            console.error("Error logging out", err);
-            // Even if cleanup fails, navigate to login
-            router.replace("/");
-          }
-        },
-      },
-    ]);
+  // ✅ Show custom logout confirmation modal
+  const handleLogout = () => {
+    setModalType("confirm");
+    setModalTitle("Logout");
+    setModalMessage("Are you sure you want to logout?");
+    setPendingAction(() => async () => {
+      try {
+        await clearAllUserData();
+        await logout();
+        router.replace("/");
+      } catch (err) {
+        console.error("Error logging out", err);
+        router.replace("/");
+      }
+    });
+    setLogoutModalVisible(true);
+  };
+  
+  // ✅ Handle modal confirmation
+  const handleModalConfirm = () => {
+    setLogoutModalVisible(false);
+    if (pendingAction) {
+      pendingAction();
+    }
   };
 
   const pickImage = async () => {
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (status !== "granted") {
-      Alert.alert("Permission denied", "Camera roll permission is required.");
+      setModalType("info");
+      setModalTitle("Permission Denied");
+      setModalMessage("Camera roll permission is required.");
+      setLogoutModalVisible(true);
       return;
     }
 
@@ -343,9 +419,8 @@ export default function ContractorProfile(): React.ReactElement {
     if (!result.canceled && result.assets?.length > 0) {
       const uri = result.assets[0].uri;
       
-      // Save locally first
+      // Show temporary local preview
       setProfilePhoto(uri);
-      await AsyncStorage.setItem("profilePhoto", uri);
 
       // Upload to backend
       if (accessToken) {
@@ -361,19 +436,16 @@ export default function ContractorProfile(): React.ReactElement {
             method: "POST",
             headers: {
               Authorization: `Bearer ${accessToken}`,
-              // ⚠️ Do NOT set Content-Type: multipart/form-data
-              // The browser will set it automatically with the correct boundary
             },
             body: formData,
           });
 
           const data = await response.json();
           if (data.success) {
-            // Update AsyncStorage with the backend URL
-            await AsyncStorage.setItem("profilePhoto", data.profilePhoto);
+            // ✅ Use backend URL only - no AsyncStorage
             setProfilePhoto(data.profilePhoto);
             
-            // Update user object in AsyncStorage
+            // Update user object in AsyncStorage if needed for other uses
             const userStr = await AsyncStorage.getItem("user");
             if (userStr) {
               const user = JSON.parse(userStr);
@@ -381,13 +453,22 @@ export default function ContractorProfile(): React.ReactElement {
               await AsyncStorage.setItem("user", JSON.stringify(user));
             }
             
-            Alert.alert("Success", "Profile photo updated successfully");
+            setModalType("info");
+            setModalTitle("Success");
+            setModalMessage("Profile photo updated successfully");
+            setLogoutModalVisible(true);
           } else {
-            Alert.alert("Error", data.message || "Failed to upload profile photo");
+            setModalType("info");
+            setModalTitle("Error");
+            setModalMessage(data.message || "Failed to upload profile photo");
+            setLogoutModalVisible(true);
           }
         } catch (err) {
           console.error("Profile photo upload error:", err);
-          Alert.alert("Error", "Failed to upload profile photo. Photo saved locally.");
+          setModalType("info");
+          setModalTitle("Error");
+          setModalMessage("Failed to upload profile photo. Please try again.");
+          setLogoutModalVisible(true);
         }
       }
     }
@@ -509,16 +590,95 @@ export default function ContractorProfile(): React.ReactElement {
       </TouchableOpacity>
     </ScrollView>
 
-    {/* ✅ View Workers Modal */}
-    <ViewWorkersModal
-      visible={viewWorkersModalVisible}
-      onClose={() => setViewWorkersModalVisible(false)}
-      onRequestWorker={(worker) => {
-        console.log('Worker requested:', worker);
-        setViewWorkersModalVisible(false);
-        // TODO: Handle worker request (show premium modal if needed, send request to backend)
-      }}
-    />
+    {/* ✅ View Workers Modal - Only mounted when visible to save memory */}
+    {viewWorkersModalVisible && (
+      <ViewWorkersModal
+        visible={viewWorkersModalVisible}
+        onClose={() => setViewWorkersModalVisible(false)}
+        onRequestWorker={(worker) => {
+          console.log('Worker requested:', worker);
+          setViewWorkersModalVisible(false);
+          // TODO: Handle worker request (show premium modal if needed, send request to backend)
+        }}
+      />
+    )}
+
+    {/* ✅ Custom Modal for Messages & Confirmations */}
+    <Modal
+      transparent={true}
+      animationType="fade"
+      visible={logoutModalVisible}
+      onRequestClose={() => setLogoutModalVisible(false)}
+    >
+      <View style={[styles.modalOverlay, { backgroundColor: "rgba(0, 0, 0, 0.5)" }]}>
+        <View style={styles.modalContainer}>
+          {/* Modal Header with Icon - Dynamic color based on type */}
+          <View style={[
+            styles.modalHeader,
+            {
+              backgroundColor: 
+                modalType === "confirm" ? "#FFF3CD" :
+                modalType === "error" ? "#FFEBEE" :
+                modalType === "success" ? "#E8F5E9" :
+                "#E7F3FF",
+            }
+          ]}>
+            <View style={[
+              styles.modalIconBg,
+              {
+                backgroundColor: 
+                  modalType === "confirm" ? "#FF9800" :
+                  modalType === "error" ? "#EF4444" :
+                  modalType === "success" ? "#10B981" :
+                  "#2196F3",
+              }
+            ]}>
+              <MaterialIcons
+                name={
+                  modalType === "confirm" ? "help-outline" :
+                  modalType === "error" ? "error-outline" :
+                  modalType === "success" ? "check-circle" :
+                  "info"
+                }
+                size={32}
+                color="#fff"
+              />
+            </View>
+          </View>
+
+          {/* Modal Content */}
+          <View style={styles.modalContent}>
+            <Text style={styles.modalTitle}>{modalTitle}</Text>
+            <Text style={styles.modalMessage}>{modalMessage}</Text>
+          </View>
+
+          {/* Modal Footer - Buttons (Confirm vs OK) */}
+          {modalType === "confirm" ? (
+            <View style={styles.modalButtonsRow}>
+              <TouchableOpacity
+                style={[styles.modalButton, { backgroundColor: "#E0E0E0" }]}
+                onPress={() => setLogoutModalVisible(false)}
+              >
+                <Text style={[styles.modalButtonText, { color: "#333" }]}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.modalButton, { backgroundColor: "#FF6B6B" }]}
+                onPress={handleModalConfirm}
+              >
+                <Text style={styles.modalButtonText}>Logout</Text>
+              </TouchableOpacity>
+            </View>
+          ) : (
+            <TouchableOpacity
+              style={[styles.modalButton, { backgroundColor: "#2196F3", marginHorizontal: 20, marginBottom: 20 }]}
+              onPress={() => setLogoutModalVisible(false)}
+            >
+              <Text style={styles.modalButtonText}>OK</Text>
+            </TouchableOpacity>
+          )}
+        </View>
+      </View>
+    </Modal>
     </SafeAreaView>
   );
 }

@@ -6,7 +6,7 @@ import {
   TouchableOpacity,
   Switch,
   StyleSheet,
-  Alert,
+  Modal,
 } from "react-native";
 import { MaterialIcons, Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
@@ -26,6 +26,12 @@ export default function SettingsScreen(): React.ReactElement {
   const [referralModalVisible, setReferralModalVisible] = useState(false);
   const [workerName, setWorkerName] = useState("Worker");
   const [workerPhone, setWorkerPhone] = useState("9876543210");
+  
+  // ✅ Modal state for alerts
+  const [modalVisible, setModalVisible] = useState(false);
+  const [modalTitle, setModalTitle] = useState("");
+  const [modalMessage, setModalMessage] = useState("");
+  const [modalType, setModalType] = useState<"success" | "error" | "info">("success");
 
   React.useEffect(() => {
     (async () => {
@@ -43,7 +49,10 @@ export default function SettingsScreen(): React.ReactElement {
   };
 
   const handleSave = () => {
-    Alert.alert(t('success'), t('settingsSaved'));
+    setModalType("success");
+    setModalTitle(t('success'));
+    setModalMessage(t('settingsSaved'));
+    setModalVisible(true);
   };
 
   const settingSections: Array<{
@@ -237,6 +246,70 @@ export default function SettingsScreen(): React.ReactElement {
         workerPhone={workerPhone}
       />
 
+      {/* ✅ Custom Alert Modal */}
+      <Modal
+        transparent={true}
+        animationType="fade"
+        visible={modalVisible}
+        onRequestClose={() => setModalVisible(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContainer}>
+            {/* Modal Header with Icon */}
+            <View style={[
+              styles.modalHeader,
+              {
+                backgroundColor: modalType === "success" ? "#10B98120" : modalType === "error" ? "#EF444420" : "#3B82F620",
+              }
+            ]}>
+              <View style={[
+                styles.modalIconBg,
+                {
+                  backgroundColor: modalType === "success" ? "#10B981" : modalType === "error" ? "#EF4444" : "#3B82F6",
+                }
+              ]}>
+                <MaterialIcons
+                  name={
+                    modalType === "success" ? "check-circle" :
+                    modalType === "error" ? "error" :
+                    "info"
+                  }
+                  size={32}
+                  color="#fff"
+                />
+              </View>
+            </View>
+
+            {/* Modal Content */}
+            <View style={styles.modalContent}>
+              <Text style={styles.modalTitle}>{modalTitle}</Text>
+              <Text style={styles.modalMessage}>{modalMessage}</Text>
+            </View>
+
+            {/* Modal Footer - OK Button */}
+            <TouchableOpacity
+              style={[
+                styles.modalButton,
+                {
+                  backgroundColor: modalType === "success" ? "#10B981" : modalType === "error" ? "#EF4444" : "#3B82F6",
+                }
+              ]}
+              onPress={() => setModalVisible(false)}
+            >
+              <Text style={styles.modalButtonText}>OK</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* ✅ Referral Modal */}
+      <ReferralModal
+        visible={referralModalVisible}
+        onClose={() => setReferralModalVisible(false)}
+        workerName={workerName}
+        workerPhone={workerPhone}
+      />
+
       <View style={styles.spacer} />
     </ScrollView>
   );
@@ -393,5 +466,77 @@ const styles = StyleSheet.create({
   },
   spacer: {
     height: 20,
+  },
+  
+  // ✅ Modal Styles
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0, 0, 0, 0.5)",
+    justifyContent: "center",
+    alignItems: "center",
+    paddingHorizontal: 20,
+  },
+  
+  modalContainer: {
+    backgroundColor: "#fff",
+    borderRadius: 16,
+    overflow: "hidden",
+    width: "100%",
+    maxWidth: 320,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.25,
+    shadowRadius: 8,
+    elevation: 8,
+  },
+  
+  modalHeader: {
+    paddingVertical: 24,
+    alignItems: "center",
+  },
+  
+  modalIconBg: {
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  
+  modalContent: {
+    paddingHorizontal: 20,
+    paddingVertical: 20,
+    alignItems: "center",
+  },
+  
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: "700",
+    color: "#1A1A1A",
+    marginBottom: 8,
+    textAlign: "center",
+  },
+  
+  modalMessage: {
+    fontSize: 14,
+    color: "#666",
+    textAlign: "center",
+    lineHeight: 20,
+  },
+  
+  modalButton: {
+    paddingVertical: 12,
+    paddingHorizontal: 20,
+    marginHorizontal: 20,
+    marginBottom: 20,
+    borderRadius: 10,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  
+  modalButtonText: {
+    color: "#fff",
+    fontSize: 16,
+    fontWeight: "700",
   },
 });

@@ -1359,8 +1359,13 @@ app.get('/workers/nearby', authenticateToken, async (req, res) => {
     let lat = req.query.lat ? parseFloat(req.query.lat) : null;
     let lon = req.query.lon ? parseFloat(req.query.lon) : null;
     const maxMeters = parseInt((req.query.max || '70000'), 10);
+    
+    // ✅ Parse filter parameters
+    const skill = req.query.skill || null;
+    const wageMin = req.query.wageMin ? parseInt(req.query.wageMin, 10) : null;
+    const wageMax = req.query.wageMax ? parseInt(req.query.wageMax, 10) : null;
 
-    // Validate parsed coordinates are numbers (not NaN)
+    // Validate parsed coordinates
     if (lat === null || lon === null || isNaN(lat) || isNaN(lon)) {
       lat = null;
       lon = null;
@@ -1380,98 +1385,90 @@ app.get('/workers/nearby', authenticateToken, async (req, res) => {
       return res.status(400).json({ success: false, message: 'Latitude and longitude required' });
     }
 
-    // ✅ DEBUG: Log input coordinates and max distance
-    console.log(`🔍 /workers/nearby query: lat=${lat}, lon=${lon}, maxMeters=${maxMeters}`);
+    // ✅ DEBUG: Log input coordinates and filters
+    console.log(`🔍 /workers/nearby query: lat=${lat}, lon=${lon}, maxMeters=${maxMeters}, skill=${skill}, wageMin=${wageMin}, wageMax=${wageMax}`);
 
-    // ✅ ENHANCED: $geoNear aggregation pipeline with $lookup for efficient data enrichment
-    // Finds workers within maxMeters (70km default) using spherical geometry
-    const nearby = await WorkerModel.aggregate([
-      {
-        // Stage 1: Geo-proximity search with 70km radius (70000 meters)
-        $geoNear: {
-          near: { type: 'Point', coordinates: [lon, lat] },
-          distanceField: 'distanceMeters',
-          maxDistance: maxMeters || 70000,  // Default 70km if not specified
-          spherical: true,  // Use spherical Earth geometry (accurate for long distances)
-        }
-      },
-      {
-        // Stage 2: No availability filter - show ALL workers within 70km radius
-        // Optional: add skill filtering if provided in query
-        $match: {}
-      },
-      {
-        // Stage 3: Join with User collection for profile details
-        $lookup: {
-          from: 'users',
-          localField: 'phone',
-          foreignField: 'phone',
-          as: 'userProfile'
-        }
-      },
-      {
-        // Stage 4: Unwind user profile (convert array to object)
-        $unwind: {
-          path: '$userProfile',
-          preserveNullAndEmptyArrays: true  // Keep workers without user record
-        }
-      },
-      {
-        // Stage 5: Add computed fields (skills from main/expected wage from user)
-        $addFields: {
-          mainSkill: { $ifNull: ['$userProfile.mainSkill', 'Not specified'] },
-          expectedWage: { $ifNull: ['$userProfile.expectedWage', 'Negotiable'] },
-          distanceKm: {
-            $round: [{ $divide: ['$distanceMeters', 1000] }, 1]  // Convert to km, round to 1 decimal
-          }
-        }
-      },
-      {
-        // Stage 6: Sort by distance ascending (nearest workers first)
-        $sort: { distanceMeters: 1 }
-      },
-      {
-        // Stage 7: Limit results
-        $limit: 100
-      },
-      {
-        // Stage 8: Project final response shape
-        $project: {
-          _id: 0,  // Hide MongoDB _id
-          phone: 1,
-          name: '$userProfile.name',  // Get name from user profile
-          skills: 1,
-          mainSkill: 1,
-          expectedWage: 1,
-          rating: { $ifNull: ['$rating', 0] },
-          profilePhoto: { $ifNull: ['$userProfile.profilePhoto', '$profilePhoto'] },
-          distanceMeters: { $round: ['$distanceMeters', 0] },  // Round to nearest meter
-          distanceKm: 1,
-          location: 1,
-          isAvailable: 1,
-          // Add metadata for debugging/analytics
-          createdAt: { $dateToString: { format: '%Y-%m-%d', date: '$userProfile.createdAt' } }
+    // ✅ Build MongoDB query with $near geospatial operator
+    const query = {
+      location: {
+        $near: {
+          $geometry: {
+            type: 'Point',
+            coordinates: [lon, lat]
+          },
+          $maxDistance: maxMeters || 70000  // 70km default
         }
       }
-    ]);
+    };
 
-    // ✅ Log query stats for monitoring
-    console.log(`✅ Found ${nearby.length} workers within ${maxMeters / 1000}km of (${lat?.toFixed?.(4)}, ${lon?.toFixed?.(4)})`);
-    
-    if (nearby.length === 0) {
-      console.warn(`⚠️ No workers found. Checking Worker collection stats...`);
-      const totalWorkers = await WorkerModel.countDocuments();
-      const workersWithValidLocation = await WorkerModel.countDocuments({ 
-        'location.coordinates': { $ne: [0, 0] } 
-      });
-      console.warn(`   Total workers: ${totalWorkers}, Workers with valid location: ${workersWithValidLocation}`);
+    // ✅ Add skill filter if provided
+    if (skill && skill !== 'All Skills') {
+      query.$or = [
+        { mainSkill: skill },
+        { skills: skill }
+      ];
     }
 
-    return res.json({ 
-      success: true, 
+    // ✅ DEBUG: Log the final query
+    console.log(`📋 Query filter:`, JSON.stringify(query, null, 2));
+
+    // ✅ Fetch workers with geospatial query - simpler and more efficient
+    const workers = await WorkerModel.find(query)
+      .limit(100)
+      .lean();
+
+    // ✅ Now get user profiles for all workers
+    const workerPhones = workers.map(w => w.phone);
+    const userProfiles = await User.find({ phone: { $in: workerPhones } }).lean();
+    const userMap = {};
+    userProfiles.forEach(u => {
+      userMap[u.phone] = u;
+    });
+
+    // ✅ Merge worker and user data, apply wage filter
+    const nearby = workers
+      .map(worker => {
+        const userProfile = userMap[worker.phone] || {};
+        return {
+          phone: worker.phone,
+          name: userProfile.name,
+          skills: worker.skills || [],
+          mainSkill: worker.mainSkill || 'Not specified',
+          expectedWage: userProfile.expectedWage || 'Negotiable',
+          rating: worker.rating || 0,
+          profilePhoto: userProfile.profilePhoto || worker.profilePhoto,
+          distanceKm: worker.distanceKm || 0,
+          distanceMeters: worker.distanceMeters || 0,
+          location: worker.location,
+          isAvailable: worker.isAvailable || false,
+          createdAt: userProfile.createdAt
+        };
+      })
+      .filter(worker => {
+        // ✅ Apply wage filter after merging
+        if (wageMin !== null || wageMax !== null) {
+          const wageMatch = worker.expectedWage.match(/(\d+)/);
+          const workerWage = wageMatch ? parseInt(wageMatch[0]) : 0;
+          
+          if (wageMin !== null && workerWage < wageMin) return false;
+          if (wageMax !== null && workerWage >= wageMax) return false;
+        }
+        return true;
+      })
+      .sort((a, b) => a.distanceMeters - b.distanceMeters);  // Sort by distance
+
+    console.log(`✅ Found ${nearby.length} workers within ${maxMeters / 1000}km (skill: ${skill || 'all'}, wage: ${wageMin || '∞'}-${wageMax || '∞'})`);
+
+    return res.json({
+      success: true,
       count: nearby.length,
       maxDistanceMeters: maxMeters || 70000,
-      workers: nearby 
+      filters: {
+        skill: skill || 'All Skills',
+        wageMin: wageMin || null,
+        wageMax: wageMax || null
+      },
+      workers: nearby
     });
   } catch (err) {
     console.error('❌ workers/nearby error', err);

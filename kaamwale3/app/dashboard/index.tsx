@@ -5,7 +5,6 @@ import {
   ScrollView,
   TouchableOpacity,
   ActivityIndicator,
-  Alert,
   StyleSheet,
   Modal,
   Image,
@@ -73,6 +72,19 @@ export default function DashboardScreen() {
   const [workerDetails, setWorkerDetails] = useState<any | null>(null);
   const [workerLocationName, setWorkerLocationName] = useState<string>('Loading location...');
   const [workerCurrentLocation, setWorkerCurrentLocation] = useState<{ lat: number; lon: number } | null>(null);
+  
+  // ✅ Modal state for alerts
+  const [modalVisible, setModalVisible] = useState(false);
+  const [modalTitle, setModalTitle] = useState("");
+  const [modalMessage, setModalMessage] = useState("");
+  const [modalType, setModalType] = useState<"success" | "error" | "info">("success");
+  
+  const showModal = (type: "success" | "error" | "info", title: string, message: string) => {
+    setModalType(type);
+    setModalTitle(title);
+    setModalMessage(message);
+    setModalVisible(true);
+  };
 
   useEffect(() => {
     (async () => {
@@ -217,7 +229,7 @@ export default function DashboardScreen() {
   const handleJobCardClick = async (job: Job) => {
     // Don't show modal if job is already paid
     if (job.paymentStatus === 'Paid') {
-      Alert.alert('Job Completed', 'This job has already been paid.');
+      showModal('info', 'Job Completed', 'This job has already been paid.');
       return;
     }
 
@@ -493,6 +505,62 @@ export default function DashboardScreen() {
             {/* Close Modal Button */}
             <TouchableOpacity style={styles.closeModalBtn} onPress={handleCloseWorkerModal}>
               <Text style={styles.closeModalBtnText}>Close</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* ✅ Custom Alert Modal */}
+      <Modal
+        transparent={true}
+        animationType="fade"
+        visible={modalVisible}
+        onRequestClose={() => setModalVisible(false)}
+      >
+        <View style={styles.alertModalOverlay}>
+          <View style={styles.alertModalContainer}>
+            {/* Modal Header with Icon */}
+            <View style={[
+              styles.alertModalHeader,
+              {
+                backgroundColor: modalType === "success" ? "#10B98120" : modalType === "error" ? "#EF444420" : "#3B82F620",
+              }
+            ]}>
+              <View style={[
+                styles.alertModalIconBg,
+                {
+                  backgroundColor: modalType === "success" ? "#10B981" : modalType === "error" ? "#EF4444" : "#3B82F6",
+                }
+              ]}>
+                <MaterialIcons
+                  name={
+                    modalType === "success" ? "check-circle" :
+                    modalType === "error" ? "error" :
+                    "info"
+                  }
+                  size={32}
+                  color="#fff"
+                />
+              </View>
+            </View>
+
+            {/* Modal Content */}
+            <View style={styles.alertModalContent}>
+              <Text style={styles.alertModalTitle}>{modalTitle}</Text>
+              <Text style={styles.alertModalMessage}>{modalMessage}</Text>
+            </View>
+
+            {/* Modal Footer - OK Button */}
+            <TouchableOpacity
+              style={[
+                styles.alertModalButton,
+                {
+                  backgroundColor: modalType === "success" ? "#10B981" : modalType === "error" ? "#EF4444" : "#3B82F6",
+                }
+              ]}
+              onPress={() => setModalVisible(false)}
+            >
+              <Text style={styles.alertModalButtonText}>OK</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -867,5 +935,77 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 16,
     fontWeight: '700',
+  },
+
+  // ✅ Alert Modal Styles
+  alertModalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0, 0, 0, 0.5)",
+    justifyContent: "center",
+    alignItems: "center",
+    paddingHorizontal: 20,
+  },
+
+  alertModalContainer: {
+    backgroundColor: "#fff",
+    borderRadius: 16,
+    overflow: "hidden",
+    width: "100%",
+    maxWidth: 320,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.25,
+    shadowRadius: 8,
+    elevation: 8,
+  },
+
+  alertModalHeader: {
+    paddingVertical: 24,
+    alignItems: "center",
+  },
+
+  alertModalIconBg: {
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+
+  alertModalContent: {
+    paddingHorizontal: 20,
+    paddingVertical: 20,
+    alignItems: "center",
+  },
+
+  alertModalTitle: {
+    fontSize: 18,
+    fontWeight: "700",
+    color: "#1A1A1A",
+    marginBottom: 8,
+    textAlign: "center",
+  },
+
+  alertModalMessage: {
+    fontSize: 14,
+    color: "#666",
+    textAlign: "center",
+    lineHeight: 20,
+  },
+
+  alertModalButton: {
+    paddingVertical: 12,
+    paddingHorizontal: 20,
+    marginHorizontal: 20,
+    marginBottom: 20,
+    borderRadius: 10,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+
+  alertModalButtonText: {
+    color: "#fff",
+    fontSize: 16,
+    fontWeight: "700",
   },
 });
