@@ -87,6 +87,20 @@ const workerSchema = new mongoose.Schema({
     averageEarningsPerGig: { type: Number, default: 0 },
   },
 
+  // ✅ Decline tracking for worker behavior analytics
+  declineTracking: {
+    totalDeclines: { type: Number, default: 0 }, // Total job declines ever
+    monthlyDeclines: { type: Map, of: Number, default: {} }, // { "2026-02": 5, "2026-03": 3 }
+    declineHistory: [{ 
+      jobId: mongoose.Schema.Types.ObjectId,
+      jobTitle: String,
+      declinedAt: Date,
+      reason: String, // optional reason for decline
+      contractorPhone: String, // for analytics
+    }],
+    monthlyJobDays: { type: Map, of: Number, default: {} }, // Days worked per month { "2026-02": 12, "2026-03": 15 }
+  },
+
   // ✅ Timestamps
   createdAt: { type: Date, default: Date.now },
   updatedAt: { type: Date, default: Date.now },

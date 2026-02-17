@@ -271,7 +271,52 @@ function WorkerHome() {
     }, [])
   );
 
-  // ---------------- LOAD WORKER DATA & AUTO-REGISTER ----------------
+  // ✅ TOKEN REFRESH HELPER - Attempt to refresh expired token
+  const refreshAccessToken = async (maxRetries = 3): Promise<string | null> => {
+    try {
+      const refreshToken = await AsyncStorage.getItem('refreshToken');
+      if (!refreshToken) {
+        console.warn('⚠️ No refresh token available');
+        return null;
+      }
+
+      for (let attempt = 1; attempt <= maxRetries; attempt++) {
+        try {
+          console.log(`🔄 Attempting token refresh (attempt ${attempt}/${maxRetries})...`);
+          const response = await fetch(`${API_BASE}/refresh-token`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ refreshToken }),
+          });
+
+          if (response.ok) {
+            const data = await response.json();
+            if (data.accessToken) {
+              await AsyncStorage.setItem('token', data.accessToken);
+              await AsyncStorage.setItem('accessToken', data.accessToken);
+              console.log('✅ Token refreshed successfully');
+              return data.accessToken;
+            }
+          } else if (response.status === 401) {
+            console.error('❌ Refresh token expired - need to re-login');
+            return null;
+          }
+        } catch (err) {
+          console.warn(`⚠️ Refresh attempt ${attempt} failed:`, (err as Error).message);
+          if (attempt < maxRetries) {
+            const delayMs = 1000 * Math.pow(2, attempt - 1); // exponential backoff
+            console.log(`⏳ Retrying in ${delayMs}ms...`);
+            await new Promise(res => setTimeout(res, delayMs));
+          }
+        }
+      }
+    } catch (err) {
+      console.error('Token refresh error:', err);
+    }
+    return null;
+  };
+
+  // ✅ LOAD WORKER DATA & AUTO-REGISTER ----------------
   useEffect(() => {
     (async () => {
       try {
@@ -283,7 +328,15 @@ function WorkerHome() {
         console.log("[WorkerHome] Loading worker data and connecting socket...");
         
         const userStr = await AsyncStorage.getItem("user");
-        const storedToken = await AsyncStorage.getItem("token");
+        // ✅ Try multiple keys for token with fallback
+        let storedToken = await AsyncStorage.getItem("token");
+        if (!storedToken) {
+          storedToken = await AsyncStorage.getItem("accessToken");
+          if (storedToken) {
+            console.log('ℹ️ Using accessToken key (migrating to token key)');
+            await AsyncStorage.setItem("token", storedToken);
+          }
+        }
         const profilePhotoStr = await AsyncStorage.getItem("profilePhoto"); // ✅ Load profile photo
 
         if (userStr) {
@@ -293,6 +346,12 @@ function WorkerHome() {
         }
 
         if (profilePhotoStr) setWorkerProfilePhoto(profilePhotoStr); // ✅ Set profile photo
+
+        // ✅ If token not found, try to refresh it
+        if (!storedToken) {
+          console.warn('⚠️ Token not found in AsyncStorage, attempting refresh...');
+          storedToken = await refreshAccessToken();
+        }
 
         if (storedToken) {
           setToken(storedToken);
@@ -656,10 +715,38 @@ function WorkerHome() {
       }
     };
 
+    // ✅ Handle real-time notification count updates
+    const handleNotificationCountUpdate = (data: any) => {
+      try {
+        if (data.recipientPhone === currentUserPhone) {
+          console.log(`📳 Notification count updated to: ${data.unreadCount}`);
+          setNotificationCount(data.unreadCount);
+        }
+      } catch (err) {
+        console.error("Error handling notification count update:", err);
+      }
+    };
+
+    // ✅ Handle real-time profile photo updates
+    const handleProfilePhotoUpdate = (data: any) => {
+      try {
+        if (data.phone === currentUserPhone) {
+          console.log(`📸 Profile photo updated:`, data.profilePhoto);
+          setWorkerProfilePhoto(data.profilePhoto);
+          // Also save to AsyncStorage for persistence
+          AsyncStorage.setItem('profilePhoto', data.profilePhoto);
+        }
+      } catch (err) {
+        console.error("Error handling profile photo update:", err);
+      }
+    };
+
     socket.on("newJob", handleNewJob);
     socket.on("jobUpdated", handleJobUpdated);
     socket.on("jobAccepted", handleJobAccepted);
     socket.on("jobCancelled", handleJobCancelled);
+    socket.on("notificationCountUpdated", handleNotificationCountUpdate);
+    socket.on("profilePhotoUpdated", handleProfilePhotoUpdate);
 
     return () => {
       stopLocationTracking();
@@ -667,9 +754,11 @@ function WorkerHome() {
       socket.off("jobUpdated", handleJobUpdated);
       socket.off("jobAccepted", handleJobAccepted);
       socket.off("jobCancelled", handleJobCancelled);
+      socket.off("notificationCountUpdated", handleNotificationCountUpdate);
+      socket.off("profilePhotoUpdated", handleProfilePhotoUpdate);
       console.log("[WorkerHome] job listeners removed (unmounted)");
     };
-  }, [currentLocation, workerName, currentJob]);
+  }, [currentLocation, workerName, currentJob, currentUserPhone]);
 
   // ---------------- GET ADDRESS ----------------
   const getAddressFromCoords = async (lat: number, lon: number) => {

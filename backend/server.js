@@ -931,6 +931,13 @@ app.post("/users/photo", authenticateToken, upload.single("photo"), async (req, 
     await user.save();
 
     console.log(`✅ Profile photo uploaded for ${req.user.phone}: ${user.profilePhoto}`);
+
+    // ✅ Emit socket event to notify about profile photo update
+    io.emit('profilePhotoUpdated', {
+      phone: req.user.phone,
+      profilePhoto: user.profilePhoto,
+    });
+
     return res.json({ success: true, profilePhoto: user.profilePhoto });
   } catch (err) {
     console.error("Profile photo upload error", err);
@@ -3529,6 +3536,17 @@ app.put('/notifications/:id/read', authenticateToken, async (req, res) => {
       return res.status(404).json({ success: false, message: 'Notification not found' });
     }
 
+    // ✅ Emit socket event to update notification count for this user
+    const unreadCount = await NotificationHistory.countDocuments({
+      recipientPhone: req.user.phone,
+      isRead: false,
+    });
+
+    io.emit('notificationCountUpdated', {
+      recipientPhone: req.user.phone,
+      unreadCount: unreadCount,
+    });
+
     res.json({ success: true, notification });
   } catch (err) {
     console.error('Mark notification read error:', err);
@@ -3542,6 +3560,12 @@ app.put('/notifications/read-all', authenticateToken, async (req, res) => {
       { recipientPhone: req.user.phone, isRead: false },
       { isRead: true, readAt: new Date() }
     );
+
+    // ✅ Emit socket event to update notification count for this user
+    io.emit('notificationCountUpdated', {
+      recipientPhone: req.user.phone,
+      unreadCount: 0,
+    });
 
     res.json({ success: true, message: 'All notifications marked as read' });
   } catch (err) {

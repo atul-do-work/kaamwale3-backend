@@ -10,6 +10,7 @@ import {
   RefreshControl,
   Platform,
   Dimensions,
+  SafeAreaView,
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
@@ -155,38 +156,144 @@ export default function GigHistory() {
   };
 
   const calculateIncentiveProgress = (gigsData: GigHistory[]) => {
-    // This will be populated with backend data later
-    // For now, we'll calculate from client-side gig data
-    
-    const completedGigs = gigsData.filter(g => g.paymentStatus === 'Paid');
-    const cancelledGigs = gigsData.filter(g => g.status === 'cancelled');
-    
-    // Calculate consecutive days (placeholder - will be from backend)
-    const consecutiveDays = Math.floor(Math.random() * 21); // For UI demo
-    const totalHours = completedGigs.length * 8; // Assuming 8 hours per gig
+    try {
+      // ✅ IMPROVED: Calculate consecutive work days with proper validation
+      const completedGigs = gigsData.filter(g => g.paymentStatus === 'Paid');
+      const cancelledGigs = gigsData.filter(g => g.status === 'cancelled');
+      
+      // Sort completed gigs by date (oldest first)
+      const sortedGigs = [...completedGigs].sort((a, b) => {
+        return new Date(a.date).getTime() - new Date(b.date).getTime();
+      });
 
-    const tracker: IncentiveTracker = {
-      consecutiveDays,
-      totalHours,
-      cancellations: cancelledGigs.length,
-      lastWorkDate: new Date().toISOString(),
-      hoursToday: 8,
-      eligibleFor5Days: consecutiveDays >= 5 && cancelledGigs.length <= 1 && totalHours >= 35,
-      eligibleFor10Days: consecutiveDays >= 10 && cancelledGigs.length <= 1 && totalHours >= 70,
-      eligibleFor20Days: consecutiveDays >= 20 && cancelledGigs.length <= 1 && totalHours >= 140,
-    };
+      console.log(`📊 Total gigs: ${gigsData.length}, Completed: ${completedGigs.length}, Cancelled: ${cancelledGigs.length}`);
 
-    setIncentiveData(tracker);
+      // ✅ Extract unique work dates (YYYY-MM-DD format)
+      const workDates = new Set<string>();
+      sortedGigs.forEach(gig => {
+        const dateStr = new Date(gig.date).toISOString().split('T')[0];
+        workDates.add(dateStr);
+      });
 
-    // Update milestones with progress
-    const updatedMilestones = milestones.map(m => ({
-      ...m,
-      progress: Math.min(consecutiveDays / m.days, 1),
-      completed: m.id === '5days' && tracker.eligibleFor5Days ||
-                m.id === '10days' && tracker.eligibleFor10Days ||
-                m.id === '20days' && tracker.eligibleFor20Days,
-    }));
-    setMilestones(updatedMilestones);
+      // ✅ Sort unique work dates
+      const uniqueDates = Array.from(workDates).sort();
+      console.log(`📅 Unique work dates: ${uniqueDates.length} days`);
+
+      // ✅ Find longest consecutive work days
+      let maxConsecutiveDays = 0;
+      let consecutiveStartDate: string | null = null;
+      let hoursInConsecutiveDays = 0;
+
+      for (let i = 0; i < uniqueDates.length; i++) {
+        let count = 1;
+        let totalHours = 0;
+
+        // Get work hours on first day
+        const firstDayGigs = sortedGigs.filter(
+          g => new Date(g.date).toISOString().split('T')[0] === uniqueDates[i]
+        );
+        totalHours += firstDayGigs.length * 8; // Assume 8 hours per gig
+
+        // Check consecutive days starting from this date
+        for (let j = i + 1; j < uniqueDates.length; j++) {
+          const curDate = new Date(uniqueDates[j]);
+          const prevDate = new Date(uniqueDates[j - 1]);
+          
+          // Calculate day difference
+          const timeDiff = curDate.getTime() - prevDate.getTime();
+          const dayDiff = Math.floor(timeDiff / (1000 * 60 * 60 * 24));
+
+          // If consecutive day (next day), continue counting
+          if (dayDiff === 1) {
+            count++;
+            const dayGigs = sortedGigs.filter(
+              g => new Date(g.date).toISOString().split('T')[0] === uniqueDates[j]
+            );
+            totalHours += dayGigs.length * 8; // Add 8 hours per gig
+          } else {
+            break; // Not consecutive anymore
+          }
+        }
+
+        // ✅ Update max consecutive days count
+        if (count > maxConsecutiveDays) {
+          maxConsecutiveDays = count;
+          consecutiveStartDate = uniqueDates[i];
+          hoursInConsecutiveDays = totalHours;
+        }
+      }
+
+      console.log(`✅ Max consecutive days: ${maxConsecutiveDays}, Hours: ${hoursInConsecutiveDays}`);
+
+      // ✅ Check for declines ONLY in the last 5-day window (if applicable)
+      let declinesInWindow = 0;
+      if (maxConsecutiveDays >= 5 && consecutiveStartDate) {
+        const startDate = new Date(consecutiveStartDate);
+        const endDate = new Date(startDate);
+        endDate.setDate(endDate.getDate() + 4); // +4 to include 5 days total
+
+        declinesInWindow = cancelledGigs.filter(gig => {
+          const gigDate = new Date(gig.date);
+          return gigDate >= startDate && gigDate <= endDate;
+        }).length;
+        
+        console.log(`📍 5-day window [${consecutiveStartDate} to ${endDate.toISOString().split('T')[0]}]: ${declinesInWindow} declines`);
+      }
+
+      // ✅ Calculate metrics
+      const totalHours = sortedGigs.length * 8; // Total hours: gigs completed * 8 hours per gig
+      
+      // ✅ Verify criteria for 5-day eligibility:
+      // - At least 5 consecutive work days
+      // - At least 7 hours per day (35 hours total for 5 days = at least 35 hours)
+      // - NO declines during those 5 consecutive days
+      let eligible5Days = false;
+      if (maxConsecutiveDays >= 5 && hoursInConsecutiveDays >= 35 && declinesInWindow === 0) {
+        eligible5Days = true;
+      }
+
+      // Similar criteria for 10 and 20 days
+      const eligible10Days = maxConsecutiveDays >= 10 && hoursInConsecutiveDays >= 70 && declinesInWindow === 0;
+      const eligible20Days = maxConsecutiveDays >= 20 && hoursInConsecutiveDays >= 140 && declinesInWindow === 0;
+
+      console.log(`🎁 Eligibility - 5 Days: ${eligible5Days}, 10 Days: ${eligible10Days}, 20 Days: ${eligible20Days}`);
+
+      const tracker: IncentiveTracker = {
+        consecutiveDays: maxConsecutiveDays,
+        totalHours: Math.round(hoursInConsecutiveDays),
+        cancellations: declinesInWindow, // ✅ Now shows declines in the consecutive window only
+        lastWorkDate: sortedGigs.length > 0 ? sortedGigs[sortedGigs.length - 1].date : null,
+        hoursToday: 8,
+        eligibleFor5Days: eligible5Days,
+        eligibleFor10Days: eligible10Days,
+        eligibleFor20Days: eligible20Days,
+      };
+
+      setIncentiveData(tracker);
+
+      // Update milestones with progress
+      const updatedMilestones = milestones.map(m => ({
+        ...m,
+        progress: Math.min(maxConsecutiveDays / m.days, 1),
+        completed: (m.id === '5days' && eligible5Days) ||
+                  (m.id === '10days' && eligible10Days) ||
+                  (m.id === '20days' && eligible20Days),
+      }));
+      setMilestones(updatedMilestones);
+    } catch (err) {
+      console.error('Error calculating incentive progress:', err);
+      // Set default values on error
+      setIncentiveData({
+        consecutiveDays: 0,
+        totalHours: 0,
+        cancellations: 0,
+        lastWorkDate: null,
+        hoursToday: 0,
+        eligibleFor5Days: false,
+        eligibleFor10Days: false,
+        eligibleFor20Days: false,
+      });
+    }
   };
 
   const onRefresh = async () => {
@@ -262,47 +369,47 @@ export default function GigHistory() {
 
   const renderConditionsCard = () => (
     <View style={styles.conditionsCard}>
-      <Text style={styles.conditionsTitle}>✓ {t('requirementsStatus')}</Text>
+      <Text style={styles.conditionsTitle}>✓ {t('requirementsStatus')} - 5 Day Milestone</Text>
       <View style={styles.conditionsList}>
         {/* 5 Days Requirement */}
         <View style={[styles.condition, { borderLeftColor: incentiveData.consecutiveDays >= 5 ? '#27AE60' : '#BDC3C7' }]}>
           <MaterialIcons 
-            name={incentiveData.consecutiveDays >= 5 ? 'check' : 'close'} 
+            name={incentiveData.consecutiveDays >= 5 ? 'check-circle' : 'cancel'} 
             size={24} 
             color={incentiveData.consecutiveDays >= 5 ? '#27AE60' : '#E74C3C'}
             style={{ fontWeight: 'bold' }}
           />
           <View style={styles.conditionText}>
-            <Text style={styles.conditionLabel}>{t('consecutiveDays')}</Text>
-            <Text style={styles.conditionValue}>{incentiveData.consecutiveDays}/5 days ({Math.round((incentiveData.consecutiveDays / 5) * 100)}%)</Text>
+            <Text style={styles.conditionLabel}>📅 {t('consecutiveDays')}</Text>
+            <Text style={styles.conditionValue}>{incentiveData.consecutiveDays}/5 consecutive days ({Math.round((Math.min(incentiveData.consecutiveDays / 5, 1)) * 100)}%)</Text>
           </View>
         </View>
 
         {/* 7 Hours Per Day Requirement */}
         <View style={[styles.condition, { borderLeftColor: incentiveData.totalHours >= 35 ? '#27AE60' : '#BDC3C7' }]}>
           <MaterialIcons 
-            name={incentiveData.totalHours >= 35 ? 'check' : 'close'} 
+            name={incentiveData.totalHours >= 35 ? 'check-circle' : 'cancel'} 
             size={24} 
             color={incentiveData.totalHours >= 35 ? '#27AE60' : '#E74C3C'}
             style={{ fontWeight: 'bold' }}
           />
           <View style={styles.conditionText}>
-            <Text style={styles.conditionLabel}>{t('hoursPerDay')}</Text>
-            <Text style={styles.conditionValue}>{incentiveData.totalHours}/35 hours ({Math.round((incentiveData.totalHours / 35) * 100)}%)</Text>
+            <Text style={styles.conditionLabel}>⏰ 7 Hours Per Day</Text>
+            <Text style={styles.conditionValue}>{incentiveData.totalHours}/35 hours ({Math.round((Math.min(incentiveData.totalHours / 35, 1)) * 100)}%)</Text>
           </View>
         </View>
 
-        {/* Cancellation Requirement */}
-        <View style={[styles.condition, { borderLeftColor: incentiveData.cancellations <= 1 ? '#27AE60' : '#BDC3C7' }]}>
+        {/* NO Declines Requirement */}
+        <View style={[styles.condition, { borderLeftColor: incentiveData.cancellations === 0 ? '#27AE60' : '#BDC3C7' }]}>
           <MaterialIcons 
-            name={incentiveData.cancellations <= 1 ? 'check' : 'close'} 
+            name={incentiveData.cancellations === 0 ? 'check-circle' : 'cancel'} 
             size={24} 
-            color={incentiveData.cancellations <= 1 ? '#27AE60' : '#E74C3C'}
+            color={incentiveData.cancellations === 0 ? '#27AE60' : '#E74C3C'}
             style={{ fontWeight: 'bold' }}
           />
           <View style={styles.conditionText}>
-            <Text style={styles.conditionLabel}>No Cancellations</Text>
-            <Text style={styles.conditionValue}>{incentiveData.cancellations} cancelled ({incentiveData.cancellations <= 1 ? '✔ Allowed' : '✗ Exceeded'})</Text>
+            <Text style={styles.conditionLabel}>🚫 No Declines in Period</Text>
+            <Text style={styles.conditionValue}>{incentiveData.cancellations} job declines ({incentiveData.cancellations === 0 ? '✔ Pass' : '✗ Failed'})</Text>
           </View>
         </View>
       </View>
@@ -451,7 +558,7 @@ export default function GigHistory() {
   const cancelledGigs = gigs.filter(g => g.status === 'cancelled');
 
   return (
-    <View style={styles.container}>
+    <View style={[styles.container, { paddingTop: Platform.OS === 'ios' ? 12 : 8 }]}>
       {/* Header */}
       <View style={[styles.header, { paddingTop: Platform.OS === 'ios' ? 12 : 8 }]}>
         <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
