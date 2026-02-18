@@ -175,26 +175,17 @@ router.post("/deposit/verify", authenticateToken, async (req, res) => {
     }
 
     console.log(`✅ Deposit signature verified for order: ${orderId}`);
-      // 🔐 CRITICAL: Verify deposit user matches authenticated user
-      // Prevents user A's order from being verified/credited to user B
-      if (!payment.notes || payment.notes.phone !== req.user.phone) {
-        console.error(`🔴 Deposit user mismatch: payment for ${payment.notes?.phone || 'unknown'}, verified by ${req.user.phone}`);
-        return res.status(400).json({
-          success: false,
-          message: 'Deposit user mismatch. This payment was created for a different user.'
-        });
-      }
 
-      console.log(`✅ Deposit user verified: payment matches authenticated user`);
     // 🔐 STEP 2: Fetch and validate payment from Razorpay
     let depositAmount = null;
+    let payment = null;
     try {
       const Razorpay = require('razorpay');
       const razorpay = new Razorpay({
         key_id: process.env.RAZORPAY_KEY_ID,
         key_secret: process.env.RAZORPAY_KEY_SECRET
       });
-      const payment = await razorpay.payments.fetch(paymentId);
+      payment = await razorpay.payments.fetch(paymentId);
       
       // 🔐 CRITICAL: Verify payment status is CAPTURED
       if (payment.status !== 'captured') {
@@ -218,6 +209,18 @@ router.post("/deposit/verify", authenticateToken, async (req, res) => {
       console.error('Error fetching payment from Razorpay:', razorpayErr);
       return res.status(500).json({ success: false, message: 'Failed to verify payment with provider' });
     }
+
+    // 🔐 CRITICAL: Verify deposit user matches authenticated user
+    // Prevents user A's order from being verified/credited to user B
+    if (!payment.notes || payment.notes.phone !== req.user.phone) {
+      console.error(`🔴 Deposit user mismatch: payment for ${payment.notes?.phone || 'unknown'}, verified by ${req.user.phone}`);
+      return res.status(400).json({
+        success: false,
+        message: 'Deposit user mismatch. This payment was created for a different user.'
+      });
+    }
+
+    console.log(`✅ Deposit user verified: payment matches authenticated user`);
 
     // 🔐 STEP 3: FULLY ATOMIC UPDATE - Deposit credit + idempotency in one operation
     // If paymentId already exists in transactions, this update will fail
