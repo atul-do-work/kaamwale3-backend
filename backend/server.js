@@ -1131,12 +1131,12 @@ app.post("/login", loginLimiter, async (req, res) => {
       console.log(`📱 FCM Token updated for ${phone}: ${fcmToken.substring(0, 30)}...`);
     }
 
-    // ✅ NEW: Handle location for contractors
+    // ✅ NEW: Handle location for all users (workers AND contractors) during login
     let cityLeaderboard = null;
     // ✅ NEW: Efficient location handling using district polygons
     // No Nominatim API needed - direct geospatial lookup
     // ✅ FIX: Use !== null instead of && to handle 0 coordinates correctly
-    if (user.role === 'contractor' && latitude !== undefined && latitude !== null && longitude !== undefined && longitude !== null) {
+    if (latitude !== undefined && latitude !== null && longitude !== undefined && longitude !== null) {
       try {
         const parsedLat = parseFloat(latitude);
         const parsedLon = parseFloat(longitude);
@@ -1145,9 +1145,9 @@ app.post("/login", loginLimiter, async (req, res) => {
         if (isNaN(parsedLat) || isNaN(parsedLon)) {
           console.warn(`⚠️ Invalid coordinates: lat=${latitude}, lon=${longitude}`);
         } else {
-          console.log(`📍 Finding district for contractor at: lat=${parsedLat}, lon=${parsedLon}`);
+          console.log(`📍 Finding district for ${user.role} at: lat=${parsedLat}, lon=${parsedLon}`);
 
-          // Find district polygon containing the contractor's GPS point
+          // Find district polygon containing the user's GPS point
           const District = require('./models/City'); // File is City.js, exports as "District" model
           const point = {
             type: 'Point',
@@ -1218,7 +1218,7 @@ app.post("/login", loginLimiter, async (req, res) => {
           
           try {
             await user.save();
-            console.log(`✅ [Login] Location saved: lat=${parsedLat}, lon=${parsedLon}, city=${user.city}`);
+            console.log(`✅ [Login] Location saved for ${user.role}: lat=${parsedLat}, lon=${parsedLon}, city=${user.city}`);
           } catch (saveErr) {
             console.error('⚠️ [Login] Error saving location:', saveErr.message);
           }
