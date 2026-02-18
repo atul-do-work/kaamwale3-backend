@@ -18,6 +18,23 @@ import { useLanguage } from '../context/LanguageContext';
 import { useAuth } from '../context/AuthContext';
 //*******************2nd step */
 
+// ✅ HELPER: Validate password strength
+function validatePasswordStrength(password: string): { isValid: boolean; error?: string } {
+  if (!password || password.length < 8) {
+    return { isValid: false, error: 'Password must be at least 8 characters long' };
+  }
+  if (!/\d/.test(password)) {
+    return { isValid: false, error: 'Password must contain at least one number' };
+  }
+  if (!/[A-Z]/.test(password)) {
+    return { isValid: false, error: 'Password must contain at least one uppercase letter' };
+  }
+  if (!/[a-z]/.test(password)) {
+    return { isValid: false, error: 'Password must contain at least one lowercase letter' };
+  }
+  return { isValid: true };
+}
+
 // ✅ HELPER: Request location with retries (improved version)
 async function getLocationWithRetries(maxRetries = 3) {
   // ✅ OPTIMIZATION: Check if we have recent location (< 24 hours old) from registration
@@ -135,6 +152,13 @@ export default function LoginScreen() {
   const handleLogin = async () => {
     if (!phone || !password) {
       showModal('error', t('required'), t('required'));
+      return;
+    }
+
+    // ✅ Validate password strength
+    const passwordValidation = validatePasswordStrength(password);
+    if (!passwordValidation.isValid) {
+      showModal('error', t('error'), passwordValidation.error || 'Invalid password');
       return;
     }
 

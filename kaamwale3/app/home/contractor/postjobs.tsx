@@ -263,9 +263,23 @@ export default function PostJobScreen() {
       return Alert.alert("Invalid Time", "End time must be after start time");
     }
 
-    // ⚠️ Note: Backend will enforce minimum balance. This is UX hint only.
-    if (walletBalance < 25)
-      return Alert.alert("Insufficient Balance", "Minimum balance ₹25 required to post a job");
+    // 💰 Calculate required posting fee based on bulk hiring
+    const workersCount = bulkHiringEnabled ? requiredWorkers : 1;
+    const requiredBalance = workersCount * 25;
+
+    if (walletBalance < requiredBalance) {
+      return Alert.alert(
+        "Insufficient Balance",
+        `You need ₹${requiredBalance} in your wallet to post this job for ${workersCount} worker(s).\n\nPlease deposit money first.`,
+        [
+          {
+            text: "Deposit Now",
+            onPress: () => router.push("/(tabs)/wallet") // ✅ Navigate to wallet tab
+          },
+          { text: "Cancel", style: "cancel" }
+        ]
+      );
+    }
 
     setIsPostingJob(true); // ✅ Show loading spinner
 
@@ -400,6 +414,13 @@ export default function PostJobScreen() {
         <Text style={styles.header}>Post a New Job</Text>
 
         <Text style={styles.walletText}>Wallet Balance: ₹{walletBalance}</Text>
+
+        {/* ✅ Show Posting Fee Transparently */}
+        <View style={styles.feeDisplay}>
+          <Text style={styles.feeLabel}>Posting Fee</Text>
+          <Text style={styles.feeAmount}>₹{(bulkHiringEnabled ? requiredWorkers : 1) * 25}</Text>
+          <Text style={styles.feeInfo}>{bulkHiringEnabled ? requiredWorkers : 1} worker(s)</Text>
+        </View>
 
         {/* Job Title Dropdown */}
         <View style={styles.dropdownContainer}>
@@ -815,5 +836,32 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontStyle: 'italic',
     textAlign: 'center',
+  },
+  // ✅ Fee display styles
+  feeDisplay: {
+    backgroundColor: '#0f1f35',
+    borderRadius: 14,
+    padding: 12,
+    marginBottom: 15,
+    borderLeftWidth: 4,
+    borderLeftColor: '#4ade80',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  feeLabel: {
+    color: '#aaa',
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  feeAmount: {
+    color: '#4ade80',
+    fontSize: 18,
+    fontWeight: '700',
+  },
+  feeInfo: {
+    color: '#667eea',
+    fontSize: 12,
+    fontStyle: 'italic',
   },
 });

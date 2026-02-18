@@ -6,7 +6,8 @@ import {
   TouchableOpacity,
   TextInput,
   Alert,
-  Modal
+  Modal,
+  ActivityIndicator
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
@@ -43,7 +44,6 @@ export default function Wallet(): React.ReactElement {
   const [depositAmount, setDepositAmount] = useState('');
   const [withdrawAmount, setWithdrawAmount] = useState('');
   const [currentUserPhone, setCurrentUserPhone] = useState<string | null>(null);
-  const [walletFetchPending, setWalletFetchPending] = useState(false);
   const previousUserPhoneRef = useRef<string | null>(null);
   
   // ✅ Razorpay deposit states
@@ -51,6 +51,7 @@ export default function Wallet(): React.ReactElement {
   const [depositModalHtml, setDepositModalHtml] = useState('');
   const [currentDepositAmount, setCurrentDepositAmount] = useState(0);
   const [currentDepositOrderId, setCurrentDepositOrderId] = useState('');
+  const [depositLoading, setDepositLoading] = useState(false);
 
   // ✅ Bank account states
   const [bankAccount, setBankAccount] = useState<any>(null);
@@ -77,12 +78,14 @@ export default function Wallet(): React.ReactElement {
         previousUserPhoneRef.current = userPhone;
         setCurrentUserPhone(userPhone);
         setWallet({ balance: 0, transactions: [] });
+        setDepositLoading(false); // Reset loading state on user change
       } else if (!userPhone && previousUserPhoneRef.current !== null) {
         // User logged out
         console.log(`👤 Wallet: User logged out, resetting wallet`);
         previousUserPhoneRef.current = null;
         setCurrentUserPhone(null);
         setWallet({ balance: 0, transactions: [] });
+        setDepositLoading(false); // Reset loading state on logout
       }
     }, [authUser])
   );
@@ -95,6 +98,7 @@ export default function Wallet(): React.ReactElement {
         setShowDeposit(false);
         setShowWithdraw(false);
         setDepositModalVisible(false);
+        setDepositLoading(false); // Reset loading state
         console.log('✅ Wallet modals closed (tab unfocused)');
       };
     }, [])
@@ -119,53 +123,28 @@ export default function Wallet(): React.ReactElement {
         fetchWallet();
       }, 500);
 
-      // ✅ Listen for job updates (payment) and refresh wallet
-      const handleJobUpdated = (job: any) => {
-        console.log("📱 Job updated event received:", job.paymentStatus);
-        if (job.paymentStatus === "Paid") {
-          console.log("💰 Payment detected, refreshing wallet...");
-          // ✅ Prevent race condition: Only refresh if no other fetch is pending
-          if (!walletFetchPending) {
-            setWalletFetchPending(true);
-            setTimeout(() => {
-              fetchWallet().finally(() => setWalletFetchPending(false));
-            }, 500);
-          } else {
-            console.log("⏳ Wallet fetch already pending, skipping duplicate fetch");
-          }
-        }
-      };
-
-      // ✅ Listen for wallet refresh events (from payment)
-      const handleWalletRefresh = (data: any) => {
-        console.log(`💸 Wallet refresh event received:`, data);
-        if (!walletFetchPending) {
-          setWalletFetchPending(true);
-          setTimeout(() => {
-            fetchWallet().finally(() => setWalletFetchPending(false));
-          }, 500);
-        }
-      };
-
-      // ✅ Listen for wallet updated events (from Razorpay payment)
+      // ✅ PRODUCTION PATTERN: Direct state update from socket events (no re-fetch)
       const handleWalletUpdated = (data: any) => {
         console.log(`💰 Wallet updated from payment:`, data);
-        if (data.phone === currentUserPhone && !walletFetchPending) {
-          setWalletFetchPending(true);
-          setTimeout(() => {
-            fetchWallet().finally(() => setWalletFetchPending(false));
-          }, 500);
+        if (data.phone === currentUserPhone) {
+          setWallet(prev => ({
+            balance: data.balance,
+            transactions: [
+              {
+                type: data.type, // deposit | withdraw | payment
+                amount: data.amount,
+                date: new Date().toISOString()
+              },
+              ...prev.transactions
+            ]
+          }));
         }
       };
 
-      socket.on("jobUpdated", handleJobUpdated);
-      socket.on("walletRefresh", handleWalletRefresh);
       socket.on("walletUpdated", handleWalletUpdated);
 
       return () => {
         clearTimeout(timer);
-        socket.off("jobUpdated", handleJobUpdated);
-        socket.off("walletRefresh", handleWalletRefresh);
         socket.off("walletUpdated", handleWalletUpdated);
       };
     }
@@ -212,6 +191,8 @@ export default function Wallet(): React.ReactElement {
   };
 
   const confirmDeposit = async () => {
+    if (depositLoading) return; // ✅ Prevent double-submission
+    
     if (!depositAmount || Number(depositAmount) <= 0) {
       Alert.alert(t('error'), t('enterValidAmount'));
       return;
@@ -222,6 +203,7 @@ export default function Wallet(): React.ReactElement {
       return;
     }
 
+    setDepositLoading(true);
     try {
       // Step 1: Create deposit order
       const orderRes = await api.post('/wallet/deposit/create-order', { 
@@ -233,7 +215,8 @@ export default function Wallet(): React.ReactElement {
         return;
       }
 
-      const { orderId, key_id } = orderRes.data;
+      // ✅ SECURITY: Get amount from backend response, NOT frontend calculation
+      const { orderId, key_id, amount } = orderRes.data;
 
       // Step 2: Create Razorpay checkout HTML
       const razorpayHtml = `
@@ -253,7 +236,7 @@ export default function Wallet(): React.ReactElement {
           <script>
             var options = {
               "key": "${key_id}",
-              "amount": ${Number(depositAmount) * 100},
+              "amount": ${amount},
               "currency": "INR",
               "name": "Kaamwale Wallet",
               "description": "Wallet Deposit",
@@ -267,9 +250,9 @@ export default function Wallet(): React.ReactElement {
                 }));
               },
               "prefill": {
-                "name": "User",
-                "email": "user@example.com",
-                "contact": "9999999999"
+                "name": "${authUser?.name || ''}",
+                "email": "${authUser?.email || ''}",
+                "contact": "${authUser?.phone || ''}"
               },
               "theme": {
                 "color": "#1a2f4d"
@@ -295,6 +278,8 @@ export default function Wallet(): React.ReactElement {
       setCurrentDepositOrderId(orderId);
     } catch (err: any) {
       Alert.alert(t('error'), err.response?.data?.message || t('failedInitiateDeposit'));
+    } finally {
+      setDepositLoading(false);
     }
   };
 
@@ -308,13 +293,26 @@ export default function Wallet(): React.ReactElement {
         await verifyDeposit(data);
       } else if (data.type === 'deposit_failed') {
         setDepositModalVisible(false);
-        Alert.alert('Payment Failed', data.error || 'Deposit cancelled');
+        // ✅ Clear WebView HTML from memory
+        setDepositModalHtml('');
+        // ✅ Offer retry instead of just closing
+        Alert.alert(
+          'Payment Failed',
+          data.error || 'Deposit cancelled',
+          [
+            { text: 'Close', onPress: () => {} },
+            { text: 'Try Again', onPress: () => {
+              setDepositModalVisible(true);
+            }, style: 'default' }
+          ]
+        );
       }
     } catch (error) {
       console.error('Error handling deposit response:', error);
     }
   };
 
+  // ✅ Fetch wallet balance
   // Verify deposit payment
   const verifyDeposit = async (data: any) => {
     try {
@@ -326,21 +324,43 @@ export default function Wallet(): React.ReactElement {
       });
 
       setDepositModalVisible(false);
+      // ✅ Clear WebView HTML from memory
+      setDepositModalHtml('');
 
       if (res.data.success) {
-        setWallet({ ...wallet, balance: res.data.walletBalance });
         Alert.alert('Success', `₹${currentDepositAmount} deposited to your wallet!`);
         setDepositAmount('');
         setShowDeposit(false);
-        
-        // Refresh wallet
-        fetchWallet();
+        // ✅ Fallback: Fetch wallet if socket fails
+        await fetchWallet();
       } else {
-        Alert.alert('Error', res.data.message || 'Deposit verification failed');
+        // ✅ Offer retry for verification failures
+        Alert.alert(
+          'Error',
+          res.data.message || 'Deposit verification failed',
+          [
+            { text: 'Close', onPress: () => {} },
+            { text: 'Retry', onPress: () => verifyDeposit(data), style: 'default' }
+          ]
+        );
       }
     } catch (err: any) {
       setDepositModalVisible(false);
-      Alert.alert('Error', err.response?.data?.message || 'Deposit verification failed');
+      // ✅ Clear WebView HTML from memory
+      setDepositModalHtml('');
+      const errorMsg = err.response?.data?.message || 'Deposit verification failed';
+      // ✅ Offer retry for network/timeout errors
+      Alert.alert(
+        'Error',
+        errorMsg,
+        [
+          { text: 'Close', onPress: () => {
+            // ✅ Even if user closes error, try to fetch wallet as fallback
+            fetchWallet();
+          } },
+          { text: 'Retry', onPress: () => verifyDeposit(data), style: 'default' }
+        ]
+      );
     }
   };
 
@@ -377,13 +397,10 @@ export default function Wallet(): React.ReactElement {
       const res = await api.post('/wallet/withdraw', { amount: Number(withdrawAmount) });
 
       if (res.data.success) {
-        setWallet({ ...wallet, balance: res.data.walletBalance });
         Alert.alert('Success', `Withdrawal of ₹${withdrawAmount} initiated!\n\nAmount will be transferred to your bank account within 2-4 hours.`);
         setWithdrawAmount('');
         setShowWithdraw(false);
-        
-        // Refresh wallet
-        fetchWallet();
+        // ✅ Backend updates wallet atomically - no manual update needed
       }
     } catch (err: any) {
       const errorMsg = err.response?.data?.message || 'Withdrawal failed';
@@ -491,8 +508,9 @@ export default function Wallet(): React.ReactElement {
       {/* Deposit & Withdraw Buttons */}
       <View style={styles.buttonRow}>
         <TouchableOpacity
-          style={[styles.actionButton, { backgroundColor: '#1a2f4d' }]}
+          style={[styles.actionButton, { backgroundColor: '#1a2f4d', opacity: depositLoading ? 0.6 : 1 }]}
           onPress={handleDepositClick}
+          disabled={depositLoading}
         >
           <Text style={styles.buttonText}>Deposit</Text>
         </TouchableOpacity>
@@ -506,20 +524,32 @@ export default function Wallet(): React.ReactElement {
 
       {/* Conditional Deposit Input */}
       {showDeposit && (
-        <View style={styles.inputRow}>
-          <TextInput
-            style={styles.amountInput}
-            placeholder="Enter amount"
-            keyboardType="numeric"
-            value={depositAmount}
-            onChangeText={setDepositAmount}
-          />
-          <TouchableOpacity
-            style={[styles.actionButton, { backgroundColor: '#1a2f4d', flex: 0.3 }]}
-            onPress={confirmDeposit}
-          >
-            <Text style={styles.buttonText}>Confirm</Text>
-          </TouchableOpacity>
+        <View>
+          <View style={styles.inputRow}>
+            <TextInput
+              style={styles.amountInput}
+              placeholder="Enter amount"
+              keyboardType="numeric"
+              value={depositAmount}
+              onChangeText={setDepositAmount}
+              editable={!depositLoading}
+            />
+            <TouchableOpacity
+              style={[styles.actionButton, { backgroundColor: '#1a2f4d', flex: 0.3, opacity: depositLoading ? 0.6 : 1 }]}
+              onPress={confirmDeposit}
+              disabled={depositLoading}
+            >
+              <Text style={styles.buttonText}>{depositLoading ? 'Processing...' : 'Confirm'}</Text>
+            </TouchableOpacity>
+          </View>
+          {/* ✅ Deposit Summary UI */}
+          {depositAmount && Number(depositAmount) > 0 && (
+            <View style={{ marginTop: 12, marginHorizontal: 16, padding: 12, backgroundColor: '#f0f8ff', borderRadius: 8, borderLeftWidth: 4, borderLeftColor: '#1a2f4d' }}>
+              <Text style={{ fontSize: 12, color: '#666', marginBottom: 4 }}>Deposit Summary</Text>
+              <Text style={{ fontSize: 14, fontWeight: '600', color: '#1a2f4d' }}>You will deposit: ₹{Number(depositAmount)}</Text>
+              <Text style={{ fontSize: 11, color: '#999', marginTop: 6 }}>Minimum: ₹100 | No hidden charges</Text>
+            </View>
+          )}
         </View>
       )}
 
@@ -554,12 +584,29 @@ export default function Wallet(): React.ReactElement {
         ))}
       </View>
 
-      {/* ✅ Razorpay Deposit Modal */}
-      <Modal visible={depositModalVisible} transparent animationType="slide">
+      {/* ✅ Razorpay Deposit Modal with Security */}
+      <Modal visible={depositModalVisible} transparent animationType="slide" onDismiss={() => {
+        // ✅ Handle manual close/cancel - clear HTML and fallback fetch
+        setDepositModalVisible(false);
+        setDepositModalHtml('');
+        // ✅ Fallback wallet sync in case socket missed update
+        fetchWallet();
+      }}>
         <SafeAreaView edges={['top', 'left', 'right']} style={{ flex: 1, backgroundColor: "#fff" }}>
           <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingTop: 12, paddingHorizontal: 12, paddingBottom: 12, borderBottomWidth: 1, borderBottomColor: "#DDD" }}>
             <Text style={{ fontSize: 16, fontWeight: "600", color: "#333" }}>Wallet Deposit</Text>
-            <TouchableOpacity onPress={() => setDepositModalVisible(false)}>
+            <TouchableOpacity onPress={() => {
+              setDepositModalVisible(false);
+              setDepositModalHtml('');
+              Alert.alert(
+                "Deposit in Progress?",
+                "If you just completed payment, it may take a moment to process. Don't close the app.",
+                [{ text: "OK", onPress: () => {
+                  // ✅ Fallback fetch wallet in case socket failed
+                  fetchWallet();
+                } }]
+              );
+            }}>
               <MaterialIcons name="close" size={28} color="#333" />
             </TouchableOpacity>
           </View>
@@ -569,10 +616,23 @@ export default function Wallet(): React.ReactElement {
               onMessage={handleDepositMessage}
               javaScriptEnabled={true}
               domStorageEnabled={true}
+              startInLoadingState={true}
+              originWhitelist={['*']}
+              onShouldStartLoadWithRequest={(request) => {
+                // ✅ SECURITY: Only allow Razorpay checkout domain
+                const isRazorpayURL = request.url.startsWith('https://checkout.razorpay.com') ||
+                                      request.url.startsWith('https://api.razorpay.com') ||
+                                      request.url.startsWith('data:');
+                if (!isRazorpayURL) {
+                  console.warn(`⚠️ Blocked navigation to: ${request.url}`);
+                }
+                return isRazorpayURL;
+              }}
             />
           ) : (
             <View style={{ flex: 1, justifyContent: "center", alignItems: "center" }}>
-              <Text>Loading...</Text>
+              <ActivityIndicator size="large" color="#1a2f4d" />
+              <Text style={{ marginTop: 12, color: "#666" }}>Loading payment gateway...</Text>
             </View>
           )}
         </SafeAreaView>

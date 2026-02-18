@@ -1,8 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
   Text,
-  ScrollView,
   TouchableOpacity,
   StyleSheet,
   ActivityIndicator,
@@ -11,9 +10,10 @@ import {
   Platform,
   Dimensions,
   SafeAreaView,
+  Alert,
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
-import { useRouter } from 'expo-router';
+import { useRouter, useFocusEffect } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useAuth } from '../context/AuthContext';
 import { API_BASE } from '../utils/config';
@@ -22,6 +22,7 @@ import { useLanguage } from '../context/LanguageContext';
 
 const { width } = Dimensions.get('window');
 
+// ✅ Utility: Log user activity
 const logActivity = async (token: string | null, action: string, details: string) => {
   try {
     await fetch(`${API_BASE}/activity`, {
@@ -60,17 +61,21 @@ interface GigHistory {
   location?: string;
   skills?: string[];
   workDuration?: string;
+  hoursWorked?: number;
 }
 
-interface IncentiveTracker {
+interface IncentiveProgress {
   consecutiveDays: number;
   totalHours: number;
-  cancellations: number;
-  lastWorkDate: string | null;
-  hoursToday: number;
+  cancellationsInWindow: number;
   eligibleFor5Days: boolean;
   eligibleFor10Days: boolean;
   eligibleFor20Days: boolean;
+  unlockedMilestones: string[];
+  claimedMilestones: string[];
+  availableMilestones: string[];
+  lastWorkDate: string | null;
+  error?: string;
 }
 
 interface Milestone {
@@ -80,6 +85,7 @@ interface Milestone {
   icon: string;
   color: string;
   completed: boolean;
+  claimed: boolean;
   progress: number;
 }
 
@@ -87,221 +93,344 @@ export default function GigHistory() {
   const router = useRouter();
   const { t } = useLanguage();
   const { accessToken } = useAuth();
+  
+  // ✅ State management
   const [gigs, setGigs] = useState<GigHistory[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [incentiveData, setIncentiveData] = useState<IncentiveTracker>({
-    consecutiveDays: 0,
-    totalHours: 0,
-    cancellations: 0,
-    lastWorkDate: null,
-    hoursToday: 0,
-    eligibleFor5Days: false,
-    eligibleFor10Days: false,
-    eligibleFor20Days: false,
-  });
+  const [incentiveData, setIncentiveData] = useState<IncentiveProgress | null>(null);
+  const [incentiveLoading, setIncentiveLoading] = useState(false);
+  const [incentiveError, setIncentiveError] = useState<string | null>(null);
+  const [page, setPage] = useState(1);
+  const [hasMore, setHasMore] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [claimingId, setClaimingId] = useState<string | null>(null); // ✅ Prevent claim race condition
   const [milestones, setMilestones] = useState<Milestone[]>([
-    {
-      id: '5days',
-      days: 5,
-      reward: 50,
-      icon: 'fire',
-      color: '#FF6B6B',
-      completed: false,
-      progress: 0,
-    },
-    {
-      id: '10days',
-      days: 10,
-      reward: 150,
-      icon: 'star',
-      color: '#FFD93D',
-      completed: false,
-      progress: 0,
-    },
-    {
-      id: '20days',
-      days: 20,
-      reward: 300,
-      icon: 'favorite',
-      color: '#FF1493',
-      completed: false,
-      progress: 0,
-    },
+    { id: '5days', days: 5, reward: 50, icon: 'fire', color: '#FF6B6B', completed: false, claimed: false, progress: 0 },
+    { id: '10days', days: 10, reward: 150, icon: 'star', color: '#FFD93D', completed: false, claimed: false, progress: 0 },
+    { id: '20days', days: 20, reward: 300, icon: 'favorite', color: '#FF1493', completed: false, claimed: false, progress: 0 },
   ]);
 
+  // ✅ Refs for cleanup (separate controllers for gigs vs incentive)
+  const gigsAbortRef = useRef<AbortController | null>(null);
+  const incentiveAbortRef = useRef<AbortController | null>(null);
+  const isMountedRef = useRef(true);
+
+  // ✅ Cleanup on unmount (abort both controllers)
   useEffect(() => {
-    fetchGigHistory();
+    return () => {
+      isMountedRef.current = false;
+      if (gigsAbortRef.current) gigsAbortRef.current.abort();
+      if (incentiveAbortRef.current) incentiveAbortRef.current.abort();
+    };
   }, []);
 
-  const fetchGigHistory = async () => {
+  // ✅ Fetch gigs and incentive progress when screen focuses
+  useFocusEffect(
+    React.useCallback(() => {
+      isMountedRef.current = true;
+      fetchGigHistory();
+      fetchIncentiveProgress();
+      return () => {
+        isMountedRef.current = false;
+      };
+    }, [accessToken])
+  );
+
+  // ✅ Fetch gigs with pagination
+  const fetchGigHistory = async (pageNum: number = 1, isFresh: boolean = true) => {
     try {
-      setLoading(true);
-      const token = accessToken;
-      const res = await fetch(`${API_BASE}/jobs/my-accepted`, {
-        headers: { Authorization: `Bearer ${token}` },
+      if (isFresh) setLoading(true);
+      else setLoadingMore(true);
+
+      if (!accessToken) {
+        setIncentiveError('Not authenticated');
+        return;
+      }
+
+      // ✅ Create new AbortController for gigs request
+      gigsAbortRef.current = new AbortController();
+
+      const res = await fetch(`${API_BASE}/jobs/my-accepted?page=${pageNum}&limit=20`, {
+        headers: { Authorization: `Bearer ${accessToken}` },
+        signal: gigsAbortRef.current.signal,
       });
+
+      // ✅ Handle authentication errors
+      if (res.status === 401) {
+        if (isMountedRef.current) {
+          setIncentiveError('Session expired. Please log in again.');
+          Alert.alert('Session Expired', 'Your session has expired. Please log in again.', [
+            { text: 'OK', onPress: () => router.push('/') }
+          ]);
+        }
+        return;
+      }
 
       if (res.ok) {
         const data = await res.json();
-        setGigs(data);
-        calculateIncentiveProgress(data);
-        await logActivity(accessToken, 'GIG_HISTORY_VIEWED', 'User viewed their gig history');
-      }
-    } catch (err) {
-      console.error('Error fetching gig history:', err);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const calculateIncentiveProgress = (gigsData: GigHistory[]) => {
-    try {
-      // ✅ IMPROVED: Calculate consecutive work days with proper validation
-      const completedGigs = gigsData.filter(g => g.paymentStatus === 'Paid');
-      const cancelledGigs = gigsData.filter(g => g.status === 'cancelled');
-      
-      // Sort completed gigs by date (oldest first)
-      const sortedGigs = [...completedGigs].sort((a, b) => {
-        return new Date(a.date).getTime() - new Date(b.date).getTime();
-      });
-
-      console.log(`📊 Total gigs: ${gigsData.length}, Completed: ${completedGigs.length}, Cancelled: ${cancelledGigs.length}`);
-
-      // ✅ Extract unique work dates (YYYY-MM-DD format)
-      const workDates = new Set<string>();
-      sortedGigs.forEach(gig => {
-        const dateStr = new Date(gig.date).toISOString().split('T')[0];
-        workDates.add(dateStr);
-      });
-
-      // ✅ Sort unique work dates
-      const uniqueDates = Array.from(workDates).sort();
-      console.log(`📅 Unique work dates: ${uniqueDates.length} days`);
-
-      // ✅ Find longest consecutive work days
-      let maxConsecutiveDays = 0;
-      let consecutiveStartDate: string | null = null;
-      let hoursInConsecutiveDays = 0;
-
-      for (let i = 0; i < uniqueDates.length; i++) {
-        let count = 1;
-        let totalHours = 0;
-
-        // Get work hours on first day
-        const firstDayGigs = sortedGigs.filter(
-          g => new Date(g.date).toISOString().split('T')[0] === uniqueDates[i]
-        );
-        totalHours += firstDayGigs.length * 8; // Assume 8 hours per gig
-
-        // Check consecutive days starting from this date
-        for (let j = i + 1; j < uniqueDates.length; j++) {
-          const curDate = new Date(uniqueDates[j]);
-          const prevDate = new Date(uniqueDates[j - 1]);
-          
-          // Calculate day difference
-          const timeDiff = curDate.getTime() - prevDate.getTime();
-          const dayDiff = Math.floor(timeDiff / (1000 * 60 * 60 * 24));
-
-          // If consecutive day (next day), continue counting
-          if (dayDiff === 1) {
-            count++;
-            const dayGigs = sortedGigs.filter(
-              g => new Date(g.date).toISOString().split('T')[0] === uniqueDates[j]
-            );
-            totalHours += dayGigs.length * 8; // Add 8 hours per gig
-          } else {
-            break; // Not consecutive anymore
-          }
-        }
-
-        // ✅ Update max consecutive days count
-        if (count > maxConsecutiveDays) {
-          maxConsecutiveDays = count;
-          consecutiveStartDate = uniqueDates[i];
-          hoursInConsecutiveDays = totalHours;
-        }
-      }
-
-      console.log(`✅ Max consecutive days: ${maxConsecutiveDays}, Hours: ${hoursInConsecutiveDays}`);
-
-      // ✅ Check for declines ONLY in the last 5-day window (if applicable)
-      let declinesInWindow = 0;
-      if (maxConsecutiveDays >= 5 && consecutiveStartDate) {
-        const startDate = new Date(consecutiveStartDate);
-        const endDate = new Date(startDate);
-        endDate.setDate(endDate.getDate() + 4); // +4 to include 5 days total
-
-        declinesInWindow = cancelledGigs.filter(gig => {
-          const gigDate = new Date(gig.date);
-          return gigDate >= startDate && gigDate <= endDate;
-        }).length;
         
-        console.log(`📍 5-day window [${consecutiveStartDate} to ${endDate.toISOString().split('T')[0]}]: ${declinesInWindow} declines`);
+        if (isMountedRef.current) {
+          // ✅ Handle both new format (with gigs property) and legacy format (array)
+          const gigsData = data.gigs || (Array.isArray(data) ? data : []);
+          
+          if (isFresh) {
+            setGigs(gigsData);
+          } else {
+            setGigs(prev => [...prev, ...gigsData]);
+          }
+          
+          // ✅ Check if more pages available
+          setHasMore(data.hasMore !== undefined ? data.hasMore : gigsData.length === 20);
+          setPage(pageNum);
+          
+          await logActivity(accessToken, 'GIG_HISTORY_VIEWED', 'User viewed their gig history');
+        }
       }
-
-      // ✅ Calculate metrics
-      const totalHours = sortedGigs.length * 8; // Total hours: gigs completed * 8 hours per gig
+    } catch (err: any) {
+      if (err.name === 'AbortError') {
+        console.log('Fetch aborted');
+        return; // ✅ Request was cancelled
+      }
       
-      // ✅ Verify criteria for 5-day eligibility:
-      // - At least 5 consecutive work days
-      // - At least 7 hours per day (35 hours total for 5 days = at least 35 hours)
-      // - NO declines during those 5 consecutive days
-      let eligible5Days = false;
-      if (maxConsecutiveDays >= 5 && hoursInConsecutiveDays >= 35 && declinesInWindow === 0) {
-        eligible5Days = true;
+      if (isMountedRef.current) {
+        console.error('Error fetching gig history:', err);
+        setIncentiveError('Failed to load gigs. Pull to refresh.');
       }
-
-      // Similar criteria for 10 and 20 days
-      const eligible10Days = maxConsecutiveDays >= 10 && hoursInConsecutiveDays >= 70 && declinesInWindow === 0;
-      const eligible20Days = maxConsecutiveDays >= 20 && hoursInConsecutiveDays >= 140 && declinesInWindow === 0;
-
-      console.log(`🎁 Eligibility - 5 Days: ${eligible5Days}, 10 Days: ${eligible10Days}, 20 Days: ${eligible20Days}`);
-
-      const tracker: IncentiveTracker = {
-        consecutiveDays: maxConsecutiveDays,
-        totalHours: Math.round(hoursInConsecutiveDays),
-        cancellations: declinesInWindow, // ✅ Now shows declines in the consecutive window only
-        lastWorkDate: sortedGigs.length > 0 ? sortedGigs[sortedGigs.length - 1].date : null,
-        hoursToday: 8,
-        eligibleFor5Days: eligible5Days,
-        eligibleFor10Days: eligible10Days,
-        eligibleFor20Days: eligible20Days,
-      };
-
-      setIncentiveData(tracker);
-
-      // Update milestones with progress
-      const updatedMilestones = milestones.map(m => ({
-        ...m,
-        progress: Math.min(maxConsecutiveDays / m.days, 1),
-        completed: (m.id === '5days' && eligible5Days) ||
-                  (m.id === '10days' && eligible10Days) ||
-                  (m.id === '20days' && eligible20Days),
-      }));
-      setMilestones(updatedMilestones);
-    } catch (err) {
-      console.error('Error calculating incentive progress:', err);
-      // Set default values on error
-      setIncentiveData({
-        consecutiveDays: 0,
-        totalHours: 0,
-        cancellations: 0,
-        lastWorkDate: null,
-        hoursToday: 0,
-        eligibleFor5Days: false,
-        eligibleFor10Days: false,
-        eligibleFor20Days: false,
-      });
+    } finally {
+      if (isMountedRef.current) {
+        setLoading(false);
+        setLoadingMore(false);
+      }
     }
   };
 
+  // ✅ Fetch incentive progress from backend (NOT calculated on frontend)
+  const fetchIncentiveProgress = async () => {
+    try {
+      setIncentiveLoading(true);
+      setIncentiveError(null);
+
+      if (!accessToken) {
+        setIncentiveError('Not authenticated');
+        return;
+      }
+
+      // ✅ Create new AbortController for incentive request
+      incentiveAbortRef.current = new AbortController();
+
+      const res = await fetch(`${API_BASE}/incentives/progress`, {
+        headers: { Authorization: `Bearer ${accessToken}` },
+        signal: incentiveAbortRef.current.signal,
+      });
+
+      // ✅ Handle authentication errors
+      if (res.status === 401) {
+        if (isMountedRef.current) {
+          setIncentiveError('Please log in to view incentives');
+        }
+        return;
+      }
+
+      if (res.ok) {
+        const data: IncentiveProgress = await res.json();
+        
+        if (isMountedRef.current) {
+          setIncentiveData(data);
+          setIncentiveError(null);
+
+          // ✅ Update milestones based on backend data (functional update to avoid stale closure)
+          setMilestones(prev => prev.map(m => {
+            const isClaimed = data.claimedMilestones?.includes(m.id) || false;
+            const isEligible = data.unlockedMilestones?.includes(m.id) || false;
+            
+            return {
+              ...m,
+              progress: Math.min(data.consecutiveDays / m.days, 1),
+              completed: isEligible,
+              claimed: isClaimed,
+            };
+          }));
+        }
+      } else {
+        const errData = await res.json().catch(() => ({}));
+        if (isMountedRef.current) {
+          setIncentiveError(errData.message || 'Failed to load incentive data');
+        }
+      }
+    } catch (err: any) {
+      if (err.name === 'AbortError') {
+        return; // ✅ Request was cancelled
+      }
+      
+      if (isMountedRef.current) {
+        console.error('Error fetching incentive progress:', err);
+        setIncentiveError('Failed to load incentive data. Pull to refresh.');
+      }
+    } finally {
+      if (isMountedRef.current) {
+        setIncentiveLoading(false);
+      }
+    }
+  };
+
+  // ✅ Handle infinite scroll - load more gigs
+  const handleLoadMore = () => {
+    if (!loadingMore && hasMore) {
+      fetchGigHistory(page + 1, false);
+    }
+  };
+
+  // ✅ Handle refresh
   const onRefresh = async () => {
     setRefreshing(true);
-    await fetchGigHistory();
+    setPage(1);
+    await Promise.all([
+      fetchGigHistory(1, true),
+      fetchIncentiveProgress(),
+    ]);
     setRefreshing(false);
   };
 
+  // ✅ Claim milestone reward
+  const claimMilestone = async (milestoneId: string) => {
+    // ✅ Prevent race condition - don't allow concurrent claims
+    if (claimingId) {
+      Alert.alert('Processing', 'Please wait for the current claim to complete');
+      return;
+    }
+
+    try {
+      Alert.alert('Claim Reward', `Claim ₹${milestones.find(m => m.id === milestoneId)?.reward || 0} reward?`, [
+        { text: 'Cancel' },
+        {
+          text: 'Claim',
+          onPress: async () => {
+            // ✅ Lock: Mark this milestone as claiming
+            setClaimingId(milestoneId);
+            
+            try {
+              const res = await fetch(`${API_BASE}/incentives/claim/${milestoneId}`, {
+                method: 'POST',
+                headers: { Authorization: `Bearer ${accessToken}` },
+              });
+
+              if (res.status === 401) {
+                Alert.alert('Session Expired', 'Please log in again', [
+                  { text: 'OK', onPress: () => router.push('/') }
+                ]);
+                return;
+              }
+
+              const data = await res.json();
+              
+              if (data.success) {
+                Alert.alert('Success', `₹${data.rewardAmount} added to your wallet!`);
+                await fetchIncentiveProgress(); // ✅ Refresh eligibility
+              } else if (res.status === 403) {
+                Alert.alert('Not Eligible', data.message || 'You are not eligible for this reward yet');
+              } else {
+                Alert.alert('Error', data.message || 'Failed to claim reward');
+              }
+            } catch (err) {
+              Alert.alert('Error', 'Failed to claim reward');
+              console.error(err);
+            } finally {
+              // ✅ Unlock: Clear claiming lock
+              setClaimingId(null);
+            }
+          }
+        }
+      ]);
+    } catch (err) {
+      console.error('Error claiming milestone:', err);
+    }
+  };
+
+  const renderIncentiveHeader = () => (
+    <LinearGradient
+      colors={['#667EEA', '#764BA2']}
+      start={{ x: 0, y: 0 }}
+      end={{ x: 1, y: 1 }}
+      style={styles.incentiveHeader}
+    >
+      <View style={styles.incentiveContent}>
+        <View style={styles.incentiveInfo}>
+          <Text style={styles.incentiveTitle}>🎁 {t('earnIncentives')}</Text>
+          <Text style={styles.incentiveSubtitle}>{t('completeTasksToUnlockRewards')}</Text>
+        </View>
+        {incentiveLoading ? (
+          <ActivityIndicator color="#fff" />
+        ) : incentiveError ? (
+          <Text style={styles.incentiveError}>{incentiveError}</Text>
+        ) : incentiveData ? (
+          <View style={styles.incentiveStats}>
+            <View style={styles.statItem}>
+              <Text style={styles.statValue}>{incentiveData.consecutiveDays}</Text>
+              <Text style={styles.statLabel}>Days</Text>
+            </View>
+            <View style={styles.statDivider} />
+            <View style={styles.statItem}>
+              <Text style={styles.statValue}>{incentiveData.totalHours}</Text>
+              <Text style={styles.statLabel}>{t('hours')}</Text>
+            </View>
+          </View>
+        ) : null}
+      </View>
+    </LinearGradient>
+  );
+
+  const renderConditionsCard = () => {
+    if (!incentiveData) return null;
+
+    return (
+      <View style={styles.conditionsCard}>
+        <Text style={styles.conditionsTitle}>✓ {t('requirementsStatus')} - 5 Day Milestone</Text>
+        <View style={styles.conditionsList}>
+          {/* 5 Days Requirement */}
+          <View style={[styles.condition, { borderLeftColor: incentiveData.consecutiveDays >= 5 ? '#27AE60' : '#BDC3C7' }]}>
+            <MaterialIcons 
+              name={incentiveData.consecutiveDays >= 5 ? 'check-circle' : 'cancel'} 
+              size={24} 
+              color={incentiveData.consecutiveDays >= 5 ? '#27AE60' : '#E74C3C'}
+            />
+            <View style={styles.conditionText}>
+              <Text style={styles.conditionLabel}>📅 {t('consecutiveDays')}</Text>
+              <Text style={styles.conditionValue}>{incentiveData.consecutiveDays}/5 days ({Math.round((Math.min(incentiveData.consecutiveDays / 5, 1)) * 100)}%)</Text>
+            </View>
+          </View>
+
+          {/* 8 Hours Per Day Requirement */}
+          <View style={[styles.condition, { borderLeftColor: incentiveData.totalHours >= 35 ? '#27AE60' : '#BDC3C7' }]}>
+            <MaterialIcons 
+              name={incentiveData.totalHours >= 35 ? 'check-circle' : 'cancel'} 
+              size={24} 
+              color={incentiveData.totalHours >= 35 ? '#27AE60' : '#E74C3C'}
+            />
+            <View style={styles.conditionText}>
+              <Text style={styles.conditionLabel}>⏰ 8 Hours Per Day</Text>
+              <Text style={styles.conditionValue}>{incentiveData.totalHours}/40 hours ({Math.round((Math.min(incentiveData.totalHours / 40, 1)) * 100)}%)</Text>
+            </View>
+          </View>
+
+          {/* NO Declines Requirement */}
+          <View style={[styles.condition, { borderLeftColor: incentiveData.cancellationsInWindow === 0 ? '#27AE60' : '#BDC3C7' }]}>
+            <MaterialIcons 
+              name={incentiveData.cancellationsInWindow === 0 ? 'check-circle' : 'cancel'} 
+              size={24} 
+              color={incentiveData.cancellationsInWindow === 0 ? '#27AE60' : '#E74C3C'}
+            />
+            <View style={styles.conditionText}>
+              <Text style={styles.conditionLabel}>🚫 No Declines in Period</Text>
+              <Text style={styles.conditionValue}>{incentiveData.cancellationsInWindow} job declines ({incentiveData.cancellationsInWindow === 0 ? '✔ Pass' : '✗ Failed'})</Text>
+            </View>
+          </View>
+        </View>
+      </View>
+    );
+  };
+
+  // ✅ Utility functions
   const formatDate = (date: string) => {
     try {
       return new Date(date).toLocaleDateString('en-IN', {
@@ -340,82 +469,7 @@ export default function GigHistory() {
     }
   };
 
-  const renderIncentiveHeader = () => (
-    <LinearGradient
-      colors={['#667EEA', '#764BA2']}
-      start={{ x: 0, y: 0 }}
-      end={{ x: 1, y: 1 }}
-      style={styles.incentiveHeader}
-    >
-      <View style={styles.incentiveContent}>
-        <View style={styles.incentiveInfo}>
-          <Text style={styles.incentiveTitle}>🎁 {t('earnIncentives')}</Text>
-          <Text style={styles.incentiveSubtitle}>{t('completeTasksToUnlockRewards')}</Text>
-        </View>
-        <View style={styles.incentiveStats}>
-          <View style={styles.statItem}>
-            <Text style={styles.statValue}>{incentiveData.consecutiveDays}</Text>
-            <Text style={styles.statLabel}>Days</Text>
-          </View>
-          <View style={styles.statDivider} />
-          <View style={styles.statItem}>
-            <Text style={styles.statValue}>{incentiveData.totalHours}</Text>
-            <Text style={styles.statLabel}>{t('hours')}</Text>
-          </View>
-        </View>
-      </View>
-    </LinearGradient>
-  );
-
-  const renderConditionsCard = () => (
-    <View style={styles.conditionsCard}>
-      <Text style={styles.conditionsTitle}>✓ {t('requirementsStatus')} - 5 Day Milestone</Text>
-      <View style={styles.conditionsList}>
-        {/* 5 Days Requirement */}
-        <View style={[styles.condition, { borderLeftColor: incentiveData.consecutiveDays >= 5 ? '#27AE60' : '#BDC3C7' }]}>
-          <MaterialIcons 
-            name={incentiveData.consecutiveDays >= 5 ? 'check-circle' : 'cancel'} 
-            size={24} 
-            color={incentiveData.consecutiveDays >= 5 ? '#27AE60' : '#E74C3C'}
-            style={{ fontWeight: 'bold' }}
-          />
-          <View style={styles.conditionText}>
-            <Text style={styles.conditionLabel}>📅 {t('consecutiveDays')}</Text>
-            <Text style={styles.conditionValue}>{incentiveData.consecutiveDays}/5 consecutive days ({Math.round((Math.min(incentiveData.consecutiveDays / 5, 1)) * 100)}%)</Text>
-          </View>
-        </View>
-
-        {/* 7 Hours Per Day Requirement */}
-        <View style={[styles.condition, { borderLeftColor: incentiveData.totalHours >= 35 ? '#27AE60' : '#BDC3C7' }]}>
-          <MaterialIcons 
-            name={incentiveData.totalHours >= 35 ? 'check-circle' : 'cancel'} 
-            size={24} 
-            color={incentiveData.totalHours >= 35 ? '#27AE60' : '#E74C3C'}
-            style={{ fontWeight: 'bold' }}
-          />
-          <View style={styles.conditionText}>
-            <Text style={styles.conditionLabel}>⏰ 7 Hours Per Day</Text>
-            <Text style={styles.conditionValue}>{incentiveData.totalHours}/35 hours ({Math.round((Math.min(incentiveData.totalHours / 35, 1)) * 100)}%)</Text>
-          </View>
-        </View>
-
-        {/* NO Declines Requirement */}
-        <View style={[styles.condition, { borderLeftColor: incentiveData.cancellations === 0 ? '#27AE60' : '#BDC3C7' }]}>
-          <MaterialIcons 
-            name={incentiveData.cancellations === 0 ? 'check-circle' : 'cancel'} 
-            size={24} 
-            color={incentiveData.cancellations === 0 ? '#27AE60' : '#E74C3C'}
-            style={{ fontWeight: 'bold' }}
-          />
-          <View style={styles.conditionText}>
-            <Text style={styles.conditionLabel}>🚫 No Declines in Period</Text>
-            <Text style={styles.conditionValue}>{incentiveData.cancellations} job declines ({incentiveData.cancellations === 0 ? '✔ Pass' : '✗ Failed'})</Text>
-          </View>
-        </View>
-      </View>
-    </View>
-  );
-
+  // ✅ Render milestone card with claim button
   const renderMilestoneCard = (milestone: Milestone) => (
     <View key={milestone.id} style={styles.milestoneCard}>
       <LinearGradient
@@ -432,33 +486,58 @@ export default function GigHistory() {
             <Text style={styles.milestoneTitle}>{milestone.days} {t('daysChallenge')}</Text>
             <Text style={styles.milestoneReward}>₹{milestone.reward} {t('reward')}</Text>
           </View>
-          {milestone.completed && (
+          {milestone.claimed && (
             <View style={styles.completedBadge}>
               <MaterialIcons name="check-circle" size={28} color="#27AE60" />
             </View>
           )}
         </View>
 
-        {!milestone.completed && (
-          <View style={styles.progressSection}>
-            <View style={styles.progressBar}>
-              <View
+        {!milestone.claimed && (
+          <>
+            <View style={styles.progressSection}>
+              <View style={styles.progressBar}>
+                <View
+                  style={[
+                    styles.progressFill,
+                    {
+                      width: `${Math.min(milestone.progress * 100, 100)}%`,
+                      backgroundColor: milestone.color,
+                    },
+                  ]}
+                />
+              </View>
+              <Text style={styles.progressText}>
+                {Math.round(milestone.progress * 100)}% Complete
+              </Text>
+            </View>
+
+            {milestone.completed && !milestone.claimed && (
+              <TouchableOpacity
                 style={[
-                  styles.progressFill,
+                  styles.claimButton,
                   {
-                    width: `${Math.min(milestone.progress * 100, 100)}%`,
                     backgroundColor: milestone.color,
+                    opacity: claimingId === milestone.id ? 0.6 : 1,
                   },
                 ]}
-              />
-            </View>
-            <Text style={styles.progressText}>
-              {Math.round(milestone.progress * 100)}% Complete
-            </Text>
-          </View>
+                onPress={() => claimMilestone(milestone.id)}
+                disabled={claimingId === milestone.id}
+              >
+                <MaterialIcons
+                  name="card-giftcard"
+                  size={20}
+                  color="#fff"
+                />
+                <Text style={styles.claimButtonText}>
+                  {claimingId === milestone.id ? 'Claiming...' : `Claim ₹${milestone.reward}`}
+                </Text>
+              </TouchableOpacity>
+            )}
+          </>
         )}
 
-        {milestone.completed && (
+        {milestone.claimed && (
           <View style={styles.completedStatus}>
             <Text style={styles.completedText}>🎉 {t('rewardUnlocked')}! ₹{milestone.reward}</Text>
           </View>
@@ -467,12 +546,11 @@ export default function GigHistory() {
     </View>
   );
 
-  const renderGigCard = (gig: GigHistory) => {
+  // ✅ Render single gig card
+  const renderGigCard = ({ item: gig }: { item: GigHistory }) => {
     const paymentStatus = gig.paymentStatus || 'Pending';
     const displayStatus = paymentStatus === 'Paid' ? t('completed') : t('pending');
-    
-    // ✅ Calculate work hours from workDuration if available
-    const workHours = gig.workDuration ? parseFloat(gig.workDuration) : 0;
+    const workHours = gig.hoursWorked || 0;
     const has8Hours = workHours >= 8;
     const isCancelled = gig.status === 'cancelled';
 
@@ -524,7 +602,7 @@ export default function GigHistory() {
               color={has8Hours ? '#27AE60' : '#E74C3C'} 
             />
             <Text style={[styles.requirementText, { color: has8Hours ? '#27AE60' : '#E74C3C' }]}>
-              {workHours > 0 ? `${workHours}h` : t('notAvailable')} {has8Hours ? '✔' : '✗'}
+              {workHours > 0 ? `${workHours}h` : 'N/A'} {has8Hours ? '✔' : '✗'}
             </Text>
           </View>
           
@@ -553,9 +631,93 @@ export default function GigHistory() {
     );
   };
 
-  const completedGigs = gigs.filter(g => g.paymentStatus === 'Paid');
-  const pendingGigs = gigs.filter(g => g.paymentStatus !== 'Paid' && g.status !== 'cancelled');
-  const cancelledGigs = gigs.filter(g => g.status === 'cancelled');
+  // ✅ Memoize gig counts with single-pass optimization (avoid 3 separate filter calls)
+  const { completedCount, pendingCount, cancelledCount } = React.useMemo(() => {
+    let completed = 0;
+    let pending = 0;
+    let cancelled = 0;
+
+    gigs.forEach(g => {
+      if (g.status === 'cancelled') {
+        cancelled++;
+      } else if (g.paymentStatus === 'Paid') {
+        completed++;
+      } else {
+        pending++;
+      }
+    });
+
+    return { completedCount: completed, pendingCount: pending, cancelledCount: cancelled };
+  }, [gigs]);
+
+  // ✅ FlatList header component
+  // ✅ Memoize ListHeader to prevent unnecessary FlatList re-renders
+  const ListHeader = React.useMemo(
+    () => (
+      <>
+        {/* Incentive Header */}
+        {renderIncentiveHeader()}
+
+        {/* Conditions Card */}
+        {renderConditionsCard()}
+
+        {/* Milestones Section */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>📊 {t('milestones')}</Text>
+          {milestones.map(milestone => renderMilestoneCard(milestone))}
+        </View>
+
+        {/* Gig Status Overview */}
+        <View style={styles.statusOverview}>
+          <View style={styles.statusOverviewCard}>
+            <View style={styles.statusOverviewIcon}>
+              <MaterialIcons name="check-circle" size={28} color="#27AE60" />
+            </View>
+            <Text style={styles.statusOverviewValue}>{completedCount}</Text>
+            <Text style={styles.statusOverviewLabel}>{t('completed')}</Text>
+          </View>
+
+          <View style={styles.statusOverviewCard}>
+            <View style={styles.statusOverviewIcon}>
+              <MaterialIcons name="schedule" size={28} color="#F39C12" />
+            </View>
+            <Text style={styles.statusOverviewValue}>{pendingCount}</Text>
+            <Text style={styles.statusOverviewLabel}>{t('pending')}</Text>
+          </View>
+
+          <View style={styles.statusOverviewCard}>
+            <View style={styles.statusOverviewIcon}>
+              <MaterialIcons name="cancel" size={28} color="#E74C3C" />
+            </View>
+            <Text style={styles.statusOverviewValue}>{cancelledCount}</Text>
+            <Text style={styles.statusOverviewLabel}>{t('cancelled')}</Text>
+          </View>
+        </View>
+
+        {/* Gigs List Title */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>📋 {t('allGigs')}</Text>
+        </View>
+      </>
+    ),
+    [incentiveData, milestones, completedCount, pendingCount, cancelledCount, t, renderIncentiveHeader, renderConditionsCard, renderMilestoneCard]
+  );
+
+  // ✅ FlatList empty component
+  const ListEmpty = () => (
+    <View style={styles.emptyState}>
+      <MaterialIcons name="work-outline" size={64} color="#BDC3C7" />
+      <Text style={styles.emptyTitle}>{t('noGigsYet')}</Text>
+      <Text style={styles.emptyText}>{t('startAcceptingJobs')}</Text>
+    </View>
+  );
+
+  // ✅ FlatList footer for load more
+  const ListFooter = () => {
+    if (!hasMore) return <View style={{ height: 30 }} />;
+    if (!loadingMore) return <View style={{ height: 10 }} />;
+    return <ActivityIndicator size="small" color="#667EEA" style={{ marginVertical: 20 }} />;
+  };
 
   return (
     <View style={[styles.container, { paddingTop: Platform.OS === 'ios' ? 12 : 8 }]}>
@@ -573,65 +735,23 @@ export default function GigHistory() {
           <ActivityIndicator size="large" color="#667EEA" />
         </View>
       ) : (
-        <ScrollView
-          showsVerticalScrollIndicator={false}
+        <FlatList
+          data={gigs}
+          renderItem={renderGigCard}
+          keyExtractor={(item) => item._id}
+          ListHeaderComponent={ListHeader}
+          ListEmptyComponent={ListEmpty}
+          ListFooterComponent={ListFooter}
+          onEndReached={handleLoadMore}
+          onEndReachedThreshold={0.5}
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
-        >
-          {/* Incentive Header */}
-          {renderIncentiveHeader()}
-
-          {/* Conditions Card */}
-          {renderConditionsCard()}
-
-          {/* Milestones Section */}
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>📊 {t('milestones')}</Text>
-            {milestones.map(milestone => renderMilestoneCard(milestone))}
-          </View>
-
-          {/* Gig Status Overview */}
-          <View style={styles.statusOverview}>
-            <View style={styles.statusOverviewCard}>
-              <View style={styles.statusOverviewIcon}>
-                <MaterialIcons name="check-circle" size={28} color="#27AE60" />
-              </View>
-              <Text style={styles.statusOverviewValue}>{completedGigs.length}</Text>
-              <Text style={styles.statusOverviewLabel}>{t('completed')}</Text>
-            </View>
-
-            <View style={styles.statusOverviewCard}>
-              <View style={styles.statusOverviewIcon}>
-                <MaterialIcons name="schedule" size={28} color="#F39C12" />
-              </View>
-              <Text style={styles.statusOverviewValue}>{pendingGigs.length}</Text>
-              <Text style={styles.statusOverviewLabel}>{t('pending')}</Text>
-            </View>
-
-            <View style={styles.statusOverviewCard}>
-              <View style={styles.statusOverviewIcon}>
-                <MaterialIcons name="cancel" size={28} color="#E74C3C" />
-              </View>
-              <Text style={styles.statusOverviewValue}>{cancelledGigs.length}</Text>
-              <Text style={styles.statusOverviewLabel}>{t('cancelled')}</Text>
-            </View>
-          </View>
-
-          {/* Gigs List Section */}
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>📋 {t('allGigs')}</Text>
-            {gigs.length === 0 ? (
-              <View style={styles.emptyState}>
-                <MaterialIcons name="work-outline" size={64} color="#BDC3C7" />
-                <Text style={styles.emptyTitle}>{t('noGigsYet')}</Text>
-                <Text style={styles.emptyText}>{t('startAcceptingJobs')}</Text>
-              </View>
-            ) : (
-              gigs.map(gig => renderGigCard(gig))
-            )}
-          </View>
-
-          <View style={{ height: 30 }} />
-        </ScrollView>
+          showsVerticalScrollIndicator={false}
+          scrollIndicatorInsets={{ right: 1 }}
+          contentContainerStyle={{ flexGrow: 1 }}
+          removeClippedSubviews={true}
+          initialNumToRender={10}
+          maxToRenderPerBatch={20}
+        />
       )}
     </View>
   );
@@ -1014,5 +1134,27 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: '#7F8C8D',
     textAlign: 'center',
+  },
+  // ✅ Claim button styles
+  claimButton: {
+    marginTop: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    borderRadius: 8,
+    gap: 6,
+  },
+  claimButtonText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#fff',
+  },
+  // ✅ Error styles
+  incentiveError: {
+    fontSize: 12,
+    color: '#E74C3C',
+    fontStyle: 'italic',
   },
 });

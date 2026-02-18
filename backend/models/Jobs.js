@@ -52,6 +52,7 @@ const jobSchema = new mongoose.Schema({
   // Time tracking fields
   acceptedAt: Date, // when worker accepts the job
   timeSpentMinutes: Number, // duration from acceptance to payment in minutes
+  hoursWorked: { type: Number, default: 0 }, // ✅ Hours worked on this job (0-24 per day)
   // Rating fields - contractor rates worker after payment
   rating: {
     stars: { type: Number, min: 1, max: 5 }, // 1-5 star rating

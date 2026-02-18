@@ -24,10 +24,18 @@ export default function VerifyOtpScreen() {
   useEffect(() => {
     (async () => {
       try {
-        const userStr = await AsyncStorage.getItem('user');
-        if (userStr) {
-          const user = JSON.parse(userStr);
-          if (user?.phone) setPhone(user.phone);
+        // ✅ NEW: Load phone from tempRegistration (pre-OTP) instead of user (post-OTP)
+        const tempReg = await AsyncStorage.getItem('tempRegistration');
+        if (tempReg) {
+          const tempData = JSON.parse(tempReg);
+          if (tempData?.phone) setPhone(tempData.phone);
+        } else {
+          // Fallback: try to load from user if somehow it was saved
+          const userStr = await AsyncStorage.getItem('user');
+          if (userStr) {
+            const user = JSON.parse(userStr);
+            if (user?.phone) setPhone(user.phone);
+          }
         }
       } catch (err) {
         console.warn('Failed to load phone from storage', err);
@@ -52,11 +60,22 @@ export default function VerifyOtpScreen() {
         return Alert.alert('Verification Failed', data?.message || 'Invalid or expired OTP');
       }
 
+      // ✅ SECURITY: Now that OTP is verified, persist full user data
       // Save tokens & user via AuthProvider
       const accessToken = data.accessToken || data.token || null;
       const refreshToken = data.refreshToken || null;
 
+      // ✅ Persist full user object (wallet, profile, etc.) only AFTER OTP
+      if (data.user) {
+        await AsyncStorage.setItem('user', JSON.stringify(data.user));
+        console.log('✅ Full user data persisted after OTP verification');
+      }
+
       await saveTokens(accessToken, refreshToken, data.user || null);
+
+      // ✅ Clean up temporary registration data
+      await AsyncStorage.removeItem('tempRegistration');
+      console.log('✅ Temporary registration data cleared');
 
       Alert.alert('Success', 'Phone verified — you are logged in');
 

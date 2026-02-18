@@ -18,6 +18,21 @@ type User = {
   role: 'worker' | 'contractor';
 };
 
+// ✅ HELPER: Validate password strength
+function validatePasswordStrength(password: string): { isValid: boolean; error?: string } {
+  if (!password || password.length < 6) {
+    return { isValid: false, error: 'Password must be at least 8 characters long' };
+  }
+  if (!/\d/.test(password)) {
+    return { isValid: false, error: 'Password must contain at least one number' };
+  }
+  if (!/[A-Z]/.test(password)) {
+    return { isValid: false, error: 'Password must contain at least one uppercase letter' };
+  }
+
+  return { isValid: true };
+}
+
 // ✅ HELPER: Wait for FCM token with timeout and retries
 async function waitForFcmToken(timeoutMs = 8000) {
   console.log('⏳ Waiting for FCM token (timeout: ' + timeoutMs + 'ms)...');
@@ -138,6 +153,9 @@ export default function Register() {
   const [agreedToTerms, setAgreedToTerms] = useState(false);
   const [termsModalVisible, setTermsModalVisible] = useState(false);
 
+  // ✅ CONSTANT: Terms version for audit trail
+  const TERMS_VERSION = '1.0';
+
   // ✅ FIX: Check if user is already logged in and redirect
   useEffect(() => {
     if (!authLoading && accessToken && user) {
@@ -149,6 +167,12 @@ export default function Register() {
   const handleRegister = async () => {
     if (!name || !phone || !password)
       return Alert.alert(t('error'), t('required'));
+
+    // ✅ Validate password strength
+    const passwordValidation = validatePasswordStrength(password);
+    if (!passwordValidation.isValid) {
+      return Alert.alert(t('error'), passwordValidation.error || 'Invalid password');
+    }
 
     // ✅ Validate terms and conditions agreement
     if (!agreedToTerms) {
@@ -163,37 +187,10 @@ export default function Register() {
 
     setIsLoading(true); // ✅ Show loading spinner
     try {
-      // ✅ GET LOCATION - Request GPS coordinates during registration
-      let latitude = null;
-      let longitude = null;
+      // ✅ NOTE: Location is NOT requested during registration
+      // Location will be obtained during login when worker goes online
+      // This prevents location spoofing during signup (VPNs, fake GPS)
       
-      console.log('📍 Requesting location during registration...');
-      try {
-        const locationResult = await getLocationWithRetries(3);
-        latitude = locationResult.latitude;
-        longitude = locationResult.longitude;
-        
-        if (latitude !== null && longitude !== null) {
-          console.log(`✅ Location obtained during registration:`, { latitude, longitude });
-          // ✅ CACHE: Save location timestamp so login won't re-request if fresh
-          await AsyncStorage.setItem('lastKnownLocation', JSON.stringify({
-            latitude,
-            longitude,
-            timestamp: Date.now(),
-          }));
-          console.log('💾 Location cached for login reuse');
-        } else {
-          console.warn('⚠️ Location not available - user will need to enable location during login');
-          Alert.alert(
-            'Location Required',
-            'We need your location to show available jobs nearby. You can enable location in the next step or in Settings.',
-            [{ text: 'OK' }]
-          );
-        }
-      } catch (locErr) {
-        console.warn('⚠️ Error requesting location during registration:', (locErr as Error).message);
-      }
-
       // ✅ GET FCM TOKEN - Wait for it to be available (race condition fix)
       let fcmToken = null;
       console.log('📋 Starting registration process...');
@@ -229,9 +226,9 @@ export default function Register() {
           password, 
           role, 
           agreedToTerms,
-          latitude,  // ✅ NEW: Send location during registration
-          longitude, // ✅ NEW: Send location during registration
-          fcmToken,  // ✅ NEW: Send FCM token during registration
+          termsVersion: TERMS_VERSION,  // ✅ NEW: Include terms version for audit
+          fcmToken,  // ✅ FCM token for push notifications
+          // ❌ REMOVED: latitude, longitude - location only obtained at login
         }),
       });
 
@@ -239,8 +236,22 @@ export default function Register() {
 
       if (data.success) {
         console.log('✅ Registration successful');
-        // Save user locally for convenience
-        await AsyncStorage.setItem('user', JSON.stringify(data.user));
+        
+        // ✅ SECURITY: Store ONLY temporary registration data (phone, name, role)
+        // ❌ DO NOT store full user.id, wallet, or profile yet
+        // Full user data will be persisted only AFTER OTP verification
+        const tempRegistrationData = {
+          phone: phoneTrim,
+          name: name,
+          role: role,
+          password: password,  // Store temporarily in memory for session
+          timestamp: Date.now(),
+        };
+        
+        // Store temporarily for OTP screen to access
+        await AsyncStorage.setItem('tempRegistration', JSON.stringify(tempRegistrationData));
+        console.log('💾 Temporary registration data stored (will persist full user after OTP)');
+        
         if (fcmToken) {
           await AsyncStorage.setItem('fcmToken', fcmToken);
           console.log('💾 FCM Token saved to AsyncStorage');

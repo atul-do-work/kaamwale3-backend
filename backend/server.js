@@ -100,6 +100,10 @@ app.use("/admin", adminRoutes);
 const uploadRoutes = require("./routes/Upload");
 app.use("/upload", uploadRoutes);
 
+// ✅ Mount incentive routes for milestone eligibility and rewards
+const incentiveRoutes = require("./routes/incentives");
+app.use("/incentives", incentiveRoutes);
+
 // Ensure uploads folder exists
 const fs = require("fs").promises;
 const uploadsDir = path.join(__dirname, "uploads");
@@ -998,9 +1002,23 @@ app.post("/users/update-profile", authenticateToken, async (req, res) => {
 // ---------------- USER ROUTES ----------------
 app.post("/users/register", async (req, res) => {
   try {
-    const { name, phone, password, role, agreedToTerms, latitude, longitude, fcmToken } = req.body; // ✅ Include coordinates and fcmToken
+    const { name, phone, password, role, agreedToTerms, termsVersion, latitude, longitude, fcmToken, deviceId, appVersion, termsHash } = req.body;
     if (!name || !phone || !password || !role)
       return res.status(400).json({ success: false, message: "All fields required" });
+
+    // ✅ Validate password strength on backend
+    if (!password || password.length < 8) {
+      return res.status(400).json({ success: false, message: "Password must be at least 8 characters long" });
+    }
+    if (!/\d/.test(password)) {
+      return res.status(400).json({ success: false, message: "Password must contain at least one number" });
+    }
+    if (!/[A-Z]/.test(password)) {
+      return res.status(400).json({ success: false, message: "Password must contain at least one uppercase letter" });
+    }
+    if (!/[a-z]/.test(password)) {
+      return res.status(400).json({ success: false, message: "Password must contain at least one lowercase letter" });
+    }
 
     // ✅ Validate terms agreement
     if (!agreedToTerms) {
@@ -1018,95 +1036,12 @@ app.post("/users/register", async (req, res) => {
       role,
       agreedToTerms: true, // ✅ Save agreement status
       agreedToTermsAt: new Date(), // ✅ Save when user agreed
-      fcmToken: fcmToken || null, // ✅ NEW: Store FCM token from registration
+      fcmToken: fcmToken || null, // ✅ Store FCM token from registration
     });
 
-    // ✅ NEW: Store location during registration if provided
-    if (latitude !== undefined && latitude !== null && longitude !== undefined && longitude !== null) {
-      try {
-        const parsedLat = parseFloat(latitude);
-        const parsedLon = parseFloat(longitude);
-        
-        if (!isNaN(parsedLat) && !isNaN(parsedLon)) {
-          newUser.latitude = parsedLat;
-          newUser.longitude = parsedLon;
-          newUser.location = {
-            type: 'Point',
-            coordinates: [parsedLon, parsedLat],
-          };
-          newUser.locationLastUpdated = new Date();
-
-          // ✅ NEW: Find district during registration
-          const District = require('./models/City'); // File is City.js, exports as "District" model
-          const point = {
-            type: 'Point',
-            coordinates: [parsedLon, parsedLat],
-          };
-
-          // ✅ DEBUG: Check district count in DB
-          try {
-            const districtCount = await District.countDocuments();
-            console.log(`📊 Total districts in DB: ${districtCount}`);
-            
-            if (districtCount === 0) {
-              console.warn(`⚠️ [Register] No districts found in database! Import GeoJSON first via POST /admin/districts/import-geojson`);
-              newUser.city = 'Unknown';
-              newUser.state = 'Unknown';
-            } else {
-              let district = await District.findOne({
-                geometry: {
-                  $geoIntersects: {
-                    $geometry: point,
-                  },
-                },
-              }).lean();
-
-              // ✅ FALLBACK: Find nearest district by centroid if exact match not found
-              if (!district) {
-                console.warn(`⚠️ [Register] No exact polygon match for [${parsedLon}, ${parsedLat}], trying nearest centroid...`);
-                district = await District.findOne(
-                  {
-                    centroid: {
-                      $nearSphere: {
-                        $geometry: point,
-                        $maxDistance: 50000,
-                      },
-                    },
-                  },
-                  null,
-                  { lean: true }
-                );
-
-                if (district) {
-                  console.log(`✅ [Register] Found nearest district by centroid: ${district.name}, ${district.state}`);
-                } else {
-                  console.warn(`⚠️ [Register] No district found within 50km for [${parsedLon}, ${parsedLat}]`);
-                }
-              }
-
-              if (district) {
-                newUser.city = district.name;
-                newUser.state = district.state;
-                console.log(`✅ [Register] Location saved: ${district.name}, ${district.state} (${parsedLat}, ${parsedLon})`);
-              } else {
-                console.warn(`⚠️ [Register] No district found for [${parsedLon}, ${parsedLat}] - using Unknown`);
-                newUser.city = 'Unknown';
-                newUser.state = 'Unknown';
-              }
-            }
-          } catch (distErr) {
-            console.error('❌ [Register] Error querying districts:', distErr.message);
-            newUser.city = 'Unknown';
-            newUser.state = 'Unknown';
-          }
-        } else {
-          console.warn(`⚠️ [Register] Invalid coordinates: lat=${latitude}, lon=${longitude}`);
-        }
-      } catch (locErr) {
-        console.error('❌ [Register] Error processing location:', locErr.message);
-        // Continue with registration even if location processing fails
-      }
-    }
+    // ✅ NOTE: Location is NOT stored during registration
+    // Location will be obtained during login to prevent spoofing
+    // Removing latitude/longitude from registration request
 
     await newUser.save();
 
@@ -1125,11 +1060,32 @@ app.post("/users/register", async (req, res) => {
           skills: [],
           rating: 5,
           isAvailable: false,
-          location: newUser.location || { type: "Point", coordinates: [0, 0] },
+          location: { type: "Point", coordinates: [0, 0] },
         });
         await newWorker.save();
         console.log(`✅ Worker record created for ${name} (${phone})`);
       }
+    }
+
+    // ✅ SECURITY: Log terms agreement cryptographically
+    try {
+      const termsAudit = require('./utils/termsAudit');
+      const auditResult = await termsAudit.logTermsAgreement(req, {
+        phone,
+        termsVersion: termsVersion || '1.0',
+        role,
+        appVersion: appVersion || 'unknown',
+        deviceId: deviceId || '',
+        termsHash: termsHash || '',
+      });
+      
+      if (!auditResult.success && auditResult.isDuplicate) {
+        // User somehow registered twice - log but continue
+        console.warn(`⚠️ [Register] Duplicate terms agreement for ${phone}, but proceeding with registration`);
+      }
+    } catch (termsErr) {
+      console.error('❌ [Register] Error logging terms agreement:', termsErr.message);
+      // Continue registration even if terms audit fails (non-blocking)
     }
 
     // issue refresh token and access token
@@ -2030,7 +1986,7 @@ app.post("/jobs/upload-image", authenticateToken, fileUpload(), async (req, res)
 
 app.post("/jobs/post", authenticateToken, async (req, res) => {
   try {
-    const { title, description, workerType, amount, lat, lon, date, imageUrl, startTime, endTime } = req.body;
+    const { title, description, workerType, amount, lat, lon, date, imageUrl, startTime, endTime, bulkHiring, requiredWorkers } = req.body;
     const contractorName = req.user.name;
 
     if (!title || !lat || !lon || lat === 0 || lon === 0)
@@ -2042,21 +1998,26 @@ app.post("/jobs/post", authenticateToken, async (req, res) => {
       await wallet.save();
     }
 
-    if (wallet.balance < 200)
+    // 💰 Calculate required posting fee based on bulk hiring
+    const workersCount = (bulkHiring === true || bulkHiring === 'true') ? (parseInt(requiredWorkers) || 1) : 1;
+    const requiredBalance = workersCount * 25;
+
+    if (wallet.balance < requiredBalance) {
       return res.status(400).json({
         success: false,
-        message: "Insufficient wallet balance to post job (min ₹200 required)"
+        message: `Insufficient wallet balance. You need ₹${requiredBalance} to post this job for ${workersCount} worker(s). Current balance: ₹${wallet.balance}`
       });
+    }
 
-    wallet.balance -= 25;
+    // ✅ Deduct dynamic fee based on number of workers
+    wallet.balance -= requiredBalance;
     wallet.transactions.push({
       type: "job_post_fee",
-      amount: 25,
+      amount: requiredBalance,
+      workersCount: workersCount,
       date: new Date(),
     });
     await wallet.save();
-
-    const { bulkHiring, requiredWorkers } = req.body;
 
     const newJob = new Job({
       // ✅ MongoDB auto-generates _id - no need for custom id field
@@ -2591,18 +2552,41 @@ app.get("/jobs/my-accepted", authenticateToken, async (req, res) => {
     const workerName = req.user.name;
     const workerPhone = req.user.phone;
     
-    // Get all jobs accepted by this worker (using phone, not name) - explicitly include all fields
-    const jobs = await Job.find({ acceptedBy: workerPhone }).lean(); // ✅ Use phone
+    // ✅ Pagination parameters
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 50; // Default 50, max 100
+    const pageSize = Math.min(limit, 100);
+    const skip = (page - 1) * pageSize;
+
+    // ✅ Get total count for pagination info
+    const totalCount = await Job.countDocuments({ acceptedBy: workerPhone });
+
+    // ✅ Get paginated jobs - sorted by date descending (newest first)
+    // ✅ IMPORTANT: Always return hoursWorked from recentGigs in Worker model
+    const jobs = await Job.find({ acceptedBy: workerPhone })
+      .sort({ date: -1 }) // Newest first
+      .skip(skip)
+      .limit(pageSize)
+      .lean();
     
-    // Log jobs with rating info for debugging
+    // ✅ Log jobs with rating info for debugging
     jobs.forEach((job) => {
       if (job.rating) {
         console.log(`⭐ Fetched job ${job._id} with rating:`, job.rating);
       }
     });
+
+    console.log(`✅ Worker ${workerName} (${workerPhone}): page ${page}, returned ${jobs.length}/${totalCount} jobs`);
     
-    console.log(`✅ Worker ${workerName} (phone: ${workerPhone}) retrieved ${jobs.length} accepted jobs`);
-    res.json(jobs);
+    // ✅ Return array format (backward compatible)
+    res.json({
+      gigs: jobs,
+      page,
+      limit: pageSize,
+      totalCount,
+      totalPages: Math.ceil(totalCount / pageSize),
+      hasMore: skip + pageSize < totalCount
+    });
   } catch (err) {
     console.error("Failed to load worker's accepted jobs", err);
     res.status(500).json({ message: "Failed to load jobs" });

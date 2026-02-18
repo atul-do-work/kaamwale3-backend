@@ -153,7 +153,7 @@ export default function VerificationScreen(): React.ReactElement {
 
   // Upload document using multipart/form-data (preferred for mobile)
   const uploadDocument = async () => {
-    if (!selectedDocType || !selectedFile || !token) {
+    if (!selectedDocType || !selectedFile || !accessToken) {
       Alert.alert("Error", "Please select document type and file");
       return;
     }
@@ -176,7 +176,7 @@ export default function VerificationScreen(): React.ReactElement {
       const response = await fetch(`${SERVER_URL}/verification/upload`, {
         method: 'POST',
         headers: {
-          Authorization: `Bearer ${token}`,
+          Authorization: `Bearer ${accessToken}`,
           // Do NOT set Content-Type; fetch will set multipart boundary
         },
         body: form as any,

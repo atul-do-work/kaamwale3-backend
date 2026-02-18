@@ -89,6 +89,7 @@ export default function ContractorWalletAttendance() {
   const [depositModalHtml, setDepositModalHtml] = useState("");
   const [currentDepositAmount, setCurrentDepositAmount] = useState(0);
   const [currentDepositOrderId, setCurrentDepositOrderId] = useState("");
+  const [depositLoading, setDepositLoading] = useState(false);
 
   // ✅ Bank account states
   const [bankAccount, setBankAccount] = useState<any>(null);
@@ -505,6 +506,8 @@ export default function ContractorWalletAttendance() {
 
   // ✅ Confirm Deposit with Razorpay
   const confirmDeposit = async () => {
+    if (depositLoading) return; // ✅ Prevent double-submission
+    
     if (!depositAmount || Number(depositAmount) <= 0) {
       Alert.alert(t('error'), t('enterValidAmount'));
       return;
@@ -515,6 +518,7 @@ export default function ContractorWalletAttendance() {
       return;
     }
 
+    setDepositLoading(true);
     try {
       // Step 1: Create deposit order
       const orderRes = await api.post(`/wallet/deposit/create-order`, {
@@ -526,9 +530,11 @@ export default function ContractorWalletAttendance() {
         return;
       }
 
-      const { orderId, key_id } = orderRes.data;
+      // ✅ SECURITY: Get amount from backend response, NOT frontend calculation
+      const { orderId, key_id, amount } = orderRes.data;
 
       // Step 2: Create Razorpay checkout HTML
+      // ✅ SECURITY: Use real authenticated user data + amount from backend
       const razorpayHtml = `
         <!DOCTYPE html>
         <html>
@@ -546,7 +552,7 @@ export default function ContractorWalletAttendance() {
           <script>
             var options = {
               "key": "${key_id}",
-              "amount": ${Number(depositAmount) * 100},
+              "amount": ${amount},
               "currency": "INR",
               "name": "Kaamwale Wallet",
               "description": "Wallet Deposit",
@@ -560,9 +566,9 @@ export default function ContractorWalletAttendance() {
                 }));
               },
               "prefill": {
-                "name": "User",
-                "email": "user@example.com",
-                "contact": "9999999999"
+                "name": "${authUser?.name || ''}",
+                "email": "${authUser?.email || ''}",
+                "contact": "${authUser?.phone || ''}"
               },
               "theme": {
                 "color": "#1a2f4d"
@@ -588,6 +594,8 @@ export default function ContractorWalletAttendance() {
       setCurrentDepositOrderId(orderId);
     } catch (err: any) {
       Alert.alert(t('error'), err.response?.data?.message || t('failedInitiateDeposit'));
+    } finally {
+      setDepositLoading(false);
     }
   };
 
@@ -601,7 +609,17 @@ export default function ContractorWalletAttendance() {
         await verifyDeposit(data);
       } else if (data.type === "deposit_failed") {
         setDepositModalVisible(false);
-        Alert.alert(t('error'), data.error || t('depositCancelled'));
+        // ✅ Offer retry instead of just closing
+        Alert.alert(
+          t('error'),
+          data.error || t('depositCancelled'),
+          [
+            { text: "Close", onPress: () => {} },
+            { text: "Try Again", onPress: () => {
+              setDepositModalVisible(true);
+            }, style: "default" }
+          ]
+        );
       }
     } catch (error) {
       console.error("Error handling deposit response:", error);
@@ -618,6 +636,8 @@ export default function ContractorWalletAttendance() {
       });
 
       setDepositModalVisible(false);
+      // ✅ Clear WebView HTML from memory
+      setDepositModalHtml('');
 
       if (res.data.success) {
         // ✅ DON'T update state here - let socket.on('walletUpdated') handle it
@@ -625,12 +645,36 @@ export default function ContractorWalletAttendance() {
         Alert.alert(t('success'), `₹${currentDepositAmount} ` + t('deposited'));
         setDepositAmount("");
         setShowDepositInput(false);
+        // ✅ Fallback: Fetch wallet if socket fails
+        await fetchWallet();
       } else {
-        Alert.alert(t('error'), res.data.message || t('depositVerificationFailed'));
+        // ✅ Offer retry for verification failures
+        Alert.alert(
+          t('error'),
+          res.data.message || t('depositVerificationFailed'),
+          [
+            { text: "Close", onPress: () => {} },
+            { text: "Retry", onPress: () => verifyDeposit(data), style: "default" }
+          ]
+        );
       }
     } catch (err: any) {
       setDepositModalVisible(false);
-      Alert.alert(t('error'), err.response?.data?.message || t('depositVerificationFailed'));
+      // ✅ Clear WebView HTML from memory
+      setDepositModalHtml('');
+      const errorMsg = err.response?.data?.message || t('depositVerificationFailed');
+      // ✅ Offer retry for network/timeout errors
+      Alert.alert(
+        t('error'),
+        errorMsg,
+        [
+          { text: "Close", onPress: () => {  
+            // ✅ Even if user closes error, try to fetch wallet as fallback
+            fetchWallet();
+          } },
+          { text: "Retry", onPress: () => verifyDeposit(data), style: "default" }
+        ]
+      );
     }
   };
 
@@ -818,11 +862,12 @@ export default function ContractorWalletAttendance() {
           {/* Deposit + Withdraw Buttons in one line */}
           <View style={{ flexDirection: "row", justifyContent: "space-between", marginTop: 15 }}>
             <TouchableOpacity
-              style={[styles.actionButton, { backgroundColor: "#1a2f4d", flex: 1, marginRight: 5 }]}
+              style={[styles.actionButton, { backgroundColor: "#1a2f4d", flex: 1, marginRight: 5, opacity: depositLoading ? 0.6 : 1 }]}
               onPress={() => {
                 setShowDepositInput(!showDepositInput);
                 setShowWithdrawInput(false);
               }}
+              disabled={depositLoading}
             >
               <Text style={styles.buttonText}>Deposit</Text>
             </TouchableOpacity>
@@ -840,20 +885,32 @@ export default function ContractorWalletAttendance() {
 
           {/* Conditional Input Fields */}
           {showDepositInput && (
-            <View style={styles.buttonRow}>
-              <TextInput
-                placeholder="Enter deposit amount"
-                style={styles.input}
-                value={depositAmount}
-                onChangeText={setDepositAmount}
-                keyboardType="numeric"
-              />
-              <TouchableOpacity
-                style={[styles.actionButton, { backgroundColor: "#1a2f4d" }]}
-                onPress={confirmDeposit}
-              >
-                <Text style={styles.buttonText}>Submit</Text>
-              </TouchableOpacity>
+            <View>
+              <View style={styles.buttonRow}>
+                <TextInput
+                  placeholder="Enter deposit amount"
+                  style={styles.input}
+                  value={depositAmount}
+                  onChangeText={setDepositAmount}
+                  keyboardType="numeric"
+                  editable={!depositLoading}
+                />
+                <TouchableOpacity
+                  style={[styles.actionButton, { backgroundColor: "#1a2f4d", opacity: depositLoading ? 0.6 : 1 }]}
+                  onPress={confirmDeposit}
+                  disabled={depositLoading}
+                >
+                  <Text style={styles.buttonText}>{depositLoading ? "Processing..." : "Submit"}</Text>
+                </TouchableOpacity>
+              </View>
+              {/* ✅ Deposit Summary UI */}
+              {depositAmount && Number(depositAmount) > 0 && (
+                <View style={{ marginTop: 12, padding: 12, backgroundColor: "#f0f8ff", borderRadius: 8, borderLeftWidth: 4, borderLeftColor: "#1a2f4d" }}>
+                  <Text style={{ fontSize: 12, color: "#666", marginBottom: 4 }}>Deposit Summary</Text>
+                  <Text style={{ fontSize: 14, fontWeight: "600", color: "#1a2f4d" }}>You will deposit: ₹{Number(depositAmount)}</Text>
+                  <Text style={{ fontSize: 11, color: "#999", marginTop: 6 }}>Minimum: ₹100 | No hidden charges</Text>
+                </View>
+              )}
             </View>
           )}
 
@@ -1024,12 +1081,29 @@ export default function ContractorWalletAttendance() {
         </View>
       </Modal>
 
-      {/* ✅ Razorpay Deposit Modal */}
-      <Modal visible={depositModalVisible} transparent animationType="slide">
+      {/* ✅ Razorpay Deposit Modal with Security */}
+      <Modal visible={depositModalVisible} transparent animationType="slide" onDismiss={() => {
+        // ✅ Handle manual close/cancel - clear HTML and fallback fetch
+        setDepositModalVisible(false);
+        setDepositModalHtml('');
+        // ✅ Fallback wallet sync in case socket missed update
+        fetchWallet();
+      }}>
         <SafeAreaView edges={['top', 'left', 'right']} style={{ flex: 1, backgroundColor: "#fff" }}>
           <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingTop: 12, paddingHorizontal: 12, paddingBottom: 12, borderBottomWidth: 1, borderBottomColor: "#DDD" }}>
             <Text style={{ fontSize: 16, fontWeight: "600", color: "#333" }}>Wallet Deposit</Text>
-            <TouchableOpacity onPress={() => setDepositModalVisible(false)}>
+            <TouchableOpacity onPress={() => {
+              setDepositModalVisible(false);
+              setDepositModalHtml('');
+              Alert.alert(
+                "Deposit in Progress?",
+                "If you just completed payment, it may take a moment to process. Don't close the app.",
+                [{ text: "OK", onPress: () => {
+                  // ✅ Fallback fetch wallet in case socket failed
+                  fetchWallet();
+                } }]
+              );
+            }}>
               <MaterialIcons name="close" size={28} color="#333" />
             </TouchableOpacity>
           </View>
@@ -1039,10 +1113,23 @@ export default function ContractorWalletAttendance() {
               onMessage={handleDepositMessage}
               javaScriptEnabled={true}
               domStorageEnabled={true}
+              startInLoadingState={true}
+              originWhitelist={['*']}
+              onShouldStartLoadWithRequest={(request) => {
+                // ✅ SECURITY: Only allow Razorpay checkout domain
+                const isRazorpayURL = request.url.startsWith('https://checkout.razorpay.com') ||
+                                      request.url.startsWith('https://api.razorpay.com') ||
+                                      request.url.startsWith('data:');
+                if (!isRazorpayURL) {
+                  console.warn(`⚠️ Blocked navigation to: ${request.url}`);
+                }
+                return isRazorpayURL;
+              }}
             />
           ) : (
             <View style={{ flex: 1, justifyContent: "center", alignItems: "center" }}>
-              <Text>Loading...</Text>
+              <ActivityIndicator size="large" color="#1a2f4d" />
+              <Text style={{ marginTop: 12, color: "#666" }}>Loading payment gateway...</Text>
             </View>
           )}
         </SafeAreaView>

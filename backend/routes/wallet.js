@@ -222,17 +222,35 @@ router.post("/deposit/verify", authenticateToken, async (req, res) => {
 
     console.log(`✅ Deposit user verified: payment matches authenticated user`);
 
-    // 🔐 STEP 3: FULLY ATOMIC UPDATE - Deposit credit + idempotency in one operation
-    // If paymentId already exists in transactions, this update will fail
-    // (due to unique index on paymentId)
-    // If unique index exists, MongoDB prevents duplicates at DB level
-    // Otherwise, the $ne check prevents duplicate processing
-    const wallet = await Wallet.findOneAndUpdate(
+    // 🔐 STEP 3: CRITICAL IDEMPOTENCY CHECK
+    // Check if this exact paymentId was already processed
+    // This prevents race conditions and double-crediting
+    const existingTransaction = await Wallet.findOne(
       {
         phone: req.user.phone,
-        // Only proceed if this paymentId hasn't been processed yet
-        // Uses $ne (not equal) to ensure idempotency
-        "transactions.paymentId": { $ne: paymentId }
+        'transactions.paymentId': paymentId
+      },
+      { 'transactions.$': 1 }
+    );
+
+    if (existingTransaction) {
+      console.warn(`⚠️ IDEMPOTENCY: Payment already processed - paymentId: ${paymentId}`);
+      // Return success to client (already credited)
+      return res.json({
+        success: true,
+        message: "Payment already processed",
+        walletBalance: existingTransaction.balance,
+        isDuplicate: true,
+        transactionId: paymentId
+      });
+    }
+
+    // 🔐 STEP 4: FULLY ATOMIC UPDATE - Deposit credit via findOneAndUpdate
+    // MongoDB ensures this is atomic at DB level
+    // Unique index on paymentId provides additional protection
+    const wallet = await Wallet.findOneAndUpdate(
+      {
+        phone: req.user.phone
       },
       {
         $inc: { balance: depositAmount }, // Atomically increment balance
@@ -240,32 +258,35 @@ router.post("/deposit/verify", authenticateToken, async (req, res) => {
           transactions: {
             type: 'deposit',
             amount: depositAmount,
-            paymentId,      // ✅ Unique identifier for idempotency
+            paymentId,      // ✅ Unique constraint prevents re-insertion
             orderId,        // ✅ Audit trail
             date: new Date(),
-            description: `Wallet deposit via Razorpay (${paymentId})`
+            description: `Wallet deposit via Razorpay (${paymentId})`,
+            status: 'completed'
           }
         }
       },
       { new: true, upsert: false } // Return updated doc, don't create if missing
-    );
-
-    // If wallet is null, either:
-    // 1. User doesn't exist (shouldn't happen if authenticated)
-    // 2. Duplicate paymentId already processed (idempotency triggered)
-    if (!wallet) {
-      console.warn(`⚠️ IDEMPOTENCY: Deposit already processed for paymentId: ${paymentId} or wallet not found`);
-      
-      // Fetch current balance to confirm idempotency
-      const existingWallet = await Wallet.findOne({ phone: req.user.phone });
-      if (existingWallet) {
-        return res.json({
-          success: true,
-          message: "Payment already processed",
-          walletBalance: existingWallet.balance,
-          isDuplicate: true
-        });
+    ).catch(err => {
+      // Catch duplicate key error from unique index
+      if (err.code === 11000 && err.keyPattern?.['transactions.paymentId']) {
+        console.warn(`⚠️ DUPLICATE PAYMENT (unique index): paymentId: ${paymentId}`);
+        return null; // Signal duplicate
       }
+      throw err; // Re-throw actual errors
+    });
+
+    // If wallet is null, duplicate was detected by unique index
+    if (!wallet) {
+      console.warn(`⚠️ DUPLICATE: Unique index caught paymentId: ${paymentId}`);
+      const existingWallet = await Wallet.findOne({ phone: req.user.phone });
+      return res.json({
+        success: true,
+        message: "Payment already processed",
+        walletBalance: existingWallet?.balance || 0,
+        isDuplicate: true,
+        transactionId: paymentId
+      });
     }
 
     console.log(`✅ Wallet updated: ${req.user.phone} deposited ₹${depositAmount}`);

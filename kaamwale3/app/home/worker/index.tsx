@@ -207,6 +207,9 @@ function WorkerHome() {
   const [timer, setTimer] = useState<number>(AUTO_DECLINE_SECONDS);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const currentJobRef = useRef<Job | null>(null);
+  const displayedJobIds = useRef<Set<string>>(new Set()); // ✅ Track displayed jobs to prevent duplicates
+  const fetchAbortControllers = useRef<Map<string, AbortController>>(new Map()); // ✅ Track fetch abort controllers
+  const profilePhotoWriteTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null); // ✅ Debounce AsyncStorage writes
 
   useEffect(() => {
     currentJobRef.current = currentJob;
@@ -219,8 +222,33 @@ function WorkerHome() {
     return () => {
       console.log("🔄 WorkerHome component unmounting");
       if (timerRef.current) clearInterval(timerRef.current);
+      // ✅ Abort all pending fetches on unmount
+      fetchAbortControllers.current.forEach(controller => controller.abort());
+      fetchAbortControllers.current.clear();
+      // ✅ Clear pending AsyncStorage writes
+      if (profilePhotoWriteTimeoutRef.current) {
+        clearTimeout(profilePhotoWriteTimeoutRef.current);
+      }
     };
   }, []);
+
+  // ✅ SOCKET OFFLINE MANAGEMENT: Disconnect socket when going offline
+  useEffect(() => {
+    if (isOnline === false) {
+      // Worker went offline
+      console.log('🔴 Worker offline - notifying server');
+      socket.emit('workerOffline', { phone: currentUserPhone });
+      // ✅ Optional: Truly disconnect to prevent server from emitting jobs
+      // socket.disconnect();
+    } else if (isOnline === true) {
+      // Worker went online
+      console.log('🟢 Worker online - ensuring socket connected');
+      if (!socket.connected) {
+        socket.auth = { token };
+        socket.connect();
+      }
+    }
+  }, [isOnline]);
 
   // ✅ Check for user changes when screen comes into focus (no dependency on currentUserPhone to avoid stale closures)
   useFocusEffect(
@@ -283,11 +311,19 @@ function WorkerHome() {
       for (let attempt = 1; attempt <= maxRetries; attempt++) {
         try {
           console.log(`🔄 Attempting token refresh (attempt ${attempt}/${maxRetries})...`);
+          
+          // ✅ ADD TIMEOUT: Prevent hanging indefinitely on slow network
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), 5000); // 5 second timeout
+          
           const response = await fetch(`${API_BASE}/refresh-token`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ refreshToken }),
+            signal: controller.signal, // ✅ Use abort signal for timeout
           });
+          
+          clearTimeout(timeoutId); // Clear timeout if fetch completes
 
           if (response.ok) {
             const data = await response.json();
@@ -404,13 +440,13 @@ function WorkerHome() {
           }
 
           // AUTO-REGISTER: Get location and register worker automatically
+          // ✅ Location permission is requested in the separate "REQUEST LOCATION" effect below
+          // This avoids duplicate permission requests
           try {
-            console.log("[WorkerHome] Requesting location permission...");
-            const { status } = await Location.requestForegroundPermissionsAsync();
-            console.log(`[WorkerHome] Location permission status: ${status}`);
+            console.log("[WorkerHome] Checking location availability...");
             
-            if (status === "granted") {
-              console.log("[WorkerHome] Getting current position...");
+            // Just get the current location if permission is already granted
+            try {
               const loc = await Location.getCurrentPositionAsync({});
               const lat = loc.coords.latitude;
               const lon = loc.coords.longitude;
@@ -428,11 +464,12 @@ function WorkerHome() {
 
               console.log("✅ Worker auto-registered with location:", { lat, lon });
               setCurrentLocation({ lat, lon });
-            } else {
-              console.warn("⚠️ Location permission denied");
+            } catch (locationErr) {
+              console.warn("⚠️ Location not available (permission not granted or error):", locationErr);
+              // Location permission will be requested in the separate "REQUEST LOCATION" effect
             }
           } catch (locationErr) {
-            console.error("❌ Failed to get location:", locationErr);
+            console.error("❌ Failed to auto-register worker:", locationErr);
             const errMsg = locationErr instanceof Error ? locationErr.message : String(locationErr);
             setError(`Location error: ${errMsg}`);
           }
@@ -580,7 +617,7 @@ function WorkerHome() {
       notificationListener.remove();
       responseListener.remove();
     };
-  }, []);
+  }, [token]); // ✅ Include token to avoid stale closure
 
   // ✅ HANDLE ONE-TIME PROFILE SETUP SAVE
   useEffect(() => {
@@ -595,33 +632,43 @@ function WorkerHome() {
     // 1. Job is accepted (acceptedBy !== null)
     // 2. Job NOT paid (paymentStatus !== "Paid")
     // 3. Attendance NOT marked (attendanceStatus !== "Present" && "Absent")
-    let locationInterval: ReturnType<typeof setInterval> | null = null;
 
     const startLocationTracking = () => {
-      if (locationInterval) clearInterval(locationInterval);
-      
-      locationInterval = setInterval(() => {
-        socket.emit("updateWorkerLocation", {
-          lat: currentLocation.lat,
-          lon: currentLocation.lon,
-        });
-        console.log("📍 Location updated (accepted job tracking):", currentLocation);
-      }, 30000); // 30 seconds - frequent updates for real-time ETA
+      // ✅ REMOVED: Location tracking interval disabled (as per requirement)
+      // Location updates were happening every 30s via socket.emit("updateWorkerLocation")
+      // Now handled entirely by backend based on user's online status
+      console.log("📍 Location tracking function called (no-op)");
     };
 
     const stopLocationTracking = () => {
-      if (locationInterval) {
-        clearInterval(locationInterval);
-        locationInterval = null;
-        console.log("🛑 Location tracking stopped");
-      }
+      // ✅ REMOVED: Location tracking interval disabled
+      console.log("🛑 Location tracking function called (no-op)");
     };
 
     // Listen for new jobs
     const handleNewJob = async (data: any) => {
       try {
         console.log("📩 SOCKET: New job received", data);
+        
+        // ✅ OFFLINE PROTECTION: Don't process jobs if worker is offline
+        if (!isOnline) {
+          console.log('⚠️ Worker offline - ignoring new job');
+          return;
+        }
+
         if (!currentLocation) return;
+
+        // ✅ DUPLICATE GUARD #1: Check if same job already displayed
+        if (currentJobRef.current?._id === data._id) {
+          console.log('⚠️ Same job already displayed - ignoring duplicate');
+          return;
+        }
+
+        // ✅ DUPLICATE GUARD #2: Check if job was already shown/handled
+        if (displayedJobIds.current.has(data._id)) {
+          console.log(`⚠️ Job ${data._id} already displayed - ignoring race condition`);
+          return;
+        }
 
         const location = await getAddressFromCoords(data.lat, data.lon);
 
@@ -633,7 +680,11 @@ function WorkerHome() {
           timestamp: new Date().toISOString(),
         };
 
+        // ✅ Mark job as displayed
+        displayedJobIds.current.add(data._id);
+
         setCurrentJob(normalizedJob);
+        currentJobRef.current = normalizedJob; // ✅ Update ref to track current job
         stopLocationTracking(); // Stop tracking until job accepted
         startTimer();
 
@@ -733,8 +784,21 @@ function WorkerHome() {
         if (data.phone === currentUserPhone) {
           console.log(`📸 Profile photo updated:`, data.profilePhoto);
           setWorkerProfilePhoto(data.profilePhoto);
-          // Also save to AsyncStorage for persistence
-          AsyncStorage.setItem('profilePhoto', data.profilePhoto);
+          
+          // ✅ DEBOUNCE AsyncStorage writes: Use timeout to batch multiple rapid updates
+          if (profilePhotoWriteTimeoutRef.current) {
+            clearTimeout(profilePhotoWriteTimeoutRef.current);
+          }
+          
+          profilePhotoWriteTimeoutRef.current = setTimeout(() => {
+            // Only write if value actually changed (avoid redundant writes)
+            if (workerProfilePhoto !== data.profilePhoto) {
+              AsyncStorage.setItem('profilePhoto', data.profilePhoto).catch(err =>
+                console.warn('Failed to persist profile photo:', err)
+              );
+            }
+            profilePhotoWriteTimeoutRef.current = null;
+          }, 300); // Debounce: wait 300ms before writing
         }
       } catch (err) {
         console.error("Error handling profile photo update:", err);
@@ -758,7 +822,7 @@ function WorkerHome() {
       socket.off("profilePhotoUpdated", handleProfilePhotoUpdate);
       console.log("[WorkerHome] job listeners removed (unmounted)");
     };
-  }, [currentLocation, workerName, currentJob, currentUserPhone]);
+  }, [currentLocation, workerName, currentUserPhone]); // ✅ REMOVED currentJob - use currentJobRef instead to prevent re-subscription
 
   // ---------------- GET ADDRESS ----------------
   const getAddressFromCoords = async (lat: number, lon: number) => {
@@ -1025,7 +1089,7 @@ function WorkerHome() {
             if (jobId) handleDecline(jobId, true);
           }
         }
-        return prev - 1;
+        return Math.max(prev - 1, 0); // ✅ Prevent negative timer values
       });
     }, 1000);
   };
@@ -1035,6 +1099,10 @@ function WorkerHome() {
     console.log("📍 Fetch Nearby Jobs token:", token);
 
     try {
+      // ✅ CREATE ABORT CONTROLLER for this fetch
+      const controller = new AbortController();
+      fetchAbortControllers.current.set('fetchNearbyJobs', controller);
+
       const res = await fetch(`${API_BASE}/jobs/nearby`, {
         method: "POST",
         headers: {
@@ -1042,16 +1110,22 @@ function WorkerHome() {
           Authorization: `Bearer ${token}`,
         },
         body: JSON.stringify({ lat, lon, workerName, workerType }),
+        signal: controller.signal, // ✅ Add abort signal for cancel on unmount
       });
 
       if (!res.ok) return;
 
       const data: Job[] = await res.json();
-      const newJobs = data.filter(j => !handledJobs.has(j._id));
+      
+      // ✅ DUPLICATE PREVENTION: Only show jobs not already displayed or handled
+      const newJobs = data.filter(j => !handledJobs.has(j._id) && !displayedJobIds.current.has(j._id));
       if (newJobs.length === 0) return;
 
       const first = newJobs[0];
       const location = await getAddressFromCoords(first.lat, first.lon);
+
+      // ✅ Mark as displayed before showing
+      displayedJobIds.current.add(first._id);
 
       setCurrentJob({
         ...first,
@@ -1061,8 +1135,14 @@ function WorkerHome() {
       });
 
       startTimer();
-    } catch (err) {
+    } catch (err: any) {
+      if (err.name === 'AbortError') {
+        console.log('📍 Fetch nearby jobs aborted (component unmounted)');
+        return;
+      }
       console.error("Failed to fetch nearby jobs:", err);
+    } finally {
+      fetchAbortControllers.current.delete('fetchNearbyJobs');
     }
   };
 
@@ -1086,8 +1166,8 @@ function WorkerHome() {
     (async () => {
       const { status } = await Location.requestForegroundPermissionsAsync();
       if (status !== "granted") {
-        Alert.alert("Permission denied", "Location access is required.");
-        return;
+        console.warn("⚠️ Location permission not granted");
+        return; // ✅ Silently return - don't show repeated alerts
       }
       const loc = await Location.getCurrentPositionAsync({});
       if (!mounted) return;
@@ -1095,7 +1175,10 @@ function WorkerHome() {
       const coords = { lat: loc.coords.latitude, lon: loc.coords.longitude };
       setCurrentLocation(coords);
 
-      await fetchNearbyJobs(coords.lat, coords.lon);
+      // ✅ Only fetch nearby jobs if token available
+      if (token) {
+        await fetchNearbyJobs(coords.lat, coords.lon);
+      }
     })();
 
     return () => {
@@ -1238,7 +1321,7 @@ function WorkerHome() {
         <View style={styles.headerRightContainer}>
           {/* Online/Offline Toggle */}
           <TouchableOpacity 
-            style={[styles.statusToggle, { backgroundColor: isOnline ? "#2ecc71" : "#95a5a6" }]}
+            style={[styles.statusToggle, { backgroundColor: isOnline ? "#2ecc71" : "#95a5a6", opacity: togglingStatus ? 0.6 : 1 }]}
             onPress={toggleOnlineStatus}
             disabled={togglingStatus}
           >
