@@ -65,15 +65,27 @@ export default function PostJobScreen() {
   // SERVER_URL is loaded from central config
   const router = useRouter();   // ⭐ ADDED
 
-  // ✅ Check for user changes when screen comes into focus (no dependency on currentUserPhone to avoid stale closures)
+  // ✅ Consolidated user & token loading - single source of truth (no duplicated logic)
   useFocusEffect(
     React.useCallback(() => {
       (async () => {
         try {
           const userStr = await AsyncStorage.getItem("user");
-          const userPhone = userStr ? JSON.parse(userStr).phone : null;
+          const storedToken = await AsyncStorage.getItem("token");
           
-          // If user changed, reset wallet state
+          // ✅ Safer: Parse user with try/catch to handle corrupted storage
+          let user = null;
+          try {
+            user = userStr ? JSON.parse(userStr) : null;
+          } catch {
+            user = null;
+          }
+          const userPhone = user?.phone ?? null;
+          
+          // Load token
+          if (storedToken) setToken(storedToken);
+          
+          // Check for user changes
           if (userPhone && userPhone !== previousUserPhoneRef.current) {
             console.log(`👤 Postjobs: Contractor changed from ${previousUserPhoneRef.current} to ${userPhone}, resetting wallet`);
             previousUserPhoneRef.current = userPhone;
@@ -81,7 +93,6 @@ export default function PostJobScreen() {
             setWalletBalance(0);
             setHasPremium(false);
           } else if (!userPhone && previousUserPhoneRef.current !== null) {
-            // User logged out
             console.log(`👤 Postjobs: User logged out, resetting wallet`);
             previousUserPhoneRef.current = null;
             setCurrentUserPhone(null);
@@ -89,11 +100,10 @@ export default function PostJobScreen() {
             setHasPremium(false);
           }
 
-          if (userStr) {
-            const user = JSON.parse(userStr);
+          if (user) {
             if (user?.name) setContractorName(user.name);
             
-            // ✅ Check if user has active premium
+            // Check if user has active premium
             if (user?.premiumPlan && user.premiumPlan.type) {
               const expiryDate = new Date(user.premiumPlan.expiryDate);
               const now = new Date();
@@ -107,39 +117,11 @@ export default function PostJobScreen() {
             }
           }
         } catch (err) {
-          console.error("Failed to check user in postjobs", err);
+          console.error("Failed to load user/token in postjobs", err);
         }
       })();
     }, [])
   );
-
-  // Load user & token from AsyncStorage and detect user changes
-  useEffect(() => {
-    (async () => {
-      try {
-        const userStr = await AsyncStorage.getItem("user");
-        const storedToken = await AsyncStorage.getItem("token");
-        
-        const userPhone = userStr ? JSON.parse(userStr).phone : null;
-        
-        // If user changed, reset wallet state
-        if (userPhone && userPhone !== currentUserPhone) {
-          console.log(`👤 Contractor changed from ${currentUserPhone} to ${userPhone}, resetting wallet`);
-          setCurrentUserPhone(userPhone);
-          setWalletBalance(0);
-        }
-
-        if (userStr) {
-          const user = JSON.parse(userStr);
-          if (user?.name) setContractorName(user.name);
-        }
-
-        if (storedToken) setToken(storedToken);
-      } catch (err) {
-        console.error("Failed to load user/token", err);
-      }
-    })();
-  }, []);
 
   // Fetch wallet balance
   const fetchWallet = async () => {
@@ -191,6 +173,22 @@ export default function PostJobScreen() {
 
   // Get current location
   const getCurrentLocation = async () => {
+    // ✅ Ask for confirmation if location already selected
+    if (selectedLocation) {
+      Alert.alert(
+        'Change Location?',
+        'Do you want to update to your current location?',
+        [
+          { text: 'Cancel', onPress: () => {}, style: 'cancel' },
+          { text: 'Yes', onPress: () => actuallyGetLocation() },
+        ]
+      );
+    } else {
+      actuallyGetLocation();
+    }
+  };
+
+  const actuallyGetLocation = async () => {
     try {
       setGettingLocation(true);
       const { status } = await Location.requestForegroundPermissionsAsync();
@@ -248,6 +246,9 @@ export default function PostJobScreen() {
 
   // Post Job function
   const handlePostJob = async () => {
+    // ✅ Guard: Prevent double-click during posting
+    if (isPostingJob) return;
+    
     if (!title) return Alert.alert("Missing", "Please select a job title");
     if (!mainSkill) return Alert.alert("Missing", "Please select main skill");
     // ✅ FIXED: Worker type required ONLY for Mason, not for other skills
@@ -256,7 +257,13 @@ export default function PostJobScreen() {
     if (parseInt(price) < 410) return Alert.alert(t('error'), t('minimumPrice'));
     if (!selectedLocation) return Alert.alert(t('required'), t('selectLocation'));
     // ✅ Image is optional, but location is REQUIRED for accurate matching
+    
+    // ✅ Time validation: End time must be after start time
+    if (endTime <= startTime) {
+      return Alert.alert("Invalid Time", "End time must be after start time");
+    }
 
+    // ⚠️ Note: Backend will enforce minimum balance. This is UX hint only.
     if (walletBalance < 25)
       return Alert.alert("Insufficient Balance", "Minimum balance ₹25 required to post a job");
 
@@ -282,10 +289,14 @@ export default function PostJobScreen() {
           console.log("📸 Uploading job image from:", selectedImage);
           const imageFormData = new FormData();
           
+          // ✅ Safer: Detect file type to avoid Android content-type mismatches
+          const fileType = selectedImage.endsWith(".png") ? "image/png" : "image/jpeg";
+          const fileName = selectedImage.endsWith(".png") ? `job-${Date.now()}.png` : `job-${Date.now()}.jpg`;
+          
           imageFormData.append("photo", {
             uri: selectedImage,
-            name: `job-${Date.now()}.jpg`,
-            type: "image/jpeg",
+            name: fileName,
+            type: fileType,
           } as any);
 
           console.log("📤 Posting to:", `${SERVER_URL}/jobs/upload-image`);
@@ -370,13 +381,15 @@ export default function PostJobScreen() {
       setEndTime(new Date());
       setNumberOfDays(1); // ✅ Reset days
       setPriceError(false);
-      setIsPostingJob(false); // ✅ Hide loading spinner
       
-      router.push("/waiting");
+      // ✅ Use replace instead of push to prevent back navigation to post job
+      router.replace("/waiting");
     } catch (err) {
       console.error(err);
-      setIsPostingJob(false); // ✅ Hide loading spinner on error
       Alert.alert("Error", "Server not responding"); 
+    } finally {
+      // ✅ Always reset posting state in finally block
+      setIsPostingJob(false);
     }
   };
 

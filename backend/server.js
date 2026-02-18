@@ -573,6 +573,14 @@ io.use(async (socket, next) => {
 io.on("connection", (socket) => {
   console.log("User Connected:", socket.id, "user:", socket.user?.phone || socket.user?.name || "unknown");
 
+  // ✅ Join user to a private room based on their phone number
+  // This ensures wallet updates only go to the correct user
+  const userPhone = socket.user?.phone;
+  if (userPhone) {
+    socket.join(userPhone);
+    console.log(`✅ Socket ${socket.id} joined room: ${userPhone}`);
+  }
+
   // Check if socket connected with expired token
   if (socket.tokenExpired) {
     socket.emit("tokenExpired", {

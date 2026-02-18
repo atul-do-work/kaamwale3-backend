@@ -597,7 +597,7 @@ export default function ContractorProfile(): React.ReactElement {
         onClose={() => setViewWorkersModalVisible(false)}
         onRequestWorker={(worker) => {
           console.log('Worker requested:', worker);
-          setViewWorkersModalVisible(false);
+          // ✅ Don't close modal - allow contractor to continue browsing workers
           // TODO: Handle worker request (show premium modal if needed, send request to backend)
         }}
       />

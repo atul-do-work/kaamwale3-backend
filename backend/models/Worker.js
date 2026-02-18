@@ -3,6 +3,7 @@ const mongoose = require("mongoose");
 const workerSchema = new mongoose.Schema({
   phone: { type: String, required: true, unique: true },
   skills: { type: [String], default: [] },
+  mainSkill: { type: String, default: null }, // ✅ Primary skill for quick display
   rating: { type: Number, default: 5 },
   isAvailable: { type: Boolean, default: true },
   socketId: { type: String, default: "" },

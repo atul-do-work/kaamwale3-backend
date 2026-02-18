@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useRef } from "react";
-import { View, Text, ScrollView, Alert, Image, TouchableOpacity, Modal } from "react-native";
+import { View, Text, FlatList, Alert, Image, TouchableOpacity, Modal, RefreshControl } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useFocusEffect } from "@react-navigation/native";
 import { MaterialIcons } from "@expo/vector-icons";
@@ -7,7 +7,6 @@ import { LinearGradient } from "expo-linear-gradient";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as Location from "expo-location";
 import { socket } from "../../../utils/socket";
-import { connectSocket } from "../../../utils/socket"; // ✅ Import connect function
 import { API_BASE } from "../../../utils/config";
 import styles from "../../../styles/WorkerJobsStyles";
 import JobLocationMap from "../../../components/JobLocationMap";
@@ -46,6 +45,7 @@ export default function Jobs(): React.ReactElement {
   const [workerName, setWorkerName] = useState<string>("Test Worker");
   const [acceptedJobs, setAcceptedJobs] = useState<Job[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
+  const [refreshing, setRefreshing] = useState<boolean>(false); // ✅ Pull-to-refresh state
   const [token, setToken] = useState<string>("");
   const [currentUserPhone, setCurrentUserPhone] = useState<string | null>(null);
   const [mapModalVisible, setMapModalVisible] = useState<boolean>(false);
@@ -70,6 +70,7 @@ export default function Jobs(): React.ReactElement {
           setCurrentUserPhone(userPhone);
           setAcceptedJobs([]);
           previousPaymentState.current = {};
+          paymentNotifiedJobs.current.clear(); // ✅ Clear notification tracking
         } else if (!userPhone && previousUserPhoneRef.current !== null) {
           // User logged out
           console.log(`👤 Jobs: User logged out, resetting jobs`);
@@ -77,6 +78,7 @@ export default function Jobs(): React.ReactElement {
           setCurrentUserPhone(null);
           setAcceptedJobs([]);
           previousPaymentState.current = {};
+          paymentNotifiedJobs.current.clear(); // ✅ Clear notification tracking
         }
       })();
     }, [])
@@ -126,6 +128,13 @@ export default function Jobs(): React.ReactElement {
     })();
   }, []);
 
+  // ✅ Handle pull-to-refresh (don't show full loading spinner, only refresh indicator)
+  const handleRefresh = async () => {
+    setRefreshing(true);
+    await fetchAcceptedJobs(workerName, token, true); // Pass true to indicate refresh
+    setRefreshing(false);
+  };
+
   // Helper: get full address from lat/lon
   const getAddressFromCoords = async (lat: number, lon: number) => {
     try {
@@ -141,13 +150,13 @@ export default function Jobs(): React.ReactElement {
   };
 
   // Fetch accepted jobs from server
-  const fetchAcceptedJobs = async (name?: string, authToken?: string) => {
+  const fetchAcceptedJobs = async (name?: string, authToken?: string, isRefresh = false) => {
     const worker = name || workerName;
     const tkn = authToken || token;
 
     if (!worker || !tkn) return;
 
-    setLoading(true);
+    if (!isRefresh) setLoading(true); // ✅ Only show full spinner on initial load, not on pull-to-refresh
     try {
       const res = await fetch(`${API_BASE}/jobs/my-accepted`, {
         method: "GET",
@@ -194,9 +203,9 @@ export default function Jobs(): React.ReactElement {
       setAcceptedJobs(jobsWithLocation);
     } catch (err) {
       console.error("Error fetching jobs:", err);
-      Alert.alert("Error", "Could not fetch jobs.");
+      if (!isRefresh) Alert.alert("Error", "Could not fetch jobs."); // ✅ Don't show error alert on refresh
     } finally {
-      setLoading(false);
+      if (!isRefresh) setLoading(false); // ✅ Only reset loading on initial load
     }
   };
 
@@ -227,45 +236,53 @@ export default function Jobs(): React.ReactElement {
       }
     };
 
-    setupSocket();
-    fetchAcceptedJobs(workerName, token);
+    // ✅ IIFE to handle async setup
+    (async () => {
+      await setupSocket();
+      fetchAcceptedJobs(workerName, token);
+    })();
 
     const handleJobUpdated = async (job: Job) => {
       console.log("📢 Job updated event received:", job._id, "Status:", job.paymentStatus, "Rating:", job.rating);
       // If server sent targeted update and current user is not in the target list, ignore
       if ((job as any)._targetedUpdate && Array.isArray((job as any).targetedFor)) {
         const targets = ((job as any).targetedFor || []).map((t: any) => t && t.toString());
-        if (!targets.includes(workerName) && !(currentUserPhone && targets.includes(currentUserPhone))) {
+        if (!targets.includes(currentUserPhone) && !targets.includes(workerName)) {
           console.log('Ignored targeted jobUpdated not meant for this worker');
           return;
         }
       }
-      if (job.acceptedBy !== workerName) return;
+      
+      // 🔐 CRITICAL: Compare with currentUserPhone (phone number) not workerName (name string)
+      // job.acceptedBy is a phone number, so we must compare with currentUserPhone
+      if (!currentUserPhone || job.acceptedBy !== currentUserPhone) {
+        console.log(`⚠️ Job ${job._id} acceptedBy (${job.acceptedBy}) doesn't match current user (${currentUserPhone}), ignoring`);
+        return;
+      }
 
       const location = job.location || (await getAddressFromCoords(job.lat, job.lon));
       
+      // ✅ Optimized: Use findIndex to avoid double .find() calls
       setAcceptedJobs((prev) => {
-        const exists = prev.find((j) => j._id === job._id);
-        if (exists) {
-          // Merge with existing job, preserving all fields including rating
-          const merged = { 
-            ...prev.find((j) => j._id === job._id), 
+        const index = prev.findIndex((j) => j._id === job._id);
+        
+        if (index !== -1) {
+          // Job exists - merge with existing job, preserving all fields including rating
+          const updated = [...prev];
+          updated[index] = {
+            ...updated[index],
             ...job,
-            location 
+            location,
           };
-          console.log("✅ Merged job with rating:", merged.rating);
-          console.log("📋 Full merged job object:", merged);
-          return prev.map((j) => (j._id === job._id ? merged : j));
+          console.log("✅ Merged job with rating:", updated[index].rating);
+          console.log("📋 Full merged job object:", updated[index]);
+          return updated;
         } else if (job.status === "accepted") {
+          // New job - add to list
           return [...prev, { ...job, location }];
         }
         return prev;
       });
-      
-      // Log the entire acceptedJobs state after update
-      setTimeout(() => {
-        console.log("🔍 Current acceptedJobs in state:", acceptedJobs);
-      }, 100);
 
       if (previousPaymentState.current[job._id] !== "Paid" && job.paymentStatus === "Paid") {
         if (!paymentNotifiedJobs.current.has(job._id)) {
@@ -281,187 +298,203 @@ export default function Jobs(): React.ReactElement {
       previousPaymentState.current[job._id] = job.paymentStatus || null;
     };
 
-    const handleNewJob = async (job: Job) => {
-      // Refresh accepted jobs list whenever any job is updated
-      console.log(`📨 Job update received, refreshing accepted jobs list`);
-      fetchAcceptedJobs(workerName, token);
-    };
-
     // Subscribe to socket events
     socket.on("jobUpdated", handleJobUpdated);
-    socket.on("jobUpdated", handleNewJob); // ✅ Listen for any job updates
+    // ❌ REMOVED: socket.on("jobUpdated", handleNewJob) - Causes duplicate renders and flickering
+    // handleJobUpdated already updates the local state, no need to refetch everything
 
     // Cleanup on unmount
     return () => {
       socket.off("jobUpdated", handleJobUpdated);
-      socket.off("jobUpdated", handleNewJob);
+      // ❌ REMOVED: socket.off("jobUpdated", handleNewJob)
     };
-  }, [workerName, token]);
+  }, [workerName, token, currentUserPhone]); // ✅ Added currentUserPhone to deps
+
+  // ✅ Render individual job card (optimized for FlatList virtualization)
+  const renderJobCard = ({ item: job }: { item: Job }) => {
+    return (
+      <View style={{ marginHorizontal: 16, marginBottom: 16 }}>
+        <View
+          style={{
+            borderRadius: 12,
+            overflow: "hidden",
+            backgroundColor: "#FFF",
+            shadowColor: "#000",
+            shadowOffset: { width: 0, height: 2 },
+            shadowOpacity: 0.1,
+            shadowRadius: 8,
+            elevation: 4,
+          }}
+        >
+          {/* Top Image */}
+          <View style={{ height: 180, overflow: "hidden", backgroundColor: "#EEE" }}>
+            <Image
+              source={job.imageUrl ? { uri: job.imageUrl } : require("../../../assets/oip2.jpg")}
+              style={{ width: "100%", height: "100%", resizeMode: "cover" }}
+            />
+          </View>
+
+          {/* Content Section */}
+          <View style={{ paddingHorizontal: 16, paddingVertical: 14 }}>
+            {/* Contractor Name - Prominent */}
+            <Text style={{ color: "#333", fontSize: 16, fontWeight: "700", marginBottom: 4 }}>
+              👤 {job.contractorName}
+            </Text>
+
+            {/* Main Skill / Description */}
+            {job.description && (
+              <Text style={{ color: "#666", fontSize: 13, marginBottom: 10 }}>
+                {job.description}
+              </Text>
+            )}
+
+            {/* Expected Wages */}
+            <Text style={{ color: "#2ecc71", fontSize: 18, fontWeight: "900", marginBottom: 12 }}>
+              ₹{job.amount}
+            </Text>
+
+            {/* Date & Time Row */}
+            <View style={{ flexDirection: "row", marginBottom: 10 }}>
+              {/* Date */}
+              <View style={{ flexDirection: "row", alignItems: "center", flex: 1 }}>
+                <MaterialIcons name="event" size={14} color="#999" />
+                <Text style={{ color: "#666", fontSize: 12, marginLeft: 6 }}>
+                  {job.date ? new Date(job.date).toLocaleDateString() : "N/A"}
+                </Text>
+              </View>
+
+              {/* Time */}
+              {(job.startTime || job.endTime) && (
+                <View style={{ flexDirection: "row", alignItems: "center", flex: 1, marginLeft: 10 }}>
+                  <MaterialIcons name="schedule" size={14} color="#999" />
+                  <Text style={{ color: "#666", fontSize: 12, marginLeft: 6 }}>
+                    {job.startTime || "N/A"} - {job.endTime || "N/A"}
+                  </Text>
+                </View>
+              )}
+            </View>
+
+            {/* Duration (Days) - ✅ Show job duration */}
+            {job.numberOfDays && (
+              <View style={{ flexDirection: "row", alignItems: "center", marginBottom: 10 }}>
+                <MaterialIcons name="timer" size={14} color="#999" />
+                <Text style={{ color: "#666", fontSize: 12, marginLeft: 6 }}>
+                  Duration: {job.numberOfDays} {job.numberOfDays === 1 ? 'day' : 'days'}
+                </Text>
+              </View>
+            )}
+
+            {/* Location */}
+            <TouchableOpacity
+              style={{ flexDirection: "row", alignItems: "flex-start", marginBottom: 12 }}
+              onPress={() => {
+                setSelectedJobForMap(job);
+                setMapModalVisible(true);
+              }}
+            >
+              <MaterialIcons name="location-on" size={14} color="#FF6B6B" style={{ marginTop: 1 }} />
+              <Text style={{ color: "#666", fontSize: 12, marginLeft: 6, flex: 1 }}>
+                {job.location}
+              </Text>
+            </TouchableOpacity>
+
+            {/* Bottom Row: [Paid] Badge & Rating */}
+            <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
+              {/* Paid Badge */}
+              {job.paymentStatus === "Paid" ? (
+                <View style={{ 
+                  flexDirection: "row", 
+                  alignItems: "center",
+                  backgroundColor: "#E8F5E9",
+                  paddingHorizontal: 10,
+                  paddingVertical: 6,
+                  borderRadius: 20,
+                }}>
+                  <MaterialIcons name="check-circle" size={14} color="#2ecc71" />
+                  <Text style={{ color: "#2ecc71", fontSize: 12, fontWeight: "600", marginLeft: 6 }}>
+                    Paid
+                  </Text>
+                </View>
+              ) : (
+                <View style={{ 
+                  flexDirection: "row", 
+                  alignItems: "center",
+                  backgroundColor: "#FFF3E0",
+                  paddingHorizontal: 10,
+                  paddingVertical: 6,
+                  borderRadius: 20,
+                }}>
+                  <MaterialIcons name="schedule" size={14} color="#FF9800" />
+                  <Text style={{ color: "#FF9800", fontSize: 12, fontWeight: "600", marginLeft: 6 }}>
+                    Pending
+                  </Text>
+                </View>
+              )}
+
+              {/* Rating */}
+              {typeof job.rating?.stars === "number" ? (
+                <View style={{ flexDirection: "row", alignItems: "center" }}>
+                  {[1, 2, 3, 4, 5].map((star) => (
+                    <MaterialIcons
+                      key={star}
+                      name="star"
+                      size={14}
+                      color={star <= (job.rating?.stars ?? 0) ? "#FFD700" : "#DDD"}
+                      style={{ marginRight: 2 }}
+                    />
+                  ))}
+                  <Text style={{ color: "#333", fontSize: 12, fontWeight: "700", marginLeft: 8 }}>
+                    {job.rating?.stars}/5
+                  </Text>
+                </View>
+              ) : (
+                <Text style={{ color: "#999", fontSize: 12 }}>No rating yet</Text>
+              )}
+            </View>
+
+            {/* Feedback (if available) */}
+            {job.rating?.feedback && (
+              <View style={{ 
+                backgroundColor: "#F5F5F5", 
+                borderLeftWidth: 3, 
+                borderLeftColor: "#FFD700", 
+                paddingHorizontal: 10, 
+                paddingVertical: 8, 
+                borderRadius: 4,
+                marginTop: 10
+              }}>
+                <Text style={{ color: "#666", fontSize: 12, fontStyle: "italic", lineHeight: 14 }}>
+                  💬 "{job.rating.feedback}"
+                </Text>
+              </View>
+            )}
+          </View>
+        </View>
+      </View>
+    );
+  };
 
   return (
     <SafeAreaView edges={['top', 'left', 'right']} style={{ flex: 1 }}>
-      <ScrollView style={styles.container} contentContainerStyle={{ paddingVertical: 12 }}>
-        {loading ? (
-          <Text style={styles.loadingText}>Loading jobs...</Text>
-        ) : acceptedJobs.length === 0 ? (
-          <Text style={styles.noJobsText}>No accepted jobs yet.</Text>
-        ) : (
-          acceptedJobs.map((job) => {
-            return (
-              <View key={job._id} style={{ marginBottom: 16 }}>
-                <View
-                  style={{
-                    borderRadius: 12,
-                    overflow: "hidden",
-                    backgroundColor: "#FFF",
-                    shadowColor: "#000",
-                    shadowOffset: { width: 0, height: 2 },
-                    shadowOpacity: 0.1,
-                    shadowRadius: 8,
-                    elevation: 4,
-                  }}
-                >
-                  {/* Top Image */}
-                  <View style={{ height: 180, overflow: "hidden", backgroundColor: "#EEE" }}>
-                    <Image
-                      source={job.imageUrl ? { uri: job.imageUrl } : require("../../../assets/oip2.jpg")}
-                      style={{ width: "100%", height: "100%", resizeMode: "cover" }}
-                    />
-                  </View>
-
-                  {/* Content Section */}
-                  <View style={{ paddingHorizontal: 16, paddingVertical: 14 }}>
-                    {/* Contractor Name - Prominent */}
-                    <Text style={{ color: "#333", fontSize: 16, fontWeight: "700", marginBottom: 4 }}>
-                      👤 {job.contractorName}
-                    </Text>
-
-                    {/* Main Skill / Description */}
-                    {job.description && (
-                      <Text style={{ color: "#666", fontSize: 13, marginBottom: 10 }}>
-                        {job.description}
-                      </Text>
-                    )}
-
-                    {/* Expected Wages */}
-                    <Text style={{ color: "#2ecc71", fontSize: 18, fontWeight: "900", marginBottom: 12 }}>
-                      ₹{job.amount}
-                    </Text>
-
-                    {/* Date & Time Row */}
-                    <View style={{ flexDirection: "row", marginBottom: 10 }}>
-                      {/* Date */}
-                      <View style={{ flexDirection: "row", alignItems: "center", flex: 1 }}>
-                        <MaterialIcons name="event" size={14} color="#999" />
-                        <Text style={{ color: "#666", fontSize: 12, marginLeft: 6 }}>
-                          {job.date ? new Date(job.date).toLocaleDateString() : "N/A"}
-                        </Text>
-                      </View>
-
-                      {/* Time */}
-                      {(job.startTime || job.endTime) && (
-                        <View style={{ flexDirection: "row", alignItems: "center", flex: 1, marginLeft: 10 }}>
-                          <MaterialIcons name="schedule" size={14} color="#999" />
-                          <Text style={{ color: "#666", fontSize: 12, marginLeft: 6 }}>
-                            {job.startTime || "N/A"} - {job.endTime || "N/A"}
-                          </Text>
-                        </View>
-                      )}
-                    </View>
-
-                    {/* Duration (Days) - ✅ Show job duration */}
-                    {job.numberOfDays && (
-                      <View style={{ flexDirection: "row", alignItems: "center", marginBottom: 10 }}>
-                        <MaterialIcons name="timer" size={14} color="#999" />
-                        <Text style={{ color: "#666", fontSize: 12, marginLeft: 6 }}>
-                          Duration: {job.numberOfDays} {job.numberOfDays === 1 ? 'day' : 'days'}
-                        </Text>
-                      </View>
-                    )}
-
-                    {/* Location */}
-                    <TouchableOpacity
-                      style={{ flexDirection: "row", alignItems: "flex-start", marginBottom: 12 }}
-                      onPress={() => {
-                        setSelectedJobForMap(job);
-                        setMapModalVisible(true);
-                      }}
-                    >
-                      <MaterialIcons name="location-on" size={14} color="#FF6B6B" style={{ marginTop: 1 }} />
-                      <Text style={{ color: "#666", fontSize: 12, marginLeft: 6, flex: 1 }}>
-                        {job.location}
-                      </Text>
-                    </TouchableOpacity>
-
-                    {/* Bottom Row: [Paid] Badge & Rating */}
-                    <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
-                      {/* Paid Badge */}
-                      {job.paymentStatus === "Paid" ? (
-                        <View style={{ 
-                          flexDirection: "row", 
-                          alignItems: "center",
-                          backgroundColor: "#E8F5E9",
-                          paddingHorizontal: 10,
-                          paddingVertical: 6,
-                          borderRadius: 20,
-                        }}>
-                          <MaterialIcons name="check-circle" size={14} color="#2ecc71" />
-                          <Text style={{ color: "#2ecc71", fontSize: 12, fontWeight: "600", marginLeft: 6 }}>
-                            Paid
-                          </Text>
-                        </View>
-                      ) : (
-                        <View style={{ 
-                          flexDirection: "row", 
-                          alignItems: "center",
-                          backgroundColor: "#FFF3E0",
-                          paddingHorizontal: 10,
-                          paddingVertical: 6,
-                          borderRadius: 20,
-                        }}>
-                          <MaterialIcons name="schedule" size={14} color="#FF9800" />
-                          <Text style={{ color: "#FF9800", fontSize: 12, fontWeight: "600", marginLeft: 6 }}>
-                            Pending
-                          </Text>
-                        </View>
-                      )}
-
-                      {/* Rating */}
-                      {job.rating?.stars ? (
-                        <View style={{ flexDirection: "row", alignItems: "center" }}>
-                          <MaterialIcons name="star" size={16} color="#FFD700" />
-                          <Text style={{ color: "#333", fontSize: 13, fontWeight: "700", marginLeft: 6 }}>
-                            {job.rating.stars}/5
-                          </Text>
-                        </View>
-                      ) : (
-                        <Text style={{ color: "#999", fontSize: 12 }}>No rating yet</Text>
-                      )}
-                    </View>
-
-                    {/* Feedback (if available) */}
-                    {job.rating?.feedback && (
-                      <View style={{ 
-                        backgroundColor: "#F5F5F5", 
-                        borderLeftWidth: 3, 
-                        borderLeftColor: "#FFD700", 
-                        paddingHorizontal: 10, 
-                        paddingVertical: 8, 
-                        borderRadius: 4,
-                        marginTop: 10
-                      }}>
-                        <Text style={{ color: "#666", fontSize: 12, fontStyle: "italic", lineHeight: 14 }}>
-                          💬 "{job.rating.feedback}"
-                        </Text>
-                      </View>
-                    )}
-                  </View>
-                </View>
-              </View>
-            );
-          })
-        )}
-      </ScrollView>
+      <FlatList
+        data={acceptedJobs}
+        keyExtractor={(item) => item._id}
+        style={styles.container}
+        contentContainerStyle={{ paddingVertical: 12 }}
+        refreshControl={
+          <RefreshControl refreshing={refreshing} onRefresh={handleRefresh} tintColor="#667eea" />
+        }
+        ListEmptyComponent={
+          <View style={{ flex: 1, justifyContent: "center", alignItems: "center", paddingVertical: 40 }}>
+            {loading ? (
+              <Text style={styles.loadingText}>Loading jobs...</Text>
+            ) : (
+              <Text style={styles.noJobsText}>No accepted jobs yet.</Text>
+            )}
+          </View>
+        }
+        renderItem={renderJobCard}
+      />
 
       {/* Payment Received Modal */}
       <Modal

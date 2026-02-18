@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, Text, Image, TouchableOpacity, ScrollView, Alert } from 'react-native';
+import { View, Text, Image, TouchableOpacity, ScrollView, FlatList, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialIcons, FontAwesome } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -20,7 +20,6 @@ export default function ContractorHome() {
   const router = useRouter();
   const { t } = useLanguage();
   const { accessToken, user: authUser } = useAuth();
-  const [token, setToken] = React.useState<string>('');
   const [premiumModalVisible, setPremiumModalVisible] = React.useState(false);
   const [hasPremium, setHasPremium] = React.useState(false);
   const [userName, setUserName] = React.useState('You');
@@ -35,8 +34,77 @@ export default function ContractorHome() {
   const [totalSpending, setTotalSpending] = React.useState(0);
   const [workersEngaged, setWorkersEngaged] = React.useState(0);
   const [notificationCount, setNotificationCount] = React.useState<number>(0); // ✅ Add notification count state
+  // ✅ Removed dead token state - use accessToken from context instead
 
-  // Initialize socket connection on focus
+  // ✅ Separate premium listener effect - runs on login, not on every tab focus
+  React.useEffect(() => {
+    if (!accessToken) return;
+
+    const handlePremiumSubscriptionUpdate = async (data: any) => {
+      console.log(`📢 Premium subscription update received from contractor ${data.contractorPhone}`);
+      
+      try {
+        const userStr = await AsyncStorage.getItem('user');
+        let latitude = 0, longitude = 0;
+        if (userStr) {
+          const u = JSON.parse(userStr);
+          latitude = u.latitude || 0;
+          longitude = u.longitude || 0;
+        }
+        
+        const leaderboardRes = await fetch(
+          `${SERVER_URL}/leaderboard/contractors/by-district?lat=${latitude}&lon=${longitude}`,
+          {
+            headers: { Authorization: `Bearer ${accessToken}` },
+          }
+        );
+        
+        if (!leaderboardRes.ok) {
+          console.warn(`⚠️ Leaderboard refresh failed with status ${leaderboardRes.status}`);
+          return;
+        }
+        
+        const leaderboardData = await leaderboardRes.json();
+        
+        if (leaderboardData.leaderboard && Array.isArray(leaderboardData.leaderboard)) {
+          const formattedLeaderboard = leaderboardData.leaderboard.map((contractor: any) => ({
+            id: contractor.phone,
+            name: contractor.name,
+            points: contractor.score || 0,
+            profile: contractor.profilePhoto ? contractor.profilePhoto : null,
+            rank: contractor.rank,
+            rating: contractor.rating,
+            jobsPosted: contractor.jobCount,
+            tier: contractor.tier,
+          }));
+          setLeaderboard(formattedLeaderboard);
+          console.log('✅ Leaderboard refreshed after premium subscription update:', formattedLeaderboard);
+        }
+      } catch (err) {
+        console.error('Error refreshing leaderboard on subscription update:', (err as Error).message);
+      }
+    };
+
+    socket.on('premiumSubscriptionUpdate', handlePremiumSubscriptionUpdate);
+
+    return () => {
+      socket.off('premiumSubscriptionUpdate', handlePremiumSubscriptionUpdate);
+    };
+  }, [accessToken]);
+
+  const premiumSubUpdateHandlerRef = React.useRef<any>(null);
+
+  // ✅ Memoize sorted leaderboard to prevent re-sorting on every render
+  // CRITICAL: Clone array before sorting to avoid mutating React state
+  const sortedLeaderboard = React.useMemo(() => {
+    return [...leaderboard].sort((a, b) => {
+      // Current user always on top
+      if (a.name === userName) return -1;
+      if (b.name === userName) return 1;
+      // Then sort by rank
+      return (a.rank || 999) - (b.rank || 999);
+    });
+  }, [leaderboard, userName]);
   useFocusEffect(
     React.useCallback(() => {
       (async () => {
@@ -45,8 +113,6 @@ export default function ContractorHome() {
           const userStr = authUser ? JSON.stringify(authUser) : null;
 
           if (savedToken) {
-            setToken(savedToken);
-
             let currentUser = null;
             let hasActivePremium = false;
 
@@ -81,21 +147,34 @@ export default function ContractorHome() {
               }
             }
             
-            // ✅ Check if user has an ACTIVE premium plan - PERSISTENT across tab switches
-            // First check if we already marked as premium (persists across focus)
+            // ✅ Check if user has an ACTIVE premium plan - validate against expiry date
+            // Always check expiry date for current validity, don't rely solely on cached boolean
             const cachedPremium = await AsyncStorage.getItem('hasPremium');
             
-            if (cachedPremium === 'true') {
-              hasActivePremium = true;
-              console.log('✅ Using cached premium status from AsyncStorage');
-            } else if (currentUser?.premiumPlan && currentUser.premiumPlan.type) {
-              // Fallback: Check the premium plan data from user object
+            if (cachedPremium === 'true' && currentUser?.premiumPlan?.expiryDate) {
+              // Verify cached premium is still valid by checking expiry
               const expiryDate = new Date(currentUser.premiumPlan.expiryDate);
               const now = new Date();
               
-              // If premium plan exists and hasn't expired
               if (expiryDate > now) {
                 hasActivePremium = true;
+                console.log('✅ Premium status verified - cached and valid, expiry:', currentUser.premiumPlan.expiryDate);
+              } else {
+                console.log('⚠️ Cached premium expired:', currentUser.premiumPlan.expiryDate);
+                hasActivePremium = false;
+                await AsyncStorage.removeItem('hasPremium');
+              }
+            } else if (currentUser?.premiumPlan?.expiryDate) {
+              // Check the premium plan data from user object
+              const expiryDate = new Date(currentUser.premiumPlan.expiryDate);
+              const now = new Date();
+              
+              // If premium plan hasn't expired
+              if (expiryDate > now) {
+                hasActivePremium = true;
+                console.log('✅ Premium status - actively verified, expiry:', currentUser.premiumPlan.expiryDate);
+              } else {
+                console.log('⚠️ Premium subscription has expired:', currentUser.premiumPlan.expiryDate);
               }
             }
             
@@ -104,6 +183,8 @@ export default function ContractorHome() {
             // ✅ Persist premium status for next time (tab switch, etc.)
             if (hasActivePremium) {
               await AsyncStorage.setItem('hasPremium', 'true');
+            } else {
+              await AsyncStorage.removeItem('hasPremium');
             }
             
             // ✅ Don't auto-show premium modal - only show when user clicks "Upgrade Now"
@@ -174,58 +255,12 @@ export default function ContractorHome() {
               socket.connect();
             }
 
-            // ✅ NEW: Listen for premium subscription updates from other contractors
-            // This triggers instant leaderboard refresh when any contractor buys premium
-            socket.on('premiumSubscriptionUpdate', async (data) => {
-              console.log(`📢 Premium subscription update received from contractor ${data.contractorPhone}`);
-              
-              // Refresh leaderboard immediately
-              try {
-                const userStr = await AsyncStorage.getItem('user');
-                let latitude = 0, longitude = 0;
-                if (userStr) {
-                  const u = JSON.parse(userStr);
-                  latitude = u.latitude || 0;
-                  longitude = u.longitude || 0;
-                }
-                
-                const leaderboardRes = await fetch(
-                  `${SERVER_URL}/leaderboard/contractors/by-district?lat=${latitude}&lon=${longitude}`,
-                  {
-                    headers: { Authorization: `Bearer ${savedToken}` },
-                  }
-                );
-                
-                if (!leaderboardRes.ok) {
-                  console.warn(`⚠️ Leaderboard refresh failed with status ${leaderboardRes.status}`);
-                  return;
-                }
-                
-                const leaderboardData = await leaderboardRes.json();
-                
-                if (leaderboardData.leaderboard && Array.isArray(leaderboardData.leaderboard)) {
-                  const formattedLeaderboard = leaderboardData.leaderboard.map((contractor: any) => ({
-                    id: contractor.phone,
-                    name: contractor.name,
-                    points: contractor.score || 0,
-                    profile: contractor.profilePhoto ? contractor.profilePhoto : null,
-                    rank: contractor.rank,
-                    rating: contractor.rating,
-                    jobsPosted: contractor.jobCount,
-                    tier: contractor.tier,
-                  }));
-                  setLeaderboard(formattedLeaderboard);
-                  console.log('✅ Leaderboard refreshed after premium subscription update:', formattedLeaderboard);
-                }
-              } catch (err) {
-                console.error('Error refreshing leaderboard on subscription update:', (err as Error).message);
-              }
-            });
-
-            // Fetch wallet balance and jobs
-            await fetchWalletBalance();
-            await fetchJobs();
-            await fetchNotificationCount(); // ✅ Fetch notification count
+            // Fetch wallet balance and jobs in parallel
+            await Promise.all([
+              fetchWalletBalance(),
+              fetchJobs(),
+              fetchNotificationCount()
+            ]);
           }
         } catch (err) {
           // Silent fail on token loading
@@ -233,9 +268,10 @@ export default function ContractorHome() {
       })();
 
       return () => {
-        // Cleanup on unmount
+        // ✅ Socket listener cleanup is now handled in separate useEffect
+        // This useFocusEffect focuses on data fetching
       };
-    }, [])
+    }, [accessToken, authUser])
   );
 
   const topCards = [
@@ -271,9 +307,12 @@ export default function ContractorHome() {
 
   const fetchWalletBalance = async () => {
     try {
-      const savedToken = await AsyncStorage.getItem('token');
+      if (!accessToken) {
+        console.warn('No access token available');
+        return;
+      }
       const res = await fetch(`${SERVER_URL}/wallet/balance`, {
-        headers: { Authorization: `Bearer ${savedToken}` },
+        headers: { Authorization: `Bearer ${accessToken}` },
       });
       const data = await res.json();
       if (data.balance !== undefined) {
@@ -286,11 +325,14 @@ export default function ContractorHome() {
 
   const fetchJobs = async () => {
     try {
-      const savedToken = await AsyncStorage.getItem('token');
+      if (!accessToken) {
+        console.warn('No access token available');
+        return;
+      }
       const res = await fetch(`${SERVER_URL}/jobs`, {
         method: 'GET',
         headers: {
-          Authorization: `Bearer ${savedToken}`,
+          Authorization: `Bearer ${accessToken}`,
           'Content-Type': 'application/json',
         },
       });
@@ -301,7 +343,7 @@ export default function ContractorHome() {
       setJobs(data);
 
       // Filter jobs posted by this contractor
-      const myJobs = data.filter((job: any) => job.contractorName === userName && !job.isCancelled); // ✅ Exclude cancelled jobs
+      const myJobs = data.filter((job: any) => job.contractorName === authUser?.name && !job.isCancelled); // ✅ Use authUser.name to avoid stale userName state
       setPostedCount(myJobs.length);
 
       // Count active/unpaid workers for contractor jobs
@@ -336,9 +378,12 @@ export default function ContractorHome() {
   // ✅ Fetch notification count
   const fetchNotificationCount = async () => {
     try {
-      const savedToken = await AsyncStorage.getItem('token');
+      if (!accessToken) {
+        console.warn('No access token available');
+        return;
+      }
       const res = await fetch(`${SERVER_URL}/notifications?limit=100&skip=0`, {
-        headers: { Authorization: `Bearer ${savedToken}` },
+        headers: { Authorization: `Bearer ${accessToken}` },
       });
       if (!res.ok) throw new Error('Failed to fetch notifications');
       
@@ -351,14 +396,18 @@ export default function ContractorHome() {
 
   const handlePlanSelected = async (planId: string) => {
     try {
+      if (!accessToken) {
+        console.warn('No access token available');
+        return;
+      }
+      
       // ✅ Save premium status to AsyncStorage
       await AsyncStorage.setItem('hasPremium', 'true');
       
       // ✅ Fetch updated user data from backend and save to AsyncStorage with premium plan info
-      const savedToken = await AsyncStorage.getItem('token');
       try {
         const response = await fetch(`${SERVER_URL}/users/profile`, {
-          headers: { Authorization: `Bearer ${savedToken}` },
+          headers: { Authorization: `Bearer ${accessToken}` },
         });
         if (response.ok) {
           const data = await response.json();
@@ -391,7 +440,7 @@ export default function ContractorHome() {
         const leaderboardRes = await fetch(
           `${SERVER_URL}/leaderboard/contractors/by-district?lat=${latitude}&lon=${longitude}`,
           {
-            headers: { Authorization: `Bearer ${savedToken}` },
+            headers: { Authorization: `Bearer ${accessToken}` },
           }
         );
         
@@ -542,23 +591,25 @@ export default function ContractorHome() {
             </View>
           )}
 
-          {/* Leaderboard cards - Current user on top */}
-          <ScrollView style={styles.leaderboardScroll} showsVerticalScrollIndicator={false}>
-            {leaderboard
-              .sort((a, b) => {
-                // Current user always on top
-                if (a.name === userName) return -1;
-                if (b.name === userName) return 1;
-                // Then sort by rank
-                return (a.rank || 999) - (b.rank || 999);
-              })
-              .map((person, index) => {
+          {/* Leaderboard cards - Current user on top - Only render if premium */}
+          {hasPremium && sortedLeaderboard.length > 0 ? (
+            <FlatList
+              data={sortedLeaderboard}
+              keyExtractor={(person) => person.id}
+              style={styles.leaderboardScroll}
+              showsVerticalScrollIndicator={false}
+              scrollEnabled={true}
+              initialNumToRender={5}
+              maxToRenderPerBatch={5}
+              windowSize={5}
+              removeClippedSubviews={true}
+              renderItem={({ item: person, index }) => {
                 const isCurrentUser = person.name === userName;
-                const displayRank = isCurrentUser ? person.rank : (index > 0 ? leaderboard.find((p) => p.name === person.name)?.rank || index : index + 1);
+                // ✅ No need to .find() - rank is already set correctly after sorting
+                const displayRank = isCurrentUser ? person.rank : person.rank || index + 1;
                 
                 return (
                   <View
-                    key={person.id}
                     style={[styles.leaderboardCard, isCurrentUser && styles.firstCardHighlight]}
                   >
                     {/* Bubbles */}
@@ -604,8 +655,9 @@ export default function ContractorHome() {
                     </View>
                   </View>
                 );
-              })}
-          </ScrollView>
+              }}
+            />
+          ) : null}
         </View>
       </View>
 

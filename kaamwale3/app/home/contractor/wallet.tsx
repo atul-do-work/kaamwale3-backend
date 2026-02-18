@@ -140,8 +140,10 @@ export default function ContractorWalletAttendance() {
     })();
   }, [accessToken, authUser]);
 
-  // Fetch Jobs
-  const fetchJobs = async () => {
+
+
+  // ✅ Memoize fetchJobs to prevent re-creation on every render
+  const fetchJobs = React.useCallback(async () => {
     if (!contractorName || !accessToken) return;
 
     setLoading(true);
@@ -167,36 +169,45 @@ export default function ContractorWalletAttendance() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [contractorName, accessToken]);
 
   // SOCKET LISTENER FOR REALTIME UPDATES
   useEffect(() => {
     fetchJobs();
 
-    socket.on("jobUpdated", fetchJobs);
-    // ✅ Handle both number (from old emit) and object (from new emit)
-    socket.on("walletUpdated", (data: number | any) => {
-      if (typeof data === 'number') {
-        setWalletBalance(data);
-      } else if (data && typeof data === 'object' && data.balance) {
-        // If it's an object with balance property, extract it
+    // ✅ Use named handlers for safe cleanup
+    const handleJobUpdated = () => fetchJobs();
+    const handleWalletUpdated = (data: number | any) => {
+      // 🔐 SECURITY: Only update wallet if this event is for the current user
+      if (data && typeof data === 'object') {
+        // If phone doesn't match current user, ignore the event
+        if (data.phone && data.phone !== authUser?.phone) {
+          console.warn(`⚠️ Ignoring walletUpdated for different user: ${data.phone} (current: ${authUser?.phone})`);
+          return;
+        }
+        // Safe to update - event is for current user
         setWalletBalance(data.balance);
+      } else if (typeof data === 'number') {
+        setWalletBalance(data);
       }
-    });
+    };
+
+    socket.on("jobUpdated", handleJobUpdated);
+    socket.on("walletUpdated", handleWalletUpdated);
 
     return () => {
-      socket.off("jobUpdated", fetchJobs);
-      socket.off("walletUpdated");
+      // ✅ Remove listeners with handler references (screen-safe cleanup)
+      socket.off("jobUpdated", handleJobUpdated);
+      socket.off("walletUpdated", handleWalletUpdated);
     };
-  }, [contractorName, accessToken]);
+  }, [fetchJobs, accessToken, authUser?.phone]);
 
   // Mark attendance
   const markAttendance = async (jobId: string, status: "Present" | "Absent") => {
     try {
       await api.post(`/jobs/attendance/${jobId}`, { status });
-
-      setJobs(prev => prev.map(job => (job._id === jobId ? { ...job, attendanceStatus: status } : job)));
-      socket.emit("jobUpdated");
+      // ✅ DON'T update state optimistically - let backend emit jobUpdated
+      // Backend will broadcast updated job with attendanceStatus, triggering fetchJobs
     } catch (err) {
       console.error("Failed to mark attendance:", err);
     }
@@ -211,9 +222,8 @@ export default function ContractorWalletAttendance() {
 
       if (data.success) {
         Alert.alert(t('success'), t('paymentSuccessful'));
-        setJobs(prev => prev.map(job => (job._id === jobId ? { ...job, paymentStatus: "Paid" } : job)));
-        socket.emit("jobUpdated");
-        socket.emit("walletUpdated", walletBalance);
+        // ✅ DON'T update state optimistically - let backend emit jobUpdated
+        // Backend will broadcast updated job with paymentStatus, triggering fetchJobs
       } else {
         Alert.alert(t('error'), data.message || t('paymentFailed'));
       }
@@ -343,7 +353,6 @@ export default function ContractorWalletAttendance() {
         paymentId: data.paymentId,
         signature: data.signature,
         jobId: job._id,
-        amount: job.amount,
         workerPhone: job.acceptedBy
       });
 
@@ -354,17 +363,8 @@ export default function ContractorWalletAttendance() {
       // Check response success flag
       if (verifyData.success) {
         Alert.alert(t('success'), t('paymentSuccessful') + "! " + t('paymentSuccessful'));
-        setJobs(prev => prev.map(j => (j._id === currentPaymentJobId ? { ...j, paymentStatus: "Paid" } : j)));
-        
-        // ✅ Emit events to notify worker
-        const job = jobs.find(j => j._id === currentPaymentJobId);
-        if (job) {
-          socket.emit("walletRefresh", { phone: job.acceptedBy, amount: job.amount });
-          socket.emit("notificationRefresh", { phone: job.acceptedBy });
-        }
-        
-        socket.emit("jobUpdated");
-        socket.emit("walletUpdated", walletBalance);
+        // ✅ DON'T update state optimistically - let backend emit jobUpdated + walletUpdated
+        // This ensures UI reflects authoritative backend state, not optimistic guess
         setCurrentPaymentJobId(null);
       } else {
         Alert.alert(t('error'), verifyData.message || t('paymentFailed'));
@@ -398,12 +398,8 @@ export default function ContractorWalletAttendance() {
       if (data.success) {
         Alert.alert(t('success'), t('ratingSubmitted'));
         setRatingModalVisible(false);
-        // Update the job in state to reflect the rating
-        setJobs(prev => prev.map(job => 
-          job._id === selectedJobForRating._id 
-            ? { ...job, rating: { stars: ratingStars, feedback: ratingFeedback, ratedAt: new Date().toISOString() } } 
-            : job
-        ));
+        // ✅ DON'T update state optimistically - let backend emit jobUpdated with rating
+        // Backend fetches from DB and broadcasts authoritative job state
       } else {
         Alert.alert(t('error'), data.message || t('failedSubmitRating'));
       }
@@ -415,7 +411,7 @@ export default function ContractorWalletAttendance() {
     }
   };
 
-  // WALLET
+  // ✅ Fetch wallet on mount
   const fetchWallet = async (accessTkn?: string) => {
     const tkn = accessTkn || accessToken;
     if (!tkn) return;
@@ -425,53 +421,9 @@ export default function ContractorWalletAttendance() {
 
       if (data && data.success) {
         setWalletBalance(data.wallet.balance);
-        socket.emit("walletUpdated", data.wallet.balance);
       }
     } catch (err) {
       console.error("Wallet fetch failed:", err);
-    }
-  };
-
-  // DEPOSIT
-  const handleDeposit = async () => {
-    const amt = Number(depositAmount);
-    if (!amt || amt <= 0) return Alert.alert(t('error'), t('enterValidDeposit'));
-
-    try {
-      const res = await api.post(`/wallet/deposit`, { amount: amt });
-      const data = res.data;
-
-      if (data && data.success) {
-        Alert.alert(t('success'), t('depositSuccessful'));
-        setWalletBalance(data.wallet.balance);
-        setDepositAmount("");
-        setShowDepositInput(false);
-        socket.emit("walletUpdated", data.wallet.balance);
-      }
-    } catch (err) {
-      Alert.alert(t('error'), t('depositFailed'));
-    }
-  };
-
-  // WITHDRAW
-  const handleWithdraw = async () => {
-    const amt = Number(withdrawAmount);
-    if (!amt || amt <= 0) return Alert.alert(t('error'), t('enterValidWithdraw'));
-    if (amt > walletBalance) return Alert.alert(t('error'), t('insufficientBalance'));
-
-    try {
-      const res = await api.post(`/wallet/withdraw`, { amount: amt });
-      const data = res.data;
-
-      if (data && data.success) {
-        Alert.alert(t('success'), t('withdrawSuccessful'));
-        setWalletBalance(data.wallet.balance);
-        setWithdrawAmount("");
-        setShowWithdrawInput(false);
-        socket.emit("walletUpdated", data.wallet.balance);
-      }
-    } catch (err) {
-      Alert.alert(t('error'), t('withdrawFailed'));
     }
   };
 
@@ -662,20 +614,17 @@ export default function ContractorWalletAttendance() {
       const res = await api.post(`/wallet/deposit/verify`, {
         orderId: data.orderId,
         paymentId: data.paymentId,
-        signature: data.signature,
-        amount: currentDepositAmount
+        signature: data.signature
       });
 
       setDepositModalVisible(false);
 
       if (res.data.success) {
-        setWalletBalance(res.data.walletBalance);
+        // ✅ DON'T update state here - let socket.on('walletUpdated') handle it
+        // Backend emits walletUpdated immediately after DB update (single authority)
         Alert.alert(t('success'), `₹${currentDepositAmount} ` + t('deposited'));
         setDepositAmount("");
         setShowDepositInput(false);
-        
-        // Refresh wallet
-        if (accessToken) fetchWallet(accessToken);
       } else {
         Alert.alert(t('error'), res.data.message || t('depositVerificationFailed'));
       }
@@ -721,13 +670,11 @@ export default function ContractorWalletAttendance() {
       });
 
       if (res.data.success) {
-        setWalletBalance(res.data.walletBalance);
+        // ✅ Server-authoritative: socket.on('walletUpdated') will update balance
         Alert.alert(t('success'), t('withdrawalInitiated') + "!\n\n" + t('amountTransferred'));
         setWithdrawAmount("");
         setShowWithdrawInput(false);
         
-        // Refresh wallet
-        if (accessToken) fetchWallet(accessToken);
       }
     } catch (err: any) {
       const errorMsg = err.response?.data?.message || t('withdrawFailed');
@@ -735,8 +682,9 @@ export default function ContractorWalletAttendance() {
     }
   };
 
-  // Render job card
-  const renderJob = ({ item }: { item: Job }) => (
+  // ✅ Memoize renderJob to stabilize FlatList rendering
+  const renderJob = React.useCallback(
+    ({ item }: { item: Job }) => (
     <View style={styles.attendanceCard}>
       <Text style={styles.jobTitle}>{item.title}</Text>
       <Text style={styles.jobDescription}>{item.description}</Text>
@@ -768,37 +716,6 @@ export default function ContractorWalletAttendance() {
               color: item.attendanceStatus === "Present" ? "#2ecc71" : "#e74c3c",
             }}
           >
-          {/* Pay options modal (centered) */}
-          <Modal visible={payOptionsJobId !== null} transparent animationType="fade">
-            <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: 'rgba(0,0,0,0.4)' }}>
-              {/* Backdrop - closes when tapped outside modal */}
-              <TouchableOpacity
-                activeOpacity={1}
-                onPress={() => setPayOptionsJobId(null)}
-                style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }}
-              />
-
-              <View style={{ width: '90%', backgroundColor: '#fff', borderRadius: 12, padding: 18, elevation: 6 }}>
-                <Text style={{ fontWeight: '700', fontSize: 16, marginBottom: 12 }}>Choose payment method</Text>
-
-                <TouchableOpacity
-                  style={{ padding: 12, borderRadius: 8, backgroundColor: '#f3f4f6', marginBottom: 8 }}
-                  onPress={() => payOptionsJobId && handlePayOption(payOptionsJobId, 'Cash')}
-                >
-                  <Text style={{ fontWeight: '600' }}>Pay via Cash</Text>
-                  <Text style={{ color: '#666', marginTop: 4 }}>Worker will be paid cash on site</Text>
-                </TouchableOpacity>
-
-                <TouchableOpacity
-                  style={{ padding: 12, borderRadius: 8, backgroundColor: '#e6f7ff' }}
-                  onPress={() => payOptionsJobId && handlePayOption(payOptionsJobId, 'Online')}
-                >
-                  <Text style={{ fontWeight: '600' }}>Pay via Online</Text>
-                  <Text style={{ color: '#666', marginTop: 4 }}>Use online wallet / UPI</Text>
-                </TouchableOpacity>
-              </View>
-            </View>
-          </Modal>
             {item.attendanceStatus}
           </Text>
 
@@ -862,7 +779,14 @@ export default function ContractorWalletAttendance() {
         </>
       )}
     </View>
+    ),
+    [markAttendance, setPayOptionsJobId, handleOpenRatingModal]
   );
+
+  // ✅ Reset pagination when jobs data changes
+  useEffect(() => {
+    setDisplayedCount(5);
+  }, [jobs]);
 
   return (
     <View style={{ flex: 1, backgroundColor: "#f5f5f5", paddingTop: 40 }}>
@@ -984,6 +908,10 @@ export default function ContractorWalletAttendance() {
                 keyExtractor={item => item._id.toString()}
                 renderItem={renderJob}
                 contentContainerStyle={{ paddingBottom: 20 }}
+                initialNumToRender={5}
+                maxToRenderPerBatch={5}
+                windowSize={5}
+                removeClippedSubviews={true}
               />
               
               {/* ✅ See More Button - Show only if there are more items */}
@@ -1249,6 +1177,38 @@ export default function ContractorWalletAttendance() {
           </View>
         </View>
       )}
+
+      {/* ✅ Pay Options Modal - Moved outside FlatList for safety & performance */}
+      <Modal visible={payOptionsJobId !== null} transparent animationType="fade">
+        <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: 'rgba(0,0,0,0.4)' }}>
+          {/* Backdrop - closes when tapped outside modal */}
+          <TouchableOpacity
+            activeOpacity={1}
+            onPress={() => setPayOptionsJobId(null)}
+            style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }}
+          />
+
+          <View style={{ width: '90%', backgroundColor: '#fff', borderRadius: 12, padding: 18, elevation: 6 }}>
+            <Text style={{ fontWeight: '700', fontSize: 16, marginBottom: 12 }}>Choose payment method</Text>
+
+            <TouchableOpacity
+              style={{ padding: 12, borderRadius: 8, backgroundColor: '#f3f4f6', marginBottom: 8 }}
+              onPress={() => payOptionsJobId && handlePayOption(payOptionsJobId, 'Cash')}
+            >
+              <Text style={{ fontWeight: '600' }}>Pay via Cash</Text>
+              <Text style={{ color: '#666', marginTop: 4 }}>Worker will be paid cash on site</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={{ padding: 12, borderRadius: 8, backgroundColor: '#e6f7ff' }}
+              onPress={() => payOptionsJobId && handlePayOption(payOptionsJobId, 'Online')}
+            >
+              <Text style={{ fontWeight: '600' }}>Pay via Online</Text>
+              <Text style={{ color: '#666', marginTop: 4 }}>Use online wallet / UPI</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }

@@ -14,7 +14,7 @@ const walletSchema = new mongoose.Schema({
       date: { type: Date, default: Date.now },
       description: String,
       orderId: String, // For deposit/withdraw tracking
-      paymentId: String,
+      paymentId: { type: String, unique: true, sparse: true }, // 🔐 Unique index prevents duplicate payments globally
       status: { type: String, default: 'completed' } // completed, pending, failed
     }
   ],
@@ -24,6 +24,11 @@ const walletSchema = new mongoose.Schema({
   totalWithdrawn: { type: Number, default: 0 },
   totalEarned: { type: Number, default: 0 }
 }, { timestamps: true });
+
+// 🔐 Fintech Security Indexes
+// This index prevents duplicate payments globally (unique + sparse = safe for null values)
+// Works in conjunction with atomic MongoDB $ne condition in deposit/verify endpoint
+walletSchema.index({ 'transactions.paymentId': 1 }, { unique: true, sparse: true });
 
 // Auto-calculate totals
 walletSchema.methods.updateTotals = function() {
