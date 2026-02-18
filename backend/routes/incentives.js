@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const verifyToken = require('../utils/auth');
+const { authenticateToken } = require('../utils/auth');
 const Worker = require('../models/Worker');
 const IncentiveLedger = require('../models/IncentiveLedger');
 const Wallet = require('../models/Wallet');
@@ -24,7 +24,7 @@ const Wallet = require('../models/Wallet');
  *   lastWorkDate: "2026-02-18"
  * }
  */
-router.get('/progress', verifyToken, async (req, res) => {
+router.get('/progress', authenticateToken, async (req, res) => {
   try {
     const phone = req.user?.phone;
     if (!phone) {
@@ -114,10 +114,10 @@ router.get('/progress', verifyToken, async (req, res) => {
  *   message: "Reward claimed and credited to wallet",
  *   rewardAmount: 50,
  *   newWalletBalance: 1250,
- *   transactionId: "incentive_5d_123456"
+ *   transactionId: "incentile_5d_123456"
  * }
  */
-router.post('/claim/:milestoneId', verifyToken, async (req, res) => {
+router.post('/claim/:milestoneId', authenticateToken, async (req, res) => {
   try {
     const phone = req.user?.phone;
     const { milestoneId } = req.params;
