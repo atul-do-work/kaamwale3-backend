@@ -710,14 +710,16 @@ io.on("connection", (socket) => {
               }
             }
 
-            // ✅ ALSO: Emit workerLocationUpdate for dashboard modal real-time tracking
-            // This allows contractors viewing the job modal to see live location updates
-            io.emit("workerLocationUpdate", {
+            // ✅ FIXED: Emit only to contractor watching this job (not all clients)
+            // Use socket rooms for targeted emission instead of broadcasting
+            const contractorRoomId = `contractor_${job.contractorPhone}`;
+            io.to(contractorRoomId).emit("workerLocationUpdate", {
               phone: user.phone,
+              jobId: job._id.toString(),
               location: updatedWorker.location,
               timestamp: new Date(),
             });
-            console.log(`📡 Emitted workerLocationUpdate for ${user.phone}`);
+            console.log(`📡 Emitted workerLocationUpdate to contractor ${job.contractorPhone} (room: ${contractorRoomId})`);
           }
         } catch (e) {
           console.error('Error forwarding worker location to job:', e);
@@ -776,11 +778,14 @@ io.on("connection", (socket) => {
           workerType,
           amount,
           contractorName: user.name || user.phone,
+          contractorPhone: user.phone, // ✅ Store phone for filtering
           lat,
           lon,
           date: date || new Date(),
           status: 'pending',
           declinedBy: [],
+          // ✅ NEW: Set offer expiry to prevent memory leaks
+          offerExpiresAt: new Date(Date.now() + 60 * 1000),
         });
         await newJob.save();
 
@@ -2037,6 +2042,9 @@ app.post("/jobs/post", authenticateToken, async (req, res) => {
       requiredWorkers: parseInt(requiredWorkers) || 1,
       status: "pending",
       declinedBy: [],
+      // ✅ NEW: Set offer expiry to prevent memory leaks
+      // Offer expires in 60 seconds (allows cleanup scheduler to find stale timeouts)
+      offerExpiresAt: new Date(Date.now() + 60 * 1000),
     });
     await newJob.save();
 
@@ -2142,23 +2150,32 @@ app.post("/jobs/accept/:id", authenticateToken, async (req, res) => {
 
     // Handle bulk hiring acceptance
     if (job.bulkHiring) {
-      // Prevent duplicate accepts
-      if (job.acceptedWorkers && job.acceptedWorkers.find(w => w.phone === workerPhone)) {
-        return res.status(400).json({ success: false, message: "You have already accepted this job" });
+      // ✅ ATOMIC: Use $addToSet to prevent duplicates + race conditions
+      // This prevents two workers from adding themselves twice in concurrent requests
+      const updated = await Job.findOneAndUpdate(
+        {
+          _id: jobId,
+          bulkHiring: true,
+          // Ensure this worker hasn't already accepted (checked via $addToSet behavior)
+          "acceptedWorkers.phone": { $ne: workerPhone }
+        },
+        {
+          $addToSet: { acceptedWorkers: acceptedWorkerSnapshot }
+        },
+        { new: true }
+      );
+
+      // If worker already accepted, update will return null
+      if (!updated) {
+        const checkJob = await Job.findById(jobId);
+        if (checkJob && checkJob.acceptedWorkers?.find(w => w.phone === workerPhone)) {
+          return res.status(400).json({ success: false, message: "You have already accepted this job" });
+        }
+        // If job doesn't exist or other error
+        return res.status(400).json({ success: false, message: "Could not accept job" });
       }
 
-      job.acceptedWorkers = job.acceptedWorkers || [];
-      job.acceptedWorkers.push(acceptedWorkerSnapshot);
-
-      // If required reached, finalize job
-      if (job.acceptedWorkers.length >= (job.requiredWorkers || 1)) {
-        job.status = 'accepted';
-        job.acceptedBy = job.acceptedWorkers[0]?.phone || workerPhone;
-        job.acceptedWorker = job.acceptedWorkers[0] || acceptedWorkerSnapshot;
-        job.acceptedAt = job.acceptedAt || new Date();
-      }
-
-      await job.save();
+      const job = updated; // Use the updated job document
 
       // Track acceptance
       try {
@@ -2172,6 +2189,39 @@ app.post("/jobs/accept/:id", authenticateToken, async (req, res) => {
         console.error("❌ Error updating gigs data on acceptance:", e);
       }
 
+      // Check if required workers count reached
+      const acceptedCount = job.acceptedWorkers?.length || 0;
+      const requiredCount = job.requiredWorkers || 1;
+      const jobFinalized = acceptedCount >= requiredCount && job.status !== 'accepted';
+
+      // If required reached, finalize job atomically
+      if (jobFinalized) {
+        const finalized = await Job.findOneAndUpdate(
+          { _id: jobId, status: { $ne: 'accepted' } }, // Only update if not already finalized
+          {
+            $set: {
+              status: 'accepted',
+              acceptedBy: job.acceptedWorkers[0]?.phone || workerPhone,
+              acceptedWorker: job.acceptedWorkers[0] || acceptedWorkerSnapshot,
+              acceptedAt: job.acceptedAt || new Date()
+            }
+          },
+          { new: true }
+        );
+        if (finalized) {
+          console.log(`✅ Bulk job ${jobId} FINALIZED with ${acceptedCount} workers`);
+          // Clean up timeouts
+          if (pendingJobTimeouts.has(jobId)) {
+            clearTimeout(pendingJobTimeouts.get(jobId));
+            pendingJobTimeouts.delete(jobId);
+          }
+          if (pendingJobExpirations.has(jobId)) {
+            clearTimeout(pendingJobExpirations.get(jobId));
+            pendingJobExpirations.delete(jobId);
+          }
+        }
+      }
+
       // Notify contractor about updated accepted count
       try {
         await NotificationHistory.create({
@@ -2180,9 +2230,9 @@ app.post("/jobs/accept/:id", authenticateToken, async (req, res) => {
           senderName: workerName || req.user.name,
           type: 'job_accepted',
           title: `Worker Accepted: ${job.title}`,
-          body: `${workerName} accepted your job. ${job.acceptedWorkers.length}/${job.requiredWorkers} accepted.`,
+          body: `${workerName} accepted your job. ${acceptedCount}/${requiredCount} accepted.`,
           jobId: job._id.toString(),
-          metadata: { acceptedCount: job.acceptedWorkers.length, requiredWorkers: job.requiredWorkers },
+          metadata: { acceptedCount, requiredWorkers: requiredCount },
           deepLink: `contractor/jobs/${job._id.toString()}`,
           pushNotificationSent: false,
         });
@@ -2193,25 +2243,6 @@ app.post("/jobs/accept/:id", authenticateToken, async (req, res) => {
       // Emit targeted update with accepted workers list
       const payload = { ...job.toObject(), _targetedUpdate: true, targetedFor: [job.contractorName] };
       await emitJobUpdatedToUsers(payload, [job.contractorName]);
-
-      // If finalized, also notify workers and start tracking
-      if (job.status === 'accepted') {
-        if (pendingJobTimeouts.has(jobId)) {
-          clearTimeout(pendingJobTimeouts.get(jobId));
-          pendingJobTimeouts.delete(jobId);
-        }
-        if (pendingJobExpirations.has(jobId)) {
-          clearTimeout(pendingJobExpirations.get(jobId));
-          pendingJobExpirations.delete(jobId);
-        }
-
-        try {
-          const TRACK_MINUTES = Number(process.env.TRACK_MINUTES) || 10;
-          trackingJobs.set(jobId, Date.now() + TRACK_MINUTES * 40 * 1000);
-        } catch (e) {
-          console.error("Error starting tracking for job", e);
-        }
-      }
 
       return res.json({ success: true, message: "Job accepted successfully", job });
     }
@@ -3791,9 +3822,48 @@ app.get('/debug/geo-test', authenticateToken, async (req, res) => {
   }
 });
 
+// ✅ BACKGROUND JOB: Cleanup expired job offers from memory
+// Prevents memory leaks from setTimeouts that live forever
+const startJobOfferCleanupScheduler = () => {
+  setInterval(async () => {
+    try {
+      const now = new Date();
+      
+      // Find all expired job offers from DB
+      const expiredJobs = await Job.find({
+        offerExpiresAt: { $lt: now },
+        status: 'pending' // Still pending (not accepted)
+      }).select('_id');
+
+      if (expiredJobs.length === 0) return;
+
+      console.log(`🧹 Job Offer Cleanup: Found ${expiredJobs.length} expired offers`);
+
+      // Clear timeouts from memory map for expired jobs
+      for (const job of expiredJobs) {
+        const jobId = job._id.toString();
+        if (pendingJobTimeouts.has(jobId)) {
+          clearTimeout(pendingJobTimeouts.get(jobId));
+          pendingJobTimeouts.delete(jobId);
+          console.log(`  ✅ Cleared timeout for job ${jobId}`);
+        }
+        if (pendingJobExpirations.has(jobId)) {
+          clearTimeout(pendingJobExpirations.get(jobId));
+          pendingJobExpirations.delete(jobId);
+        }
+      }
+
+      console.log(`✅ Job offer cleanup completed. Memory map size: ${pendingJobTimeouts.size}`);
+    } catch (err) {
+      console.error('❌ Error in job offer cleanup scheduler:', err);
+    }
+  }, 5 * 60 * 1000); // Run every 5 minutes
+};
+
 // ✅ Start leaderboard scheduler when server starts
 setTimeout(() => {
   startLeaderboardScheduler();
+  startJobOfferCleanupScheduler();
 }, 2000); // Wait 2 seconds for DB to stabilize
 
 // ---------------- START SERVER ----------------

@@ -1,5 +1,6 @@
 import { io } from "socket.io-client";
 import { SERVER_URL } from "./config";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 
 // ⚠️ Do NOT create multiple socket instances.
 // Create only ONE global instance and export it.
@@ -17,21 +18,43 @@ export const socket = io(SOCKET_URL, {
   reconnectionDelayMax: 5000,
 });
 
-// Keep an in-memory token reference (set by AuthProvider or components)
-let currentToken: string | null = null;
-
-export const setSocketAuth = (token: string | null) => {
-  currentToken = token;
-  (socket.auth as any) = token ? { token } : null;
-};
-
 // ✅ CRITICAL: Re-apply auth token on reconnection
-socket.on("disconnect", () => {
+socket.on("disconnect", async () => {
   console.log("🔌 Socket disconnected, will auto-reconnect with auth token");
-  // Use the in-memory token set via `setSocketAuth`.
-  if (currentToken) {
-    (socket.auth as any) = { token: currentToken };
-    console.log("🔐 Auth token prepared for reconnection (in-memory)");
+  // Retrieve token for next reconnection
+  let token = await AsyncStorage.getItem("token");
+
+  // If we have a refresh token and regular token might be expired, try refreshing
+  const refreshToken = await AsyncStorage.getItem("refreshToken");
+  if (refreshToken && token) {
+    try {
+      // Try to refresh the token proactively
+      const config = await import("./config");
+      const SERVER_URL = config.SERVER_URL;
+      const response = await fetch(`${SERVER_URL}/auth/refresh`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ refreshToken }),
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        if (data.accessToken && typeof data.accessToken === "string") {
+          token = data.accessToken;
+          await AsyncStorage.setItem("token", data.accessToken);
+          console.log("🔄 Token refreshed on disconnect");
+        }
+      }
+    } catch (e) {
+      const error = e as Error;
+      console.log("Could not refresh token on disconnect:", error.message);
+      // Continue with old token, will get error on reconnect
+    }
+  }
+
+  if (token) {
+    (socket.auth as any) = { token };
+    console.log("🔐 Auth token prepared for reconnection");
   }
 });
 
@@ -67,11 +90,18 @@ export const disconnectSocket = () => {
 export const clearAllUserData = async () => {
   try {
     console.log("🗑️ Clearing all user data on logout...");
-    // Disconnect socket and clear its auth state. Storage clearing is handled by AuthProvider.
+
+    // Disconnect socket first
     disconnectSocket();
+
+    // Clear socket auth to prevent stale reconnect
     (socket.auth as any) = null;
-    currentToken = null;
-    console.log("✅ Socket state cleared (storage clearing handled elsewhere)");
+
+    // Clear all AsyncStorage keys
+    const keys = await AsyncStorage.getAllKeys();
+    await AsyncStorage.multiRemove(keys);
+
+    console.log("✅ All user data cleared successfully");
   } catch (err) {
     const error = err as Error;
     console.error("❌ Error clearing user data:", error);

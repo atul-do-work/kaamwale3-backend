@@ -1355,16 +1355,17 @@ function WorkerHome() {
         <WorkerMap style={styles.map} />
       </View>
 
-      {currentJob && (
-        <Modal
-          visible={!!currentJob}
-          transparent
-          animationType="fade"
-          onRequestClose={async () => {
-            await cleanupJobAlert();
-            setCurrentJob(null);
-          }}
-        >
+      {/* ✅ FIXED: Always render Modal component (not conditionally) to ensure it can appear when job arrives */}
+      <Modal
+        visible={!!currentJob}
+        transparent
+        animationType="slide"
+        onRequestClose={async () => {
+          await cleanupJobAlert();
+          setCurrentJob(null);
+        }}
+      >
+        {currentJob && (
           <View style={styles.modalOverlay}>
             <View style={styles.modalContent}>
               {/* Top Row: Close Button and Need Help Phone Button */}
@@ -1520,8 +1521,8 @@ function WorkerHome() {
               </View>
             </View>
           </View>
-        </Modal>
-      )}
+        )}
+      </Modal>
 
       {/* ONE-TIME PROFILE SETUP MODAL - Shows only once on first load */}
       <Modal visible={showProfileSetupModal} transparent animationType="fade">

@@ -635,46 +635,58 @@ export default function ContractorWalletAttendance() {
         signature: data.signature
       });
 
+      // ✅ Close modal first before any state updates
       setDepositModalVisible(false);
-      // ✅ Clear WebView HTML from memory
       setDepositModalHtml('');
 
       if (res.data.success) {
-        // ✅ DON'T update state here - let socket.on('walletUpdated') handle it
-        // Backend emits walletUpdated immediately after DB update (single authority)
-        Alert.alert(t('success'), `₹${currentDepositAmount} ` + t('deposited'));
+        // ✅ Delay alert to ensure modal is fully closed
+        setTimeout(() => {
+          Alert.alert(
+            t('success'),
+            `₹${currentDepositAmount} deposited successfully!`,
+            [{ text: 'OK', onPress: () => {} }]
+          );
+        }, 300);
+        
         setDepositAmount("");
         setShowDepositInput(false);
         // ✅ Fallback: Fetch wallet if socket fails
         await fetchWallet();
       } else {
         // ✅ Offer retry for verification failures
+        setTimeout(() => {
+          Alert.alert(
+            t('error'),
+            res.data.message || 'Deposit verification failed',
+            [
+              { text: "Close", onPress: () => {} },
+              { text: "Retry", onPress: () => verifyDeposit(data), style: "default" }
+            ]
+          );
+        }, 300);
+      }
+    } catch (err: any) {
+      // ✅ Close modal first
+      setDepositModalVisible(false);
+      setDepositModalHtml('');
+      
+      const errorMsg = err.response?.data?.message || 'Deposit verification failed';
+      
+      // ✅ Delay alert to ensure modal is fully closed
+      setTimeout(() => {
         Alert.alert(
           t('error'),
-          res.data.message || t('depositVerificationFailed'),
+          errorMsg,
           [
-            { text: "Close", onPress: () => {} },
+            { text: "Close", onPress: () => {  
+              // ✅ Even if user closes error, try to fetch wallet as fallback
+              fetchWallet();
+            } },
             { text: "Retry", onPress: () => verifyDeposit(data), style: "default" }
           ]
         );
-      }
-    } catch (err: any) {
-      setDepositModalVisible(false);
-      // ✅ Clear WebView HTML from memory
-      setDepositModalHtml('');
-      const errorMsg = err.response?.data?.message || t('depositVerificationFailed');
-      // ✅ Offer retry for network/timeout errors
-      Alert.alert(
-        t('error'),
-        errorMsg,
-        [
-          { text: "Close", onPress: () => {  
-            // ✅ Even if user closes error, try to fetch wallet as fallback
-            fetchWallet();
-          } },
-          { text: "Retry", onPress: () => verifyDeposit(data), style: "default" }
-        ]
-      );
+      }, 300);
     }
   };
 

@@ -66,7 +66,7 @@ const styles = StyleSheet.create({
     width: 100,
     height: 100,
     borderRadius: 50,
-    backgroundColor: "rgba(255,255,255,0.3)",
+    backgroundColor: "rgba(255,255,255,0.4)",
     justifyContent: "center",
     alignItems: "center",
     borderWidth: 4,
@@ -300,7 +300,7 @@ const styles = StyleSheet.create({
 
 export default function ContractorProfile(): React.ReactElement {
   const { t } = useLanguage();
-  const { accessToken, user: authUser, logout } = useAuth();
+  const { accessToken, user: authUser, logout, updateUserField } = useAuth();
   const [userName, setUserName] = useState<string>("Contractor");
   const [contractorId, setContractorId] = useState<string>("0000");
   const [profilePhoto, setProfilePhoto] = useState<string | null>(null);
@@ -442,8 +442,11 @@ export default function ContractorProfile(): React.ReactElement {
 
           const data = await response.json();
           if (data.success) {
-            // ✅ Use backend URL only - no AsyncStorage
+            // ✅ Use backend URL only - update both local state and AuthContext
             setProfilePhoto(data.profilePhoto);
+            
+            // ✅ Update AuthContext so changes persist across navigation
+            await updateUserField('profilePhoto', data.profilePhoto);
             
             // Update user object in AsyncStorage if needed for other uses
             const userStr = await AsyncStorage.getItem("user");

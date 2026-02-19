@@ -49,6 +49,8 @@ const jobSchema = new mongoose.Schema({
   paymentStatus: String,
   paymentMode: String,
   paymentTime: Date,
+  // ✅ NEW: Memory leak prevention - track when offer expires
+  offerExpiresAt: { type: Date, index: true }, // When the job offer expires (for cleanup)
   // Time tracking fields
   acceptedAt: Date, // when worker accepts the job
   timeSpentMinutes: Number, // duration from acceptance to payment in minutes

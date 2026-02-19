@@ -13,6 +13,10 @@ type AuthContextType = {
    * ✅ Update user premium status instantly (called when premium subscription received)
    */
   updateUserPremium: (premiumPlan: any) => Promise<void>;
+  /**
+   * ✅ Generic update for any user field (profilePhoto, etc.)
+   */
+  updateUserField: (field: string, value: any) => Promise<void>;
 };
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -115,6 +119,22 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     }
   };
 
+  /**
+   * ✅ Generic update for any user field (profilePhoto, name, etc.)
+   */
+  const updateUserField = async (field: string, value: any) => {
+    try {
+      if (user) {
+        const updatedUser = { ...user, [field]: value };
+        setUser(updatedUser);
+        await AsyncStorage.setItem('user', JSON.stringify(updatedUser));
+        console.log(`✅ User ${field} updated in AuthContext:`, value);
+      }
+    } catch (e) {
+      console.warn(`updateUserField error for ${field}:`, e);
+    }
+  };
+
   const logout = async () => {
     try {
       setAccessToken(null);
@@ -128,7 +148,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   };
 
   return (
-    <AuthContext.Provider value={{ accessToken, user, loading, saveTokens, logout, updateUserPremium }}>
+    <AuthContext.Provider value={{ accessToken, user, loading, saveTokens, logout, updateUserPremium, updateUserField }}>
       {children}
     </AuthContext.Provider>
   );
