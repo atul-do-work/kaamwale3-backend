@@ -118,15 +118,26 @@ export default function Wallet(): React.ReactElement {
   useEffect(() => {
     if (currentUserPhone) {
       console.log(`💼 Fetching wallet for user: ${currentUserPhone}`);
+      // ✅ Track if component is mounted to prevent state updates after unmount
+      let isMounted = true;
+      
       // Small delay to ensure socket is ready
       const timer = setTimeout(() => {
-        fetchWallet();
+        if (isMounted) {
+          fetchWallet();
+        }
       }, 500);
 
       // ✅ PRODUCTION PATTERN: Direct state update from socket events (no re-fetch)
       const handleWalletUpdated = (data: any) => {
         console.log(`💰 Wallet updated from payment:`, data);
         try {
+          // ✅ Only update state if component is still mounted
+          if (!isMounted) {
+            console.warn('⚠️ Component unmounted, ignoring wallet update');
+            return;
+          }
+          
           if (data && data.phone === currentUserPhone && data.balance !== undefined) {
             setWallet(prev => {
               // ✅ FIX: Ensure prev and transactions are defined before spreading
@@ -164,7 +175,9 @@ export default function Wallet(): React.ReactElement {
 
       socket.on("walletUpdated", handleWalletUpdated);
 
+      // ✅ Cleanup function
       return () => {
+        isMounted = false; // Mark as unmounted
         clearTimeout(timer);
         socket.off("walletUpdated", handleWalletUpdated);
       };

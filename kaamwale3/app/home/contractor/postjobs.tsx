@@ -228,9 +228,12 @@ export default function PostJobScreen() {
   useEffect(() => {
     if (!token) return;
 
-    socket.on("walletUpdated", (newBalance: number) => {
-      console.log("Wallet updated via socket:", newBalance);
-      setWalletBalance(newBalance);
+    // ✅ FIX: Socket now sends full object, extract balance property
+    socket.on("walletUpdated", (data: any) => {
+      console.log("💰 Wallet updated via socket:", data);
+      // Handle both old (number) and new (object) socket emit formats
+      const balance = typeof data === 'number' ? data : (data?.balance || 0);
+      setWalletBalance(balance);
     });
 
     socket.on("newJob", (job) => {

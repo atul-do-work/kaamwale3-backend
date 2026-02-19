@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useCallback } from 'react';
 import { ScrollView, View, Text, Animated, RefreshControl } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -82,17 +82,19 @@ export default function FullContainer({
     extrapolate: 'clamp',
   });
 
-  // ✅ Pull-to-refresh handler
-  const handleRefresh = async () => {
+  // ✅ Memoize refresh handler to prevent recreation on every render
+  const handleRefresh = useCallback(async () => {
     setRefreshing(true);
     try {
-      if (onRefresh) {
+      if (onRefresh && typeof onRefresh === 'function') {
         await onRefresh();
       }
+    } catch (err) {
+      console.error('Refresh error:', err);
     } finally {
       setRefreshing(false);
     }
-  };
+  }, [onRefresh]);
 
   return (
     <ScrollView 

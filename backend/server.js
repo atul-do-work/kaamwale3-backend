@@ -665,6 +665,36 @@ io.on("connection", (socket) => {
         socket.workerName = name;
         socket.workerType = workerType;
         console.log(`✅ Total connected workers: ${connectedWorkers.size}`);
+
+        // ✅ FIX: When worker comes online, immediately check for pending jobs that match their skill/wage
+        // This prevents workers from waiting for the 30-second retry timer
+        (async () => {
+          try {
+            const pendingJobs = await Job.find({ status: 'pending' }).limit(10);
+            console.log(`🔍 New worker online - checking ${pendingJobs.length} pending jobs for matches...`);
+            
+            for (const job of pendingJobs) {
+              // Check if this worker matches the job requirements
+              const matches = findNearbyWorkers(
+                { 
+                  lat: job.lat, 
+                  lon: job.lon, 
+                  mainSkill: job.description,
+                  amount: job.amount,
+                  workerType: job.workerType
+                },
+                connectedWorkers
+              ).some(w => w.phone === phone); // Check if this new worker is in matches
+
+              if (matches) {
+                console.log(`✅ Newly connected worker ${phone} matches job ${job._id} - offering immediately...`);
+                await offerJobToNextWorker(job);
+              }
+            }
+          } catch (e) {
+            console.error('Error checking pending jobs for new worker:', e);
+          }
+        })();
       } catch (e) {
         console.error("Error saving worker session:", e);
       }

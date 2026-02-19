@@ -68,14 +68,14 @@ export default function ContractorHome() {
         
         if (leaderboardData.leaderboard && Array.isArray(leaderboardData.leaderboard)) {
           const formattedLeaderboard = leaderboardData.leaderboard.map((contractor: any) => ({
-            id: contractor.phone,
-            name: contractor.name,
+            id: contractor.phone || contractor._id || 'unknown', // ✅ Use phone as ID, fall back to _id
+            name: contractor.name || 'Unknown',
             points: contractor.score || 0,
             profile: contractor.profilePhoto ? contractor.profilePhoto : null,
-            rank: contractor.rank,
-            rating: contractor.rating,
-            jobsPosted: contractor.jobCount,
-            tier: contractor.tier,
+            rank: contractor.rank || 0,
+            rating: contractor.rating ?? contractor.averageRating ?? 0, // ✅ Default 0 instead of undefined
+            jobsPosted: contractor.jobCount ?? contractor.totalJobsPosted ?? 0, // ✅ Default 0 instead of undefined
+            tier: contractor.tier || 'new',
           }));
           setLeaderboard(formattedLeaderboard);
           console.log('✅ Leaderboard refreshed after premium subscription update:', formattedLeaderboard);
