@@ -1068,6 +1068,20 @@ function WorkerHome() {
       
       // STEP 4: UPDATE LOCAL STATE & STORAGE
       setIsOnline(newStatus);
+
+      // Re-register worker location when going online so backend matching map is always fresh.
+      if (newStatus && currentLocation) {
+        socket.emit("registerWorker", {
+          lat: currentLocation.lat,
+          lon: currentLocation.lon,
+          workerType: workerType || "General",
+        });
+        socket.emit("updateWorkerLocation", {
+          lat: currentLocation.lat,
+          lon: currentLocation.lon,
+        });
+        console.log("📡 Re-registered worker location after going online");
+      }
       
       // Update AsyncStorage
       const userStr = await AsyncStorage.getItem("user");
@@ -1188,6 +1202,18 @@ function WorkerHome() {
 
       const coords = { lat: loc.coords.latitude, lon: loc.coords.longitude };
       setCurrentLocation(coords);
+
+      // Keep backend worker map aligned with actual coordinates after permission grant.
+      socket.emit("registerWorker", {
+        lat: coords.lat,
+        lon: coords.lon,
+        workerType: workerType || "General",
+      });
+      socket.emit("updateWorkerLocation", {
+        lat: coords.lat,
+        lon: coords.lon,
+      });
+      console.log("📡 Registered worker from permission-based location flow");
 
       // ✅ Only fetch nearby jobs if token available
       if (token) {

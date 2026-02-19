@@ -239,6 +239,89 @@ async function emitJobUpdatedToUsers(job, userIdentifiers = []) {
   }
 }
 
+// ✅ NEW HELPER: Check if worker (by phone) matches any pending jobs 
+// This is used when worker toggles availability, BEFORE they may have socket connected
+async function checkJobMatchesForWorker(workerPhone) {
+  try {
+    console.log(`🔍 [Availability] Checking pending jobs for worker ${workerPhone}...`);
+    
+    // Fetch worker location and details from database (not socket map)
+    const workerRecord = await WorkerModel.findOne({ phone: workerPhone });
+    if (!workerRecord) {
+      console.log(`⚠️ Worker ${workerPhone} not found in Worker model`);
+      return;
+    }
+    
+    // Get skill and wage from User model
+    const userRecord = await User.findOne({ phone: workerPhone });
+    if (!userRecord || !userRecord.isAvailable) {
+      console.log(`⚠️ Worker ${workerPhone} not available in User model`);
+      return;
+    }
+    
+    const workerLat = workerRecord.location?.coordinates?.[1];
+    const workerLon = workerRecord.location?.coordinates?.[0];
+    
+    if (!workerLat || !workerLon) {
+      console.log(`⚠️ Worker ${workerPhone} has no location data`);
+      return;
+    }
+    
+    // Fetch all pending jobs
+    const pendingJobs = await Job.find({ status: 'pending' }).limit(20);
+    console.log(`📋 [Availability] Checking ${pendingJobs.length} pending jobs for ${workerPhone}...`);
+    
+    let matchCount = 0;
+    for (const job of pendingJobs) {
+      // Check if worker has declined this job
+      const declinedBy = job.declinedBy || [];
+      if (declinedBy.includes(workerRecord.name)) {
+        continue;
+      }
+      
+      // Check skill match
+      if (job.description && job.description !== userRecord.mainSkill) {
+        continue;
+      }
+      
+      // Check wage match (same logic as in findNearbyWorkers)
+      const jobAmount = parseInt(job.amount);
+      const workerWage = userRecord.expectedWage;
+      const ranges = {
+        "0-400": { min: 0, max: 400 },
+        "400-550": { min: 400, max: 550 },
+        "550-700": { min: 550, max: 700 },
+        "700-max": { min: 700, max: 999999 }
+      };
+      const range = ranges[workerWage];
+      if (range && !(jobAmount >= range.min && jobAmount <= range.max)) {
+        continue;
+      }
+      
+      // Check distance (10km radius)
+      const distKm = getDistanceFromLatLonInKm(job.lat, job.lon, workerLat, workerLon);
+      if (distKm > 10) {
+        continue;
+      }
+      
+      // MATCH FOUND!
+      console.log(`✅ [Availability] Worker ${workerPhone} matches job ${job._id} (${job.title}, ₹${job.amount}, ${distKm.toFixed(2)}km away)`);
+      matchCount++;
+      
+      // Offer the job  
+      await offerJobToNextWorker(job);
+    }
+    
+    if (matchCount === 0) {
+      console.log(`❌ [Availability] No matching jobs found for ${workerPhone}`);
+    } else {
+      console.log(`✅ [Availability] Offered ${matchCount} jobs to ${workerPhone}`);
+    }
+  } catch (e) {
+    console.error('Error checking job matches for worker:', e);
+  }
+}
+
 // ✅ HELPER: Offer job to next available worker (dynamic + skip declined)
 async function offerJobToNextWorker(job) {
   try {
@@ -4038,19 +4121,12 @@ app.put('/workers/availability', authenticateToken, async (req, res) => {
       console.warn(`📋 Connected workers:`, Array.from(connectedWorkers.values()).map(w => `${w.name} (${w.phone})`).join(', '));
     }
 
-    // ✅ FIX: If worker just went ONLINE, retry matching pending jobs
+    // ✅ FIX: If worker just went ONLINE, check for matching jobs
     if (isAvailable === true) {
-      console.log(`🔍 Worker ${phone} came online - retrying pending job matches...`);
-      try {
-        const pendingJobs = await Job.find({ status: 'pending' }).limit(10);
-        console.log(`📋 Found ${pendingJobs.length} pending jobs to retry matching`);
-        
-        for (const job of pendingJobs) {
-          await offerJobToNextWorker(job);
-        }
-      } catch (e) {
-        console.error('Error retrying job matching after availability toggle:', e);
-      }
+      console.log(`🟢 Worker ${phone} came online - checking for matching jobs...`);
+      // Use the new function that matches the worker against pending jobs
+      // This works even if the worker hasn't socket-connected yet
+      await checkJobMatchesForWorker(phone);
     }
 
     console.log(`✅ ${phone} availability updated to: ${isAvailable}\n`);
