@@ -652,11 +652,9 @@ function WorkerHome() {
       try {
         console.log("📩 SOCKET: New job received", data);
         
-        // ✅ OFFLINE PROTECTION: Don't process jobs if worker is offline
-        if (!isOnline) {
-          console.log('⚠️ Worker offline - ignoring new job');
-          return;
-        }
+        // ✅ FIX: Remove isOnline check - backend already verified worker is available
+        // isOnline is just UI state that loads async; we should trust backend's decision
+        // If job arrived via socket, backend confirmed availability
 
         if (!currentLocation) return;
 

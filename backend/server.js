@@ -606,6 +606,13 @@ io.on("connection", (socket) => {
       const name = user.name || workerData?.name || "unknown";
       const phone = user.phone || workerData?.phone || "";
 
+      // ✅ FIX: Validate that phone is authenticated (not empty)
+      if (!phone || phone.trim() === "") {
+        console.error(`❌ REJECTED registerWorker: No authenticated phone found (socket not properly auth'd)`);
+        socket.emit('error', { message: 'Authentication required - please reconnect with valid token' });
+        return; // Don't proceed without phone
+      }
+
       // ✅ VALIDATION: Check if coordinates are valid
       if (lat === undefined || lat === null || lon === undefined || lon === null) {
         console.warn(`⚠️ Worker ${name} registered with MISSING coordinates! lat=${lat}, lon=${lon}`);
@@ -4021,6 +4028,21 @@ app.put('/workers/availability', authenticateToken, async (req, res) => {
     if (!found) {
       console.warn(`⚠️ Worker ${phone} not found in connectedWorkers map. Total connected: ${connectedWorkers.size}`);
       console.warn(`📋 Connected workers:`, Array.from(connectedWorkers.values()).map(w => `${w.name} (${w.phone})`).join(', '));
+    }
+
+    // ✅ FIX: If worker just went ONLINE, retry matching pending jobs
+    if (isAvailable === true) {
+      console.log(`🔍 Worker ${phone} came online - retrying pending job matches...`);
+      try {
+        const pendingJobs = await Job.find({ status: 'pending' }).limit(10);
+        console.log(`📋 Found ${pendingJobs.length} pending jobs to retry matching`);
+        
+        for (const job of pendingJobs) {
+          await offerJobToNextWorker(job);
+        }
+      } catch (e) {
+        console.error('Error retrying job matching after availability toggle:', e);
+      }
     }
 
     console.log(`✅ ${phone} availability updated to: ${isAvailable}\n`);
