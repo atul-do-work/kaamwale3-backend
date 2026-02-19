@@ -47,6 +47,8 @@ export default function Profile(): React.ReactElement {
   const [totalDeductions, setTotalDeductions] = useState(0); // ✅ From backend
   const [referralBonus, setReferralBonus] = useState(0); // ✅ From backend
   const [userToken, setUserToken] = useState<string>("");
+  const [workerRating, setWorkerRating] = useState<number>(0); // ✅ Average rating
+  const [totalReviews, setTotalReviews] = useState<number>(0); // ✅ Number of ratings
   
   // Menu states
   const [showMenu, setShowMenu] = useState(false);
@@ -85,15 +87,41 @@ export default function Profile(): React.ReactElement {
     })();
   }, []);
 
-  // ✅ Reload profile photo when screen is focused (instant update after photo selection)
+  // ✅ Reload profile photo and rating when screen is focused (instant update after photo selection or rating received)
   useFocusEffect(
     React.useCallback(() => {
       (async () => {
         const profileStr = await AsyncStorage.getItem("profilePhoto");
         if (profileStr) setProfilePhoto(profileStr);
+        
+        // ✅ Fetch fresh rating data when screen comes into focus
+        await fetchWorkerRating();
       })();
     }, [])
   );
+
+  // ✅ Fetch worker's average rating and review count
+  const fetchWorkerRating = async () => {
+    try {
+      const token = await AsyncStorage.getItem("token");
+      if (!token) return;
+
+      const response = await fetch(`${API_BASE}/worker/profile`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        if (data.success && data.worker) {
+          setWorkerRating(data.worker.performanceMetrics?.averageRating || data.worker.rating || 0);
+          setTotalReviews(data.worker.performanceMetrics?.totalReviews || 0);
+          console.log(`⭐ Worker rating fetched: ${data.worker.performanceMetrics?.averageRating}/5 (${data.worker.performanceMetrics?.totalReviews} reviews)`);
+        }
+      }
+    } catch (err) {
+      console.error('Error fetching worker rating:', err);
+    }
+  };
 
   // ✅ Fetch earnings data when modal is opened
   const fetchEarningsData = async () => {
@@ -325,7 +353,7 @@ export default function Profile(): React.ReactElement {
             <View style={styles.profileInfo}>
               <Text style={styles.nameText}>{userName}</Text>
               <Text style={styles.workerId}>Worker ID: {workerId}</Text>
-              <Text style={styles.ratingText}>Rating: 4.5 ⭐</Text>
+              <Text style={styles.ratingText}>Rating: {workerRating.toFixed(1)} ⭐ ({totalReviews} reviews)</Text>
             </View>
           </LinearGradient>
         </View>

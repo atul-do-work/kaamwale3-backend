@@ -10,6 +10,7 @@ import { registerForPushNotificationsAsync } from '../services/notification';
 import { useLanguage } from '../context/LanguageContext';
 import { useAuth } from '../context/AuthContext';
 import LegalModal from '../components/LegalModal';
+import { getOrGenerateDeviceId, getAppVersion, generateTermsHashFallback } from '../utils/deviceInfo';
 
 type User = {
   name: string;
@@ -156,6 +157,13 @@ export default function Register() {
   // ✅ CONSTANT: Terms version for audit trail
   const TERMS_VERSION = '1.0';
 
+  // ✅ Initialize device ID on component mount (stores it securely)
+  useEffect(() => {
+    getOrGenerateDeviceId().then((id) => {
+      console.log('✅ Device ID initialized:', id);
+    });
+  }, []);
+
   // ✅ FIX: Check if user is already logged in and redirect
   useEffect(() => {
     if (!authLoading && accessToken && user) {
@@ -216,6 +224,20 @@ export default function Register() {
 
       console.log('📦 FCM token result:', fcmToken ? 'AVAILABLE ✅' : 'NOT AVAILABLE ⚠️');
       
+      // ✅ CAPTURE: Device ID for audit logging
+      console.log('📱 Generating device ID...');
+      const deviceId = await getOrGenerateDeviceId();
+      console.log('✅ Device ID:', deviceId);
+      
+      // ✅ CAPTURE: App version
+      const appVersion = getAppVersion();
+      console.log('📦 App version:', appVersion);
+      
+      // ✅ CAPTURE: Terms hash (fingerprint of terms text)
+      const termsText = 'Kaamwale Terms and Conditions v1.0';
+      const termsHash = generateTermsHashFallback(termsText);
+      console.log('🔐 Terms hash:', termsHash);
+      
       console.log('📤 Sending registration request...');
       const res = await fetch(`${API_BASE}/users/register`, {
         method: 'POST',
@@ -226,8 +248,11 @@ export default function Register() {
           password, 
           role, 
           agreedToTerms,
-          termsVersion: TERMS_VERSION,  // ✅ NEW: Include terms version for audit
+          termsVersion: TERMS_VERSION,  // ✅ Terms version for audit
           fcmToken,  // ✅ FCM token for push notifications
+          deviceId,  // ✅ NEW: Device ID for audit
+          appVersion,  // ✅ NEW: App version for audit
+          termsHash,  // ✅ NEW: Terms hash for audit
           // ❌ REMOVED: latitude, longitude - location only obtained at login
         }),
       });
@@ -238,13 +263,15 @@ export default function Register() {
         console.log('✅ Registration successful');
         
         // ✅ SECURITY: Store ONLY temporary registration data (phone, name, role)
+        // ❌ DO NOT store password in AsyncStorage (not encrypted)
         // ❌ DO NOT store full user.id, wallet, or profile yet
         // Full user data will be persisted only AFTER OTP verification
         const tempRegistrationData = {
           phone: phoneTrim,
           name: name,
           role: role,
-          password: password,  // Store temporarily in memory for session
+          // ✅ PASSWORD NOT STORED - Will call login API after OTP verification
+          // If password is needed again, user will be asked to re-enter it
           timestamp: Date.now(),
         };
         

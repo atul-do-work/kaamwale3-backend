@@ -272,6 +272,7 @@ function WorkerHome() {
           setTodayEarnings(0);
           setTodayJobs(0);
           setCurrentJob(null);
+          displayedJobIds.current.clear(); // 🔄 Clear dedup set for new user
           setHandledJobs(new Set());
           
           // Load online status from user data
@@ -288,6 +289,7 @@ function WorkerHome() {
           setTodayEarnings(0);
           setTodayJobs(0);
           setCurrentJob(null);
+          displayedJobIds.current.clear(); // 🔄 Clear dedup set on logout
           setHandledJobs(new Set());
           setIsOnline(false);
         } else if (userPhone && userStr) {
@@ -752,6 +754,7 @@ function WorkerHome() {
           try {
             cleanupJobAlert();
           } catch (e) { /* ignore */ }
+          displayedJobIds.current.delete(cancelledJobId); // 🔄 Remove from dedup so it can be offered again
           setCurrentJob(null);
           Alert.alert("Job Cancelled", "The job you were viewing has been cancelled by the contractor.");
         } else if (currentJobId && cancelledJobId) {
@@ -1210,6 +1213,16 @@ function WorkerHome() {
     return () => {};
   }, []);
 
+  // ================== CLEAR JOB HELPER ==================
+  const clearCurrentJobAndDedup = (jobId: string | null = null) => {
+    const idToRemove = jobId || currentJobRef.current?._id;
+    if (idToRemove) {
+      displayedJobIds.current.delete(idToRemove);
+      console.log(`🗑️ Cleared job ${idToRemove} from deduplication set`);
+    }
+    setCurrentJob(null);
+  };
+
   // ---------------- HANDLE ACCEPT ----------------
   const handleAccept = async (jobId: string) => {
     await cleanupJobAlert();
@@ -1238,7 +1251,7 @@ function WorkerHome() {
       console.log("✅ Job accepted successfully");
       
       setHandledJobs(p => new Set(p).add(jobId));
-      setCurrentJob(null);
+      clearCurrentJobAndDedup(jobId);
       Alert.alert("✅ Job Accepted", "You accepted this job!");
 
       socket.emit("jobAccepted", { jobId, workerName, workerType });
@@ -1276,7 +1289,7 @@ function WorkerHome() {
       console.log("✅ Job declined successfully");
       
       setHandledJobs(prev => new Set(prev).add(jobId));
-      setCurrentJob(null);
+      clearCurrentJobAndDedup(jobId);
 
       if (currentLocation) await fetchNearbyJobs(currentLocation.lat, currentLocation.lon);
 
@@ -1362,7 +1375,7 @@ function WorkerHome() {
         animationType="slide"
         onRequestClose={async () => {
           await cleanupJobAlert();
-          setCurrentJob(null);
+          clearCurrentJobAndDedup();
         }}
       >
         {currentJob && (
@@ -1374,7 +1387,7 @@ function WorkerHome() {
                   style={styles.closeButton}
                   onPress={async () => {
                     await cleanupJobAlert();
-                    setCurrentJob(null);
+                    clearCurrentJobAndDedup();
                   }}
                 >
                   <MaterialIcons name="close" size={28} color="#000" />
@@ -1501,7 +1514,7 @@ function WorkerHome() {
                   style={styles.declineButton}
                   onPress={() => {
                     handleDecline(currentJob._id);
-                    setCurrentJob(null);
+                    clearCurrentJobAndDedup(currentJob._id);
                   }}
                 >
                   <MaterialIcons name="close" size={20} color="#fff" />
@@ -1512,7 +1525,7 @@ function WorkerHome() {
                   style={styles.acceptButton}
                   onPress={() => {
                     handleAccept(currentJob._id);
-                    setCurrentJob(null);
+                    clearCurrentJobAndDedup(currentJob._id);
                   }}
                 >
                   <MaterialIcons name="check" size={20} color="#fff" />

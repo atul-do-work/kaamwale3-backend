@@ -14,7 +14,6 @@ import { MaterialIcons, Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import { useRouter, useFocusEffect } from "expo-router";
 import { useAuth } from "../context/AuthContext";
-import { SERVER_URL } from "../utils/config";
 import api from "../utils/api";
 
 interface Notification {
@@ -69,7 +68,6 @@ export default function NotificationHistoryScreen(): React.ReactElement {
       Alert.alert(t('error'), t('failedToLoadNotifications'));
     } finally {
       setLoading(false);
-      setRefreshing(false);
     }
   }, [accessToken, filter]);
 
@@ -77,7 +75,7 @@ export default function NotificationHistoryScreen(): React.ReactElement {
   useEffect(() => {
     setLoading(true);
     fetchNotifications();
-  }, [filter]);
+  }, [fetchNotifications]);
 
   // Reload on focus
   useFocusEffect(
@@ -103,7 +101,8 @@ export default function NotificationHistoryScreen(): React.ReactElement {
               : notif
           )
         );
-        setUnreadCount(Math.max(0, unreadCount - 1));
+        // ✅ Use functional update to avoid stale state
+        setUnreadCount(prev => Math.max(0, prev - 1));
         console.log(`✅ Marked notification ${notificationId} as read`);
       }
     } catch (error) {
@@ -116,16 +115,15 @@ export default function NotificationHistoryScreen(): React.ReactElement {
     try {
       if (!accessToken) return;
 
-      Alert.alert("Mark All as Read?", "Are you sure?", [
-        { text: t('cancel'), style: "cancel" },
-        {
-          text: t('yes'),
-          onPress: async () => {
-            const res = await api.put(`/notifications/read-all`);
-            const data = res.data;
-
-            if (data.success) {
-              // Update local state
+      Alert.alert(
+        t('markAllAsReadTitle') || "Mark All as Read?",
+        t('markAllAsReadConfirm') || "Are you sure?",
+        [
+          { text: t('cancel'), style: "cancel" },
+          {
+            text: t('yes'),
+            onPress: async () => {
+              // ✅ Optimistic update - update UI immediately
               setNotifications((prevNotifications) =>
                 prevNotifications.map((notif) => ({
                   ...notif,
@@ -133,12 +131,24 @@ export default function NotificationHistoryScreen(): React.ReactElement {
                 }))
               );
               setUnreadCount(0);
-              Alert.alert(t('success'), t('allNotificationsMarkedAsRead'));
-              console.log("✅ All notifications marked as read");
-            }
+              
+              // Then call API asynchronously
+              try {
+                const res = await api.put(`/notifications/read-all`);
+                const data = res.data;
+
+                if (data.success) {
+                  Alert.alert(t('success'), t('allNotificationsMarkedAsRead'));
+                  console.log("✅ All notifications marked as read");
+                }
+              } catch (apiError) {
+                console.error("Mark all as read API error:", apiError);
+                // If API fails, we already updated UI optimistically
+              }
+            },
           },
-        },
-      ]);
+        ]
+      );
     } catch (error) {
       console.error("Mark all as read error:", error);
     }
@@ -173,17 +183,20 @@ export default function NotificationHistoryScreen(): React.ReactElement {
     // Removed deepLink navigation - notifications are display only
   };
 
-  // Render notification item
-  const renderNotificationItem = ({ item }: { item: Notification }) => {
+  // ✅ Render notification item with useCallback for performance
+  const renderNotificationItem = useCallback(({ item }: { item: Notification }) => {
     const { icon, color } = getNotificationIcon(item.type);
-    const formattedDate = new Date(item.createdAt).toLocaleDateString("en-IN");
-    const formattedTime = new Date(item.createdAt).toLocaleTimeString("en-IN", {
+    const formattedDate = new Date(item.createdAt).toLocaleDateString();
+    const formattedTime = new Date(item.createdAt).toLocaleTimeString([], {
       hour: "2-digit",
       minute: "2-digit",
     });
 
     return (
-      <View
+      // ✅ NOW CLICKABLE: Wrap in TouchableOpacity
+      <TouchableOpacity
+        onPress={() => handleNotificationPress(item)}
+        activeOpacity={0.8}
         style={[
           styles.notificationItem,
           !item.isRead && styles.notificationItemUnread,
@@ -204,9 +217,9 @@ export default function NotificationHistoryScreen(): React.ReactElement {
         </View>
 
         {!item.isRead && <View style={styles.unreadBadge} />}
-      </View>
+      </TouchableOpacity>
     );
-  };
+  }, []);
 
   if (loading) {
     return (
@@ -292,13 +305,16 @@ export default function NotificationHistoryScreen(): React.ReactElement {
             data={notifications}
             renderItem={renderNotificationItem}
             keyExtractor={(item) => item._id}
-            scrollEnabled={false}
+            initialNumToRender={10}
+            windowSize={5}
+            removeClippedSubviews
             refreshControl={
               <RefreshControl
                 refreshing={refreshing}
-                onRefresh={() => {
+                onRefresh={async () => {
                   setRefreshing(true);
-                  fetchNotifications();
+                  await fetchNotifications();
+                  setRefreshing(false);
                 }}
                 colors={["#667eea"]}
               />

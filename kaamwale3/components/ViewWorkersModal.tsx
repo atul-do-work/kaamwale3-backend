@@ -24,6 +24,7 @@ interface Worker {
   distanceKm: number;
   distanceMeters: number;
   rating: number;
+  totalReviews?: number; // ✅ Number of ratings received
   skills: string[];
   profilePhoto?: string;
   isAvailable?: boolean; // ✅ Online status
@@ -343,8 +344,11 @@ export default function ViewWorkersModal({
                   <Text style={styles.workerSkill}>{worker.mainSkill || 'Multi-skilled'}</Text>
                   <View style={styles.ratingRow}>
                     <MaterialIcons name="star" size={14} color="#FFB800" />
-                    <Text style={styles.ratingText}>{worker.rating || 0}/5</Text>
+                    <Text style={styles.ratingText}>{worker.rating?.toFixed(1) || 0}/5</Text>
                     <Text style={styles.distanceText}>• {worker.distanceKm} km</Text>
+                    {worker.totalReviews !== undefined && worker.totalReviews > 0 && (
+                      <Text style={styles.reviewText}>({worker.totalReviews})</Text>
+                    )}
                   </View>
                   <Text style={styles.wageText}>
                     Wage: <Text style={styles.wageBold}>{worker.expectedWage}</Text>
@@ -609,6 +613,11 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#999',
     marginLeft: 4,
+  },
+  reviewText: {
+    fontSize: 11,
+    color: '#999',
+    marginLeft: 2,
   },
   wageText: {
     fontSize: 12,

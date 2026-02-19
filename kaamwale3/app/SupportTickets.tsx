@@ -19,7 +19,6 @@ import { LinearGradient } from "expo-linear-gradient";
 import { useRouter, useFocusEffect } from "expo-router";
 import { useAuth } from "../context/AuthContext";
 import * as ImagePicker from "expo-image-picker";
-import { SERVER_URL } from "../utils/config";
 import api from "../utils/api";
 
 interface SupportTicket {
@@ -106,7 +105,6 @@ export default function SupportTicketsScreen(): React.ReactElement {
       Alert.alert(t('support_error_title'), t('support_error_load'));
     } finally {
       setLoading(false);
-      setRefreshing(false);
     }
   }, [accessToken]);
 
@@ -114,7 +112,7 @@ export default function SupportTicketsScreen(): React.ReactElement {
   useEffect(() => {
     setLoading(true);
     fetchTickets();
-  }, []);
+  }, [fetchTickets]);
 
   // Reload on focus
   useFocusEffect(
@@ -126,14 +124,29 @@ export default function SupportTicketsScreen(): React.ReactElement {
   // Pick screenshot
   const pickScreenshot = async () => {
     try {
+      // ✅ Check screenshot limit
+      if (newTicket.screenshots.length >= 5) {
+        Alert.alert(t('support_error_title'), t('support_max_screenshots') || 'Maximum 5 screenshots allowed');
+        return;
+      }
+
+      // ✅ Request media library permissions
+      const permissionResult = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (!permissionResult.granted) {
+        Alert.alert(
+          t('support_error_title'),
+          t('support_permission_required') || 'Media library permission is required'
+        );
+        return;
+      }
+
       const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
         aspect: [4, 3],
         quality: 0.8,
       });
 
-      if (!result.canceled && result.assets[0]) {
-        // In real app, upload to cloud and get URL
-        // For now, use local URI
+      if (!result.canceled && result.assets?.[0]) {
         setNewTicket((prev) => ({
           ...prev,
           screenshots: [...prev.screenshots, result.assets[0].uri],
@@ -147,6 +160,9 @@ export default function SupportTicketsScreen(): React.ReactElement {
 
   // Create support ticket
   const handleCreateTicket = async () => {
+    // ✅ Prevent double submission
+    if (creating) return;
+
     if (!newTicket.type || !newTicket.subject || !newTicket.description) {
       Alert.alert(t('support_error_title'), t('support_error_fill_fields'));
       return;
@@ -211,13 +227,16 @@ export default function SupportTicketsScreen(): React.ReactElement {
     }
   };
 
-  // Render ticket item
-  const renderTicketItem = ({ item }: { item: SupportTicket }) => {
+  // ✅ Render ticket item with useCallback for performance
+  const renderTicketItem = useCallback(({ item }: { item: SupportTicket }) => {
     const statusInfo = TICKET_STATUSES[item.status as keyof typeof TICKET_STATUSES] || { label: item.status, color: "#666", icon: "info" };
     const typeInfo = TICKET_TYPES.find((t) => t.id === item.type);
-    const daysAgo = Math.floor(
-      (Date.now() - new Date(item.createdAt).getTime()) / (1000 * 60 * 60 * 24)
-    );
+    // ✅ Better days ago calculation (by date only, not exact time)
+    const createdDate = new Date(item.createdAt);
+    const today = new Date();
+    createdDate.setHours(0, 0, 0, 0);
+    today.setHours(0, 0, 0, 0);
+    const daysAgo = Math.floor((today.getTime() - createdDate.getTime()) / (1000 * 60 * 60 * 24));
 
     return (
       <TouchableOpacity
@@ -229,7 +248,7 @@ export default function SupportTicketsScreen(): React.ReactElement {
             <Text style={styles.ticketId}>{item.ticketId}</Text>
             <Text style={styles.ticketSubject}>{item.subject}</Text>
             <Text style={styles.ticketDate}>
-              {daysAgo === 0 ? t('support_today') : t('support_days_ago', {days: daysAgo})}
+              {daysAgo === 0 ? t('support_today') : `${daysAgo} days ago`}
             </Text>
           </View>
           <View
@@ -255,7 +274,7 @@ export default function SupportTicketsScreen(): React.ReactElement {
         </View>
       </TouchableOpacity>
     );
-  };
+  }, []);
 
   if (loading) {
     return (
@@ -289,9 +308,10 @@ export default function SupportTicketsScreen(): React.ReactElement {
           refreshControl={
             <RefreshControl
               refreshing={refreshing}
-              onRefresh={() => {
+              onRefresh={async () => {
                 setRefreshing(true);
-                fetchTickets();
+                await fetchTickets();
+                setRefreshing(false);
               }}
               colors={["#667eea"]}
             />
@@ -329,15 +349,13 @@ export default function SupportTicketsScreen(): React.ReactElement {
               >
                 <Ionicons name="close" size={24} color="#fff" />
               </TouchableOpacity>
-              <Text style={styles.modalTitle}>Create Support Ticket</Text>
-                          <Text style={styles.modalTitle}>{t('support_modal_title')}</Text>
+              <Text style={styles.modalTitle}>{t('support_modal_title')}</Text>
               <View style={{ width: 40 }} />
             </LinearGradient>
 
             <ScrollView style={styles.modalBody}>
               {/* Ticket Type */}
-              <Text style={styles.label}>Issue Type *</Text>
-                            <Text style={styles.label}>{t('support_issue_type')}</Text>
+              <Text style={styles.label}>{t('support_issue_type')}</Text>
               <View style={styles.typeGrid}>
                 {TICKET_TYPES.map((type) => (
                   <TouchableOpacity
@@ -354,8 +372,7 @@ export default function SupportTicketsScreen(): React.ReactElement {
               </View>
 
               {/* Subject */}
-              <Text style={styles.label}>Subject *</Text>
-                            <Text style={styles.label}>{t('support_subject')}</Text>
+              <Text style={styles.label}>{t('support_subject')}</Text>
               <TextInput
                 style={styles.input}
                 placeholder={t('support_subject_placeholder')}
@@ -367,8 +384,7 @@ export default function SupportTicketsScreen(): React.ReactElement {
               />
 
               {/* Description */}
-              <Text style={styles.label}>Description *</Text>
-                            <Text style={styles.label}>{t('support_description')}</Text>
+              <Text style={styles.label}>{t('support_description')}</Text>
               <TextInput
                 style={[styles.input, styles.textarea]}
                 placeholder={t('support_description_placeholder')}
@@ -383,8 +399,7 @@ export default function SupportTicketsScreen(): React.ReactElement {
               />
 
               {/* Optional Fields */}
-              <Text style={styles.label}>Related Job ID (Optional)</Text>
-                            <Text style={styles.label}>{t('support_jobid_optional')}</Text>
+              <Text style={styles.label}>{t('support_jobid_optional')}</Text>
               <TextInput
                 style={styles.input}
                 placeholder={t('support_jobid_placeholder')}
@@ -396,8 +411,7 @@ export default function SupportTicketsScreen(): React.ReactElement {
               />
 
               {/* Screenshots */}
-              <Text style={styles.label}>Screenshots (Optional)</Text>
-                            <Text style={styles.label}>{t('support_screenshots_optional')}</Text>
+              <Text style={styles.label}>{t('support_screenshots_optional')}</Text>
               <TouchableOpacity
                 style={styles.uploadScreenBtn}
                 onPress={pickScreenshot}
@@ -472,28 +486,28 @@ export default function SupportTicketsScreen(): React.ReactElement {
                 style={styles.modalHeader}
               >
                 <TouchableOpacity
-                  onPress={() => setShowDetailModal(false)}
+                  onPress={() => {
+                    setShowDetailModal(false);
+                    setSelectedTicket(null);
+                  }}
                   style={styles.closeBtn}
                 >
                   <Ionicons name="close" size={24} color="#fff" />
                 </TouchableOpacity>
-                <Text style={styles.modalTitle}>Ticket Details</Text>
-                                <Text style={styles.modalTitle}>{t('support_details_title')}</Text>
+                <Text style={styles.modalTitle}>{t('support_details_title')}</Text>
                 <View style={{ width: 40 }} />
               </LinearGradient>
 
               <ScrollView style={styles.modalBody}>
                 {/* Ticket ID */}
                 <View style={styles.detailSection}>
-                  <Text style={styles.detailLabel}>Ticket ID</Text>
-                                    <Text style={styles.detailLabel}>{t('support_detail_ticketid')}</Text>
+                  <Text style={styles.detailLabel}>{t('support_detail_ticketid')}</Text>
                   <Text style={styles.detailValue}>{selectedTicket.ticketId}</Text>
                 </View>
 
                 {/* Status */}
                 <View style={styles.detailSection}>
-                  <Text style={styles.detailLabel}>Status</Text>
-                                    <Text style={styles.detailLabel}>{t('support_detail_status')}</Text>
+                  <Text style={styles.detailLabel}>{t('support_detail_status')}</Text>
                   <View
                     style={[
                       styles.statusBadge,
@@ -516,8 +530,7 @@ export default function SupportTicketsScreen(): React.ReactElement {
 
                 {/* Type */}
                 <View style={styles.detailSection}>
-                  <Text style={styles.detailLabel}>Issue Type</Text>
-                                    <Text style={styles.detailLabel}>{t('support_detail_type')}</Text>
+                  <Text style={styles.detailLabel}>{t('support_detail_type')}</Text>
                   <Text style={styles.detailValue}>
                     {TICKET_TYPES.find((t) => t.id === selectedTicket.type)
                       ?.label || selectedTicket.type}
@@ -526,15 +539,13 @@ export default function SupportTicketsScreen(): React.ReactElement {
 
                 {/* Subject */}
                 <View style={styles.detailSection}>
-                  <Text style={styles.detailLabel}>Subject</Text>
-                                    <Text style={styles.detailLabel}>{t('support_detail_subject')}</Text>
+                  <Text style={styles.detailLabel}>{t('support_detail_subject')}</Text>
                   <Text style={styles.detailValue}>{selectedTicket.subject}</Text>
                 </View>
 
                 {/* Description */}
                 <View style={styles.detailSection}>
-                  <Text style={styles.detailLabel}>Description</Text>
-                                    <Text style={styles.detailLabel}>{t('support_detail_description')}</Text>
+                  <Text style={styles.detailLabel}>{t('support_detail_description')}</Text>
                   <Text style={styles.detailValue}>
                     {selectedTicket.description}
                   </Text>
@@ -542,23 +553,17 @@ export default function SupportTicketsScreen(): React.ReactElement {
 
                 {/* Date Created */}
                 <View style={styles.detailSection}>
-                  <Text style={styles.detailLabel}>Created</Text>
-                                    <Text style={styles.detailLabel}>{t('support_detail_created')}</Text>
+                  <Text style={styles.detailLabel}>{t('support_detail_created')}</Text>
                   <Text style={styles.detailValue}>
-                    {new Date(selectedTicket.createdAt).toLocaleDateString(
-                      "en-IN"
-                    )}{" "}
-                    {new Date(selectedTicket.createdAt).toLocaleTimeString(
-                      "en-IN"
-                    )}
+                    {new Date(selectedTicket.createdAt).toLocaleDateString()}{" "}
+                    {new Date(selectedTicket.createdAt).toLocaleTimeString()}
                   </Text>
                 </View>
 
                 {/* Resolution */}
                 {selectedTicket.resolution && (
                   <View style={styles.detailSection}>
-                    <Text style={styles.detailLabel}>Resolution</Text>
-                                        <Text style={styles.detailLabel}>{t('support_detail_resolution')}</Text>
+                    <Text style={styles.detailLabel}>{t('support_detail_resolution')}</Text>
                     <Text style={styles.detailValue}>
                       {selectedTicket.resolution}
                     </Text>

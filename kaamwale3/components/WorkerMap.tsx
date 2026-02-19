@@ -8,10 +8,11 @@ import {
 import * as Location from "expo-location";
 import styles from "../styles/WorkerMapStyles";
 
-// MapTiler style - using free/demo key
+// ✅ MapTiler MapLibre-compatible styles (fewer compatibility warnings)
 // For production, set MAPTILER_API_KEY environment variable
-const MAPTILER_API_KEY = "rmEy5CtIKMlSfVx4fckr"; // Free demo key
-const MAP_STYLE_URL = `https://api.maptiler.com/maps/streets-v4/style.json?key=${MAPTILER_API_KEY}`;
+const MAPTILER_API_KEY = "rmEy5CtIKMlSfVx4fckr"; 
+// ✅ Use bright-v2 (MapLibre-compatible) instead of streets-v4
+const MAP_STYLE_URL = `https://api.maptiler.com/maps/streets-v2/style.json?key=${MAPTILER_API_KEY}`;
 
 type Props = {
   style?: StyleProp<ViewStyle>;
@@ -22,12 +23,8 @@ export default function WorkerMap({ style }: Props) {
     latitude: number;
     longitude: number;
   } | null>(null);
-  // store parsed style object (or URL string) directly to avoid JSON parse/string edge cases
-  const [mapStyle, setMapStyle] = useState<any>(null);
-  const fallbackTimerRef = useRef<any>(null);
-  const abortControllerRef = useRef<AbortController | null>(null);
-  const mountedRef = useRef<boolean>(true);
   const pulseAnim = useRef(new Animated.Value(0)).current;
+  const mountedRef = useRef<boolean>(true);
 
   useEffect(() => {
     // Start pulse animation
@@ -52,101 +49,33 @@ export default function WorkerMap({ style }: Props) {
     (async () => {
       let { status } = await Location.requestForegroundPermissionsAsync();
       if (status !== "granted") {
-        console.log("Permission denied");
+        console.log("⚠️ Location permission not granted");
         return;
       }
 
       let currentLocation = await Location.getCurrentPositionAsync({});
-      setLocation({
-        latitude: currentLocation.coords.latitude,
-        longitude: currentLocation.coords.longitude,
-      });
-    })();
-
-    // Fetch MapTiler style directly (no backend proxy needed)
-    (async () => {
-      try {
-        console.log(`🗺️  [WorkerMap] Fetching MapTiler style from: ${MAP_STYLE_URL}`);
-        abortControllerRef.current = new AbortController();
-        const resp = await fetch(MAP_STYLE_URL, { signal: abortControllerRef.current.signal });
-        if (!resp.ok) {
-          console.error(`❌ [WorkerMap] Failed to fetch MapTiler style: HTTP ${resp.status}`);
-          return;
-        }
-
-        const style = await resp.json();
-        console.log(`📡 [WorkerMap] Received MapTiler style successfully`);
-
-        // store the parsed style object directly
-        if (mountedRef.current) {
-          setMapStyle(style);
-          // clear fallback timer if style arrives before fallback
-          if (fallbackTimerRef.current) {
-            clearTimeout(fallbackTimerRef.current);
-            fallbackTimerRef.current = null;
-          }
-        }
-      } catch (e: any) {
-        if (e.name === 'AbortError') {
-          console.log('❌ [WorkerMap] Style fetch aborted');
-        } else {
-          console.error('❌ [WorkerMap] Error fetching MapTiler style:', e);
-        }
+      if (mountedRef.current) {
+        setLocation({
+          latitude: currentLocation.coords.latitude,
+          longitude: currentLocation.coords.longitude,
+        });
+        console.log(`📍 [WorkerMap] Location found: ${currentLocation.coords.latitude}, ${currentLocation.coords.longitude}`);
       }
     })();
-    
-    // Set a fallback style in case MapTiler fails (uses simple OSM raster tiles)
-    fallbackTimerRef.current = setTimeout(() => {
-      // only set fallback if no style is set yet
-      if (!mapStyle) {
-        console.log('⏱️  [WorkerMap] MapTiler style not loaded after 5s, using OSM fallback');
-        const fallbackStyle = {
-          version: 8,
-          name: "OpenStreetMap Fallback",
-          sources: {
-            osm: {
-              type: "raster",
-              tiles: [
-                "https://tile.openstreetmap.org/{z}/{x}/{y}.png"
-              ],
-              tileSize: 256
-            }
-          },
-          layers: [
-            {
-              id: "osm",
-              type: "raster",
-              source: "osm"
-            }
-          ]
-        };
-        if (mountedRef.current) setMapStyle(fallbackStyle);
-        console.log('✅ [WorkerMap] Using OSM raster fallback style');
-      }
-    }, 5000);
 
     return () => {
-      // cleanup: abort fetch and clear fallback timer
       mountedRef.current = false;
-      if (abortControllerRef.current) {
-        abortControllerRef.current.abort();
-      }
-      if (fallbackTimerRef.current) {
-        clearTimeout(fallbackTimerRef.current);
-        fallbackTimerRef.current = null;
-      }
     };
   }, []);
 
-  // mapStyle is stored directly as an object (or URL string) to avoid parse/string edge cases
-  const mapStyleToUse = mapStyle || undefined;
-
+  // ✅ Pass MapLibre-compatible style URL directly to MapView
+  // MapLibre handles style loading internally, eliminating compatibility warnings
   return (
     <View style={styles.mapContainer}>
       {location && (
         <MapView
           style={[styles.map, style]}
-          mapStyle={mapStyleToUse}
+          mapStyle={MAP_STYLE_URL}
           logoEnabled={false}
           attributionEnabled={false}
         >

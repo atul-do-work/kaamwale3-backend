@@ -126,18 +126,39 @@ export default function Wallet(): React.ReactElement {
       // ✅ PRODUCTION PATTERN: Direct state update from socket events (no re-fetch)
       const handleWalletUpdated = (data: any) => {
         console.log(`💰 Wallet updated from payment:`, data);
-        if (data.phone === currentUserPhone) {
-          setWallet(prev => ({
-            balance: data.balance,
-            transactions: [
-              {
-                type: data.type, // deposit | withdraw | payment
-                amount: data.amount,
-                date: new Date().toISOString()
-              },
-              ...prev.transactions
-            ]
-          }));
+        try {
+          if (data && data.phone === currentUserPhone && data.balance !== undefined) {
+            setWallet(prev => {
+              // ✅ FIX: Ensure prev and transactions are defined before spreading
+              if (!prev || !prev.transactions) {
+                return {
+                  balance: data.balance,
+                  transactions: [{
+                    type: data.type || 'deposit',
+                    amount: data.amount || 0,
+                    date: new Date().toISOString()
+                  }]
+                };
+              }
+              
+              return {
+                balance: data.balance,
+                transactions: [
+                  {
+                    type: data.type || 'deposit',
+                    amount: data.amount || 0,
+                    date: new Date().toISOString()
+                  },
+                  ...(Array.isArray(prev.transactions) ? prev.transactions : [])
+                ]
+              };
+            });
+            console.log(`✅ Wallet updated: ₹${data.balance}`);
+          } else {
+            console.warn(`⚠️ Invalid wallet update data:`, data);
+          }
+        } catch (err) {
+          console.error('❌ Error updating wallet from socket:', err);
         }
       };
 
@@ -289,8 +310,15 @@ export default function Wallet(): React.ReactElement {
       const data = JSON.parse(event.nativeEvent.data);
 
       if (data.type === 'deposit_success') {
-        // Verify deposit on backend
-        await verifyDeposit(data);
+        // ✅ Close modal FIRST before verifying deposit (prevents race condition)
+        // This ensures state updates happen after UI transitions complete
+        setDepositModalVisible(false);
+        setDepositModalHtml('');
+        
+        // Small delay to allow modal to close gracefully before state updates
+        setTimeout(() => {
+          verifyDeposit(data);
+        }, 300);
       } else if (data.type === 'deposit_failed') {
         setDepositModalVisible(false);
         // ✅ Clear WebView HTML from memory
@@ -312,8 +340,7 @@ export default function Wallet(): React.ReactElement {
     }
   };
 
-  // ✅ Fetch wallet balance
-  // Verify deposit payment
+  // ✅ Verify deposit payment
   const verifyDeposit = async (data: any) => {
     try {
       const res = await api.post('/wallet/deposit/verify', {
@@ -323,9 +350,8 @@ export default function Wallet(): React.ReactElement {
         amount: currentDepositAmount
       });
 
-      setDepositModalVisible(false);
-      // ✅ Clear WebView HTML from memory
-      setDepositModalHtml('');
+      // ✅ Don't close modal here - already closed in handleDepositMessage
+      // setDepositModalVisible(false);
 
       if (res.data.success) {
         Alert.alert('Success', `₹${currentDepositAmount} deposited to your wallet!`);
@@ -345,9 +371,8 @@ export default function Wallet(): React.ReactElement {
         );
       }
     } catch (err: any) {
-      setDepositModalVisible(false);
-      // ✅ Clear WebView HTML from memory
-      setDepositModalHtml('');
+      // ✅ Don't close modal here - already closed in handleDepositMessage
+      // setDepositModalVisible(false);
       const errorMsg = err.response?.data?.message || 'Deposit verification failed';
       // ✅ Offer retry for network/timeout errors
       Alert.alert(

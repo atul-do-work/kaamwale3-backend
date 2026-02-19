@@ -1,7 +1,7 @@
 {
   "expo": {
     "name": "indianworker",
-    "slug": "rking9579047919",
+    "slug": "vscode",
     "version": "1.0.0",
     "orientation": "portrait",
     "scheme": "kaamwale3",
@@ -53,9 +53,9 @@
     },
     "extra": {
       "eas": {
-        "projectId": "7e5384a4-c1fb-4486-a268-6b243d91c1ce"
+        "projectId": "039b8a3e-2c83-4abd-b4d1-47265c042e2e"
       }
     },
-    "owner": "rking9579047919"
+    "owner": "vscode76437s"
   }
 }

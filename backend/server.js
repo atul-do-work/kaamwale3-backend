@@ -287,10 +287,12 @@ async function offerJobToNextWorker(job) {
         continue; // Skip offline workers
       }
       
-      // ✅ CHECK: Does this worker have an unpaid job?
+      // ✅ CHECK: Does this worker have an unpaid job? (single or bulk)
       const hasUnpaidJob = await Job.findOne({
-        acceptedBy: worker.phone, // ✅ Check by phone, not name
-        paymentStatus: { $ne: "Paid" }
+        $or: [
+          { acceptedBy: worker.phone, paymentStatus: { $ne: "Paid" } },  // Single job
+          { "acceptedWorkers.phone": worker.phone, paymentStatus: { $ne: "Paid" } }  // Bulk job
+        ]
       });
       
       if (hasUnpaidJob) {
@@ -1308,15 +1310,31 @@ app.post("/auth/forgot-password-request", async (req, res) => {
 
     console.log(`✅ [Forgot Password] OTP generated for ${phone}: ${otp}`);
 
-    // ✅ TODO: Send OTP via SMS (integrate with SMS provider)
-    // For now, we'll just log it (in production, use Twilio or similar)
-    console.log(`📱 [SMS] OTP for ${phone}: ${otp}`);
+    // ✅ Send OTP via Push Notification
+    try {
+      if (user.fcmToken) {
+        await sendNotificationToUserPhone(phone, {
+          type: 'forgot_password_otp',
+          title: '🔐 Password Reset OTP',
+          body: `Your OTP is: ${otp}. Valid for 10 minutes.`,
+          data: {
+            otp: otp,
+            type: 'forgot_password',
+            actionRequired: true,
+          }
+        });
+        console.log(`📱 [Push] OTP sent to ${phone} via push notification`);
+      } else {
+        console.log(`⚠️ [Push] No FCM token for ${phone}, skipping push notification`);
+      }
+    } catch (pushErr) {
+      console.error(`❌ Failed to send OTP push notification to ${phone}:`, pushErr.message);
+      // Continue anyway - OTP is still saved in DB
+    }
 
     return res.json({
       success: true,
       message: "OTP sent to your phone number",
-      // ⚠️ Remove in production - only send OTP via SMS, not response
-      // otp: otp,  // DO NOT SEND IN PRODUCTION
     });
   } catch (err) {
     console.error("Forgot password request error:", err);
@@ -1404,6 +1422,25 @@ app.post("/auth/forgot-password-reset", async (req, res) => {
     await user.save();
 
     console.log(`✅ [Forgot Password] Password reset successfully for ${phone}`);
+
+    // ✅ Send confirmation push notification
+    try {
+      if (user.fcmToken) {
+        await sendNotificationToUserPhone(phone, {
+          type: 'password_reset_success',
+          title: '✅ Password Changed',
+          body: 'Your password has been successfully reset. You can now login with your new password.',
+          data: {
+            type: 'password_reset_success',
+            actionRequired: false,
+          }
+        });
+        console.log(`📱 [Push] Password reset confirmation sent to ${phone}`);
+      }
+    } catch (pushErr) {
+      console.error(`❌ Failed to send confirmation push notification to ${phone}:`, pushErr.message);
+      // Continue anyway - password is already reset
+    }
 
     return res.json({
       success: true,
@@ -1533,13 +1570,18 @@ app.get('/workers/nearby', authenticateToken, async (req, res) => {
     const nearby = workers
       .map(worker => {
         const userProfile = userMap[worker.phone] || {};
+        // ✅ Use average rating from performanceMetrics, fallback to main rating field
+        const avgRating = worker.performanceMetrics?.averageRating || worker.rating || 0;
+        const totalReviews = worker.performanceMetrics?.totalReviews || 0;
+        
         return {
           phone: worker.phone,
           name: userProfile.name,
           skills: worker.skills || [],
           mainSkill: userProfile.mainSkill || worker.mainSkill || 'Not specified',
           expectedWage: userProfile.expectedWage || 'Negotiable',
-          rating: worker.rating || 0,
+          rating: avgRating,
+          totalReviews: totalReviews,
           profilePhoto: userProfile.profilePhoto || worker.profilePhoto,
           distanceKm: worker.distanceKm || 0,
           distanceMeters: worker.distanceMeters || 0,
@@ -2236,11 +2278,13 @@ app.post("/jobs/accept/:id", authenticateToken, async (req, res) => {
 
     console.log(`✅ Accept request for job: ${jobId} by worker: ${workerName} (phone: ${workerPhone})`);
 
-    // ✅ CHECK: Worker cannot accept multiple simultaneous jobs
+    // ✅ CHECK: Worker cannot accept multiple simultaneous jobs (both single and bulk)
     // Find if worker has any unpaid job
     const hasUnpaidJob = await Job.findOne({
-      acceptedBy: workerPhone, // ✅ Check by phone
-      paymentStatus: { $ne: "Paid" }  // Any job that's not paid yet
+      $or: [
+        { acceptedBy: workerPhone, paymentStatus: { $ne: "Paid" } },  // Single job unpaid
+        { "acceptedWorkers.phone": workerPhone, paymentStatus: { $ne: "Paid" } }  // Bulk job unpaid
+      ]
     });
 
     if (hasUnpaidJob) {
@@ -2628,18 +2672,20 @@ app.post("/jobs/decline/:id", authenticateToken, async (req, res) => {
 app.post("/jobs/nearby", authenticateToken, async (req, res) => {
   try {
     const { lat, lon, workerType } = req.body;
+    const workerPhone = req.user.phone;  // ✅ Use phone, not name
     const workerName = req.user.name;
     const MAX_RADIUS_KM = 10; // Maximum search radius
 
     let jobs = await Job.find();
     
-    // ✅ CHECK: Does worker have an active unpaid job?
+    // ✅ CHECK: Does worker have an active unpaid job? (both single and bulk)
     const hasActiveUnpaidJob = jobs.some(
-      (job) => job.acceptedBy === workerName && job.paymentStatus !== "Paid"
+      (job) => (job.acceptedBy === workerPhone || job.acceptedWorkers?.some(w => w.phone === workerPhone)) && job.paymentStatus !== "Paid"
     );
     
     // If worker has active unpaid job, return empty array (block all new jobs)
     if (hasActiveUnpaidJob) {
+      console.log(`🔴 Worker ${workerName} (${workerPhone}) has unpaid job - blocking new job offers`);
       return res.json([]);
     }
     
@@ -2794,6 +2840,57 @@ app.get("/worker/:phone", authenticateToken, async (req, res) => {
   } catch (err) {
     console.error("Failed to fetch worker details", err);
     res.status(500).json({ success: false, message: "Failed to fetch worker details" });
+  }
+});
+
+// ✅ GET worker profile with performance metrics and average rating
+app.get("/worker/profile", authenticateToken, async (req, res) => {
+  try {
+    const workerPhone = req.user?.phone;
+    if (!workerPhone) {
+      return res.status(400).json({ success: false, message: "User phone not found in token" });
+    }
+
+    console.log(`📋 Fetching worker profile for phone: ${workerPhone}`);
+    
+    const worker = await WorkerModel.findOne({ phone: workerPhone });
+    if (!worker) {
+      return res.status(404).json({ success: false, message: "Worker not found" });
+    }
+
+    // Get user profile data
+    const user = await User.findOne({ phone: workerPhone });
+    
+    console.log(`✅ Worker profile fetched: ${workerPhone}, Average Rating: ${worker.performanceMetrics?.averageRating}/5 (${worker.performanceMetrics?.totalReviews} reviews)`);
+    
+    res.json({
+      success: true,
+      worker: {
+        phone: worker.phone,
+        name: user?.name || 'Unknown',
+        profilePhoto: user?.profilePhoto,
+        skills: worker.skills || [],
+        mainSkill: user?.mainSkill || worker.mainSkill,
+        expectedWage: user?.expectedWage || 'Negotiable',
+        isAvailable: worker.isAvailable || false,
+        rating: worker.rating || 0,
+        performanceMetrics: {
+          averageRating: worker.performanceMetrics?.averageRating || 0,
+          totalReviews: worker.performanceMetrics?.totalReviews || 0,
+          completionRate: worker.performanceMetrics?.completionRate || 0,
+          cancellationRate: worker.performanceMetrics?.cancellationRate || 0,
+          averageEarningsPerGig: worker.performanceMetrics?.averageEarningsPerGig || 0,
+        },
+        gigsData: {
+          totalGigsCompleted: worker.gigsData?.totalGigsCompleted || 0,
+          totalEarnings: worker.gigsData?.totalEarnings || 0,
+          consecutiveDays: worker.gigsData?.consecutiveDays || 0,
+        }
+      }
+    });
+  } catch (err) {
+    console.error("Failed to fetch worker profile", err);
+    res.status(500).json({ success: false, message: "Failed to fetch worker profile" });
   }
 });
 
@@ -3006,6 +3103,48 @@ app.post("/jobs/rate/:id", authenticateToken, async (req, res) => {
     // ✅ Reload job from DB to ensure rating is persisted
     const updatedJob = await Job.findById(jobId);
     console.log(`✅ Rating saved for job ${jobId}:`, updatedJob?.rating);
+    
+    // ✅ UPDATE WORKER AVERAGE RATING
+    // Calculate average rating from all paid & rated jobs for this worker
+    try {
+      if (job.acceptedWorker && job.acceptedWorker.phone) {
+        const workerPhone = job.acceptedWorker.phone;
+        
+        // Find all paid jobs where this worker was rated
+        const ratedJobs = await Job.find({
+          $or: [
+            { 'acceptedWorker.phone': workerPhone },
+            { acceptedBy: workerPhone }
+          ],
+          paymentStatus: 'Paid',
+          'rating.stars': { $exists: true, $ne: null }
+        });
+
+        if (ratedJobs.length > 0) {
+          // Calculate average of all ratings
+          const totalStars = ratedJobs.reduce((sum, j) => sum + (j.rating?.stars || 0), 0);
+          const averageRating = totalStars / ratedJobs.length;
+
+          // Update worker's performance metrics
+          const worker = await Worker.findOneAndUpdate(
+            { phone: workerPhone },
+            {
+              $set: {
+                'performanceMetrics.averageRating': Math.round(averageRating * 10) / 10, // ✅ Round to 1 decimal
+                'performanceMetrics.totalReviews': ratedJobs.length,
+                rating: Math.round(averageRating * 10) / 10, // ✅ Also update main rating field
+              }
+            },
+            { new: true }
+          );
+
+          console.log(`✅ Updated worker ${workerPhone} rating: ${worker?.performanceMetrics.averageRating}/5 (${ratedJobs.length} reviews)`);
+        }
+      }
+    } catch (err) {
+      console.error('Error updating worker average rating:', err);
+      // Don't fail the request if rating update fails
+    }
     
     // ✅ CREATE NOTIFICATION FOR WORKER - RATING RECEIVED (only to the accepted worker)
     try {

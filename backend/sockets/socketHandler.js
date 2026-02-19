@@ -6,6 +6,10 @@ function socketHandler(io) {
 
     // Worker registering their live location
     socket.on("registerWorker", async ({ phone, lat, lon }) => {
+      // ✅ JOIN ROOM WITH PHONE for wallet updates, notifications, etc
+      socket.join(phone);
+      console.log(`✅ Socket ${socket.id} joined room: ${phone}`);
+      
       await Worker.findOneAndUpdate(
         { phone },
         {

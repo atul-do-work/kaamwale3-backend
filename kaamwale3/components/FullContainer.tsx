@@ -1,8 +1,22 @@
 import React, { useState } from 'react';
-import { ScrollView, View, Text, Animated } from 'react-native';
+import { ScrollView, View, Text, Animated, RefreshControl } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import styles from '../styles/FullContainerStyles';
+
+// ✅ Helper function to format seconds into time string
+const formatTime = (seconds: number): string => {
+  if (seconds < 60) {
+    return `${Math.floor(seconds)}s`;
+  }
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) {
+    return `${minutes}m`;
+  }
+  const hours = Math.floor(minutes / 60);
+  const remainingMinutes = minutes % 60;
+  return remainingMinutes > 0 ? `${hours}h ${remainingMinutes}m` : `${hours}h`;
+};
 
 interface FullContainerProps {
   todayEarnings?: number;
@@ -13,30 +27,33 @@ interface FullContainerProps {
   offersClaimed?: number;
   pendingOffers?: number;
   activeBonuses?: number;
+  onRefresh?: () => void;
 }
 
-const formatTime = (minutes: number): string => {
-  if (!minutes || minutes < 0) return '0h 0m';
-  const hours = Math.floor(minutes / 60);
-  const mins = minutes % 60;
-  return `${hours}h ${mins}m`;
-};
+interface StatCardProps {
+  icon: keyof typeof MaterialIcons.glyphMap;
+  label: string;
+  value: string;
+  color?: string;
+  isLarge?: boolean;
+}
 
-// Stat card component for reusability
-const StatCard = ({ icon, label, value, color, isLarge = false }: any) => (
+// ✅ Memoized StatCard to prevent re-renders on scroll
+const StatCard = React.memo(({ icon, label, value, color = '#667eea', isLarge = false }: StatCardProps) => (
   <LinearGradient
-    colors={['#1a2f4d', '#152039']} // ✅ Dark blue bubble style
+    colors={['#1a2f4d', '#152039']}
     start={{ x: 0, y: 0 }}
     end={{ x: 1, y: 1 }}
     style={[styles.statCard, isLarge && styles.statCardLarge]}
   >
-    <View style={styles.statIconContainer}>
+    {/* ✅ Use dynamic color for icon background */}
+    <View style={[styles.statIconContainer, { backgroundColor: color }]}>
       <MaterialIcons name={icon} size={isLarge ? 32 : 24} color="#fff" />
     </View>
     <Text style={styles.statLabel}>{label}</Text>
     <Text style={[styles.statValue, isLarge && styles.statValueLarge]}>{value}</Text>
   </LinearGradient>
-);
+));
 
 export default function FullContainer({
   todayEarnings = 0,
@@ -47,19 +64,35 @@ export default function FullContainer({
   offersClaimed = 0,
   pendingOffers = 0,
   activeBonuses = 0,
+  onRefresh,
 }: FullContainerProps) {
   const [scrollY] = useState(new Animated.Value(0));
+  const [refreshing, setRefreshing] = useState(false);
 
+  // ✅ Use native driver for better performance
   const handleScroll = Animated.event(
     [{ nativeEvent: { contentOffset: { y: scrollY } } }],
-    { useNativeDriver: false }
+    { useNativeDriver: true }
   );
 
+  // ✅ Better interpolation values for subtle stretch
   const welcomeScale = scrollY.interpolate({
-    inputRange: [-100, 0],
-    outputRange: [1.3, 1],
+    inputRange: [-80, 0],
+    outputRange: [1.15, 1],
     extrapolate: 'clamp',
   });
+
+  // ✅ Pull-to-refresh handler
+  const handleRefresh = async () => {
+    setRefreshing(true);
+    try {
+      if (onRefresh) {
+        await onRefresh();
+      }
+    } finally {
+      setRefreshing(false);
+    }
+  };
 
   return (
     <ScrollView 
@@ -67,6 +100,15 @@ export default function FullContainer({
       contentContainerStyle={styles.scrollContent}
       scrollEventThrottle={16}
       onScroll={handleScroll}
+      // ✅ Add pull-to-refresh
+      refreshControl={
+        <RefreshControl
+          refreshing={refreshing}
+          onRefresh={handleRefresh}
+          tintColor="#667eea"
+          title="Pull to refresh"
+        />
+      }
     >
       {/* Welcome Section - Stretches when pulled up */}
       <Animated.View style={[
@@ -82,15 +124,15 @@ export default function FullContainer({
           <StatCard 
             icon="attach-money" 
             label="Today's Earnings" 
-            value={`₹${todayEarnings.toLocaleString('en-IN')}`} 
-            color="green"
+            value={`₹${(todayEarnings ?? 0).toLocaleString('en-IN')}`}
+            color="#10b981"
             isLarge={true}
           />
           <StatCard 
             icon="schedule" 
             label="Time on Order" 
             value={formatTime(timeOnOrder)} 
-            color="blue"
+            color="#3b82f6"
             isLarge={true}
           />
         </View>
@@ -99,13 +141,13 @@ export default function FullContainer({
             icon="work" 
             label="Jobs Today" 
             value={todayJobs.toString()} 
-            color="purple"
+            color="#8b5cf6"
           />
           <StatCard 
             icon="history" 
             label="Total History" 
             value={historyCount.toString()} 
-            color="orange"
+            color="#f59e0b"
           />
         </View>
       </View>
@@ -126,7 +168,7 @@ export default function FullContainer({
           <View style={styles.summaryRow}>
             <View style={styles.summaryItem}>
               <Text style={styles.summaryLabel}>Total Earnings</Text>
-              <Text style={styles.summaryValue}>₹{totalEarnings.toLocaleString('en-IN')}</Text>
+              <Text style={[styles.summaryValue, styles.summaryValueLarge]}>₹{(totalEarnings ?? 0).toLocaleString('en-IN')}</Text>
             </View>
             <View style={styles.summaryDivider} />
             <View style={styles.summaryItem}>
@@ -143,7 +185,7 @@ export default function FullContainer({
             <View style={styles.summaryDivider} />
             <View style={styles.summaryItem}>
               <Text style={styles.summaryLabel}>Active Bonuses</Text>
-              <Text style={styles.summaryValue}>₹{activeBonuses.toLocaleString('en-IN')}</Text>
+              <Text style={[styles.summaryValue, styles.summaryValueLarge]}>₹{(activeBonuses ?? 0).toLocaleString('en-IN')}</Text>
             </View>
           </View>
         </LinearGradient>

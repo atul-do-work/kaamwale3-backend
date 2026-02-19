@@ -117,6 +117,11 @@ export default StyleSheet.create({
     fontWeight: '700',
     color: '#10b981',
   },
+  // ✅ Larger value for currency amounts (better visual hierarchy)
+  summaryValueLarge: {
+    fontSize: 22,
+    fontWeight: '800',
+  },
   summaryDivider: {
     width: 1,
     height: 40,
