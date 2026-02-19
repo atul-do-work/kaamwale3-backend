@@ -622,16 +622,18 @@ io.on("connection", (socket) => {
           coordinates: [lon || 0, lat || 0],
         };
 
-        // Fetch User record to get profilePhoto, mainSkill, and expectedWage
+        // Fetch User record to get profilePhoto, mainSkill, expectedWage, and isAvailable
         let profilePhoto = null;
         let mainSkill = null;
         let expectedWage = null;
+        let isAvailable = false;
         try {
           const userRecord = await User.findOne({ phone });
           if (userRecord) {
             profilePhoto = userRecord.profilePhoto;
             mainSkill = userRecord.mainSkill;
             expectedWage = userRecord.expectedWage;
+            isAvailable = userRecord.isAvailable || false;
           }
         } catch (e) {
           console.error("Error fetching user profile photo for worker:", e);
@@ -652,7 +654,7 @@ io.on("connection", (socket) => {
           mainSkill: mainSkill, // ✅ Fetch from User model
           expectedWage: expectedWage, // ✅ Fetch from User model
           socketId: socket.id,
-          isAvailable: updated.isAvailable || false, // ✅ Use worker's current availability status from toggle endpoint
+          isAvailable: isAvailable, // ✅ Now fetches from USER model (source of truth)
           consecutiveDays: updated.gigsData?.consecutiveDays || 0,
           eligibleFor5Days: updated.gigsData?.eligibleFor5Days || false,
           eligibleFor10Days: updated.gigsData?.eligibleFor10Days || false,
@@ -1402,7 +1404,7 @@ app.get('/workers/nearby', authenticateToken, async (req, res) => {
           phone: worker.phone,
           name: userProfile.name,
           skills: worker.skills || [],
-          mainSkill: worker.mainSkill || 'Not specified',
+          mainSkill: userProfile.mainSkill || worker.mainSkill || 'Not specified',
           expectedWage: userProfile.expectedWage || 'Negotiable',
           rating: worker.rating || 0,
           profilePhoto: userProfile.profilePhoto || worker.profilePhoto,
@@ -2583,6 +2585,8 @@ app.get("/jobs/my-accepted", authenticateToken, async (req, res) => {
     const workerName = req.user.name;
     const workerPhone = req.user.phone;
     
+    console.log(`\n📥 [/jobs/my-accepted] Request from ${workerName} (${workerPhone})`);
+    
     // ✅ Pagination parameters
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 50; // Default 50, max 100
@@ -2603,24 +2607,28 @@ app.get("/jobs/my-accepted", authenticateToken, async (req, res) => {
     // ✅ Log jobs with rating info for debugging
     jobs.forEach((job) => {
       if (job.rating) {
-        console.log(`⭐ Fetched job ${job._id} with rating:`, job.rating);
+        console.log(`   ⭐ Job ${job._id} with rating:`, job.rating);
       }
     });
 
-    console.log(`✅ Worker ${workerName} (${workerPhone}): page ${page}, returned ${jobs.length}/${totalCount} jobs`);
+    console.log(`   ✅ Found ${jobs.length}/${totalCount} jobs (page ${page}/${Math.ceil(totalCount / pageSize)})`);
     
     // ✅ Return array format (backward compatible)
-    res.json({
+    const response = {
       gigs: jobs,
       page,
       limit: pageSize,
       totalCount,
       totalPages: Math.ceil(totalCount / pageSize),
       hasMore: skip + pageSize < totalCount
-    });
+    };
+    
+    console.log(`   📤 Response structure: gigs=${jobs.length}, totalCount=${totalCount}, totalPages=${response.totalPages}`);
+    
+    res.json(response);
   } catch (err) {
-    console.error("Failed to load worker's accepted jobs", err);
-    res.status(500).json({ message: "Failed to load jobs" });
+    console.error("❌ Failed to load worker's accepted jobs:", err);
+    res.status(500).json({ success: false, message: "Failed to load jobs", error: err.message });
   }
 });
 

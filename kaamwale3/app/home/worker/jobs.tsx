@@ -165,7 +165,19 @@ export default function Jobs(): React.ReactElement {
 
       if (!res.ok) throw new Error("Failed to fetch jobs");
 
-      const jobs: Job[] = await res.json();
+      const response = await res.json();
+      console.log("📥 Jobs response:", response); // ✅ Debug: Log full response
+      
+      // ✅ Extract gigs array from response object
+      const gigsArray = response.gigs || response || [];
+      
+      // ✅ Ensure we have an array
+      if (!Array.isArray(gigsArray)) {
+        console.error("❌ Response is not an array:", gigsArray);
+        throw new Error("Invalid job response format");
+      }
+      
+      const jobs: Job[] = gigsArray;
       
       // Log rating data for debugging
       jobs.forEach((job) => {
@@ -176,11 +188,22 @@ export default function Jobs(): React.ReactElement {
       
       // No need to filter by worker name anymore - the endpoint returns only this worker's jobs
       const jobsWithLocation = await Promise.all(
-        jobs.map(async (job) => ({
-          ...job,
-          location: job.location || (await getAddressFromCoords(job.lat, job.lon)),
-          paymentStatus: job.paymentStatus || null,
-        }))
+        jobs.map(async (job) => {
+          try {
+            return {
+              ...job,
+              location: job.location || (await getAddressFromCoords(job.lat, job.lon)),
+              paymentStatus: job.paymentStatus || null,
+            };
+          } catch (mapErr) {
+            console.error(`⚠️ Error processing job ${job._id}:`, mapErr);
+            return {
+              ...job,
+              location: job.location || "Unknown location",
+              paymentStatus: job.paymentStatus || null,
+            };
+          }
+        })
       );
 
       // Alert for new payments - only show if not already notified
@@ -202,8 +225,12 @@ export default function Jobs(): React.ReactElement {
 
       setAcceptedJobs(jobsWithLocation);
     } catch (err) {
-      console.error("Error fetching jobs:", err);
-      if (!isRefresh) Alert.alert("Error", "Could not fetch jobs."); // ✅ Don't show error alert on refresh
+      console.error("❌ Error fetching jobs:", err);
+      if (err instanceof Error) {
+        console.error("   Error message:", err.message);
+        console.error("   Error stack:", err.stack);
+      }
+      if (!isRefresh) Alert.alert("Error", `Could not fetch jobs: ${err instanceof Error ? err.message : 'Unknown error'}`);
     } finally {
       if (!isRefresh) setLoading(false); // ✅ Only reset loading on initial load
     }

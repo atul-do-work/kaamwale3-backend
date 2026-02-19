@@ -14,12 +14,13 @@ const walletSchema = new mongoose.Schema({
       date: { type: Date, default: Date.now },
       description: String,
       orderId: String, // For deposit/withdraw tracking
-      paymentId: { type: String, unique: true, sparse: true }, // 🔐 Unique index prevents duplicate payments globally
+      paymentId: { type: String}, // 🔐 Unique index prevents duplicate payments globally
       status: { type: String, default: 'completed' } // completed, pending, failed
     }
   ],
   
-  // Metadata
+  // MetadatapaymentId: { type: String, index: true }
+
   totalDeposited: { type: Number, default: 0 },
   totalWithdrawn: { type: Number, default: 0 },
   totalEarned: { type: Number, default: 0 }
