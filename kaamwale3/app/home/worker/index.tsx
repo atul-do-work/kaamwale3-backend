@@ -394,6 +394,9 @@ function WorkerHome() {
         if (storedToken) {
           setToken(storedToken);
           
+          // ✅ Log token for debugging
+          console.log(`🔐 Token loaded: ${storedToken.substring(0, 30)}... (length: ${storedToken.length})`);
+          
           // ✅ Fetch notification count after token is set
           try {
             const notifRes = await fetch(`${API_BASE}/notifications`, {
@@ -427,15 +430,27 @@ function WorkerHome() {
               console.log("🔌 Socket disconnected (user changed, will reconnect)");
             }
             
-            socket.auth = { token: storedToken };
-            socket.connect();
-            console.log("✅ Socket reconnecting with new user token");
+            // ✅ Validate token before connecting
+            if (!storedToken || storedToken.trim() === "") {
+              console.error("❌ Cannot connect socket - token is empty");
+              setError("Authentication token is missing");
+            } else {
+              socket.auth = { token: storedToken };
+              socket.connect();
+              console.log("✅ Socket reconnecting with new user token");
+            }
           } else if (userPhone) {
             // Same user, just ensure socket is connected
             if (!socket.connected) {
-              socket.auth = { token: storedToken };
-              socket.connect();
-              console.log("✅ Socket connecting (same user)");
+              // ✅ Validate token before connecting
+              if (!storedToken || storedToken.trim() === "") {
+                console.error("❌ Cannot connect socket - token is empty");
+                setError("Authentication token is missing");
+              } else {
+                socket.auth = { token: storedToken };
+                socket.connect();
+                console.log("✅ Socket connecting (same user)");
+              }
             } else {
               console.log("✅ Socket already connected (same user)");
             }
@@ -479,8 +494,6 @@ function WorkerHome() {
           console.warn("⚠️ No token found in AsyncStorage");
           setError("No authentication token found");
         }
-
-        console.log("🔑 LOADED TOKEN:", storedToken);
       } catch (err) {
         console.error("❌ Failed to load user:", err);
         const errMsg = err instanceof Error ? err.message : String(err);

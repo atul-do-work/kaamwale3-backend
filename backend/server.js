@@ -496,8 +496,13 @@ async function offerJobToNextWorker(job) {
 io.use(async (socket, next) => {
   try {
     const token = socket.handshake?.auth?.token;
+    
+    // ✅ Debug logging
+    console.log(`🔑 Socket handshake - checking token... token=${token ? 'present (' + token.substring(0,20) + '...)' : 'MISSING'}`);
+    
     if (!token) {
       // Allow anonymous sockets; handlers should check socket.user when needed
+      console.warn(`⚠️ Socket ${socket.id} connecting WITHOUT token`);
       return next();
     }
 
@@ -505,6 +510,7 @@ io.use(async (socket, next) => {
       const user = jwt.verify(token, JWT_SECRET);
       socket.user = user; // { name, phone, role }
       socket.data.user = user; // ✅ Also store in socket.data for easy access
+      console.log(`✅ JWT verified for user: ${user.name} (${user.phone})`);
 
       // Re-associate previous session if any (persisted in Worker model)
       if (user && user.phone) {
@@ -565,7 +571,9 @@ io.use(async (socket, next) => {
         socket.tokenExpired = true;
         return next();
       } else {
-        console.warn("Socket JWT verification failed:", err && err.message);
+        console.error(`❌ Socket JWT verification FAILED: ${err && err.message}`);
+        console.error(`   Error name: ${err?.name}`);
+        console.error(`   Token sample: ${token ? token.substring(0, 30) + '...' : 'NO TOKEN PROVIDED'}`);
         // proceed without authentication for other errors
         return next();
       }
