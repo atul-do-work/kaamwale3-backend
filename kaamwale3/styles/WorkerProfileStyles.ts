@@ -33,18 +33,22 @@ export default StyleSheet.create({
   // },
   profileInfo: {
     flexDirection: 'column',
-    paddingLeft: 80,
+    paddingLeft: 20,
+    flex: 1,
+    justifyContent: 'center',
   },
   nameText: {
     color: '#fff',
     fontSize: 20,
     fontWeight: 'bold',
     marginBottom: 4,
+    flexWrap: 'wrap',
   },
   workerId: {
     color: '#fff',
     fontSize: 14,
     marginBottom: 4,
+    flexWrap: 'wrap',
   },
   ratingText: {
     color: '#fff',

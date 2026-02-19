@@ -1282,6 +1282,139 @@ app.post("/login", loginLimiter, async (req, res) => {
   }
 });
 
+// ✅ POST: Request OTP for password reset
+app.post("/auth/forgot-password-request", async (req, res) => {
+  try {
+    const { phone } = req.body;
+
+    if (!phone || phone.length < 10) {
+      return res.status(400).json({ success: false, message: "Invalid phone number" });
+    }
+
+    // Check if user exists
+    const user = await User.findOne({ phone });
+    if (!user) {
+      return res.status(404).json({ success: false, message: "User not found" });
+    }
+
+    // Generate OTP
+    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    const otpExpiry = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
+
+    // Save OTP to user (temporary field)
+    user.otpCode = otp;
+    user.otpExpiry = otpExpiry;
+    await user.save();
+
+    console.log(`✅ [Forgot Password] OTP generated for ${phone}: ${otp}`);
+
+    // ✅ TODO: Send OTP via SMS (integrate with SMS provider)
+    // For now, we'll just log it (in production, use Twilio or similar)
+    console.log(`📱 [SMS] OTP for ${phone}: ${otp}`);
+
+    return res.json({
+      success: true,
+      message: "OTP sent to your phone number",
+      // ⚠️ Remove in production - only send OTP via SMS, not response
+      // otp: otp,  // DO NOT SEND IN PRODUCTION
+    });
+  } catch (err) {
+    console.error("Forgot password request error:", err);
+    return res.status(500).json({ success: false, message: "Internal server error" });
+  }
+});
+
+// ✅ POST: Verify OTP for password reset
+app.post("/auth/forgot-password-verify-otp", async (req, res) => {
+  try {
+    const { phone, otp } = req.body;
+
+    if (!phone || !otp) {
+      return res.status(400).json({ success: false, message: "Phone and OTP required" });
+    }
+
+    const user = await User.findOne({ phone });
+    if (!user) {
+      return res.status(404).json({ success: false, message: "User not found" });
+    }
+
+    // Check OTP validity
+    if (user.otpCode !== otp) {
+      return res.status(401).json({ success: false, message: "Invalid OTP" });
+    }
+
+    if (!user.otpExpiry || new Date() > user.otpExpiry) {
+      return res.status(401).json({ success: false, message: "OTP has expired" });
+    }
+
+    console.log(`✅ [Forgot Password] OTP verified for ${phone}`);
+
+    return res.json({
+      success: true,
+      message: "OTP verified successfully",
+    });
+  } catch (err) {
+    console.error("OTP verification error:", err);
+    return res.status(500).json({ success: false, message: "Internal server error" });
+  }
+});
+
+// ✅ POST: Reset password with OTP
+app.post("/auth/forgot-password-reset", async (req, res) => {
+  try {
+    const { phone, otp, newPassword } = req.body;
+
+    if (!phone || !otp || !newPassword) {
+      return res.status(400).json({ success: false, message: "All fields required" });
+    }
+
+    // Validate password strength
+    if (!newPassword || newPassword.length < 8) {
+      return res.status(400).json({ success: false, message: "Password must be at least 8 characters long" });
+    }
+    if (!/\d/.test(newPassword)) {
+      return res.status(400).json({ success: false, message: "Password must contain at least one number" });
+    }
+    if (!/[A-Z]/.test(newPassword)) {
+      return res.status(400).json({ success: false, message: "Password must contain at least one uppercase letter" });
+    }
+    if (!/[a-z]/.test(newPassword)) {
+      return res.status(400).json({ success: false, message: "Password must contain at least one lowercase letter" });
+    }
+
+    const user = await User.findOne({ phone });
+    if (!user) {
+      return res.status(404).json({ success: false, message: "User not found" });
+    }
+
+    // Verify OTP
+    if (user.otpCode !== otp) {
+      return res.status(401).json({ success: false, message: "Invalid OTP" });
+    }
+
+    if (!user.otpExpiry || new Date() > user.otpExpiry) {
+      return res.status(401).json({ success: false, message: "OTP has expired" });
+    }
+
+    // Hash new password
+    const hashedPassword = await bcrypt.hash(newPassword, 10);
+    user.password = hashedPassword;
+    user.otpCode = null; // Clear OTP
+    user.otpExpiry = null;
+    await user.save();
+
+    console.log(`✅ [Forgot Password] Password reset successfully for ${phone}`);
+
+    return res.json({
+      success: true,
+      message: "Password reset successfully. Please login with your new password.",
+    });
+  } catch (err) {
+    console.error("Password reset error:", err);
+    return res.status(500).json({ success: false, message: "Internal server error" });
+  }
+});
+
 app.get("/users", authenticateToken, async (req, res) => {
   try {
     const users = await User.find();

@@ -84,6 +84,9 @@ export default function RootLayout() {
         {/* Login/Auth screen is the entry point */}
         <Stack.Screen name="index" />
         
+        {/* Forgot Password screen */}
+        <Stack.Screen name="forgot-password" />
+        
         {/* Home with role-based routing */}
         <Stack.Screen name="home" />
         

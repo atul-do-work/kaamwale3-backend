@@ -138,13 +138,36 @@ export default function Jobs(): React.ReactElement {
   // Helper: get full address from lat/lon
   const getAddressFromCoords = async (lat: number, lon: number) => {
     try {
-      const [address] = await Location.reverseGeocodeAsync({ latitude: lat, longitude: lon });
-      if (!address) return "Unknown location";
+      console.log(`     📍 Reverse geocoding: lat=${lat}, lon=${lon}`);
+      
+      if (!lat || !lon) {
+        console.warn(`     ⚠️ Invalid coordinates: lat=${lat}, lon=${lon}`);
+        return "Unknown location";
+      }
+      
+      // Ensure Location is available
+      if (!Location || !Location.reverseGeocodeAsync) {
+        console.error(`     ❌ Location API not available`);
+        return "Unknown location";
+      }
+      
+      const result = await Location.reverseGeocodeAsync({ latitude: lat, longitude: lon });
+      console.log(`     ✅ Geocode result:`, result);
+      
+      if (!result || result.length === 0) {
+        console.warn(`     ⚠️ No geocode results`);
+        return "Unknown location";
+      }
+      
+      const address = result[0];
       const area = address.name || address.street || "";
       const city = address.city || address.region || "";
-      return area && city ? `${area}, ${city}` : area || city || "Unknown location";
+      const locationStr = area && city ? `${area}, ${city}` : area || city || "Unknown location";
+      console.log(`     📌 Formatted location:`, locationStr);
+      
+      return locationStr;
     } catch (err) {
-      console.error("Reverse geocoding error:", err);
+      console.error(`     ❌ Reverse geocoding error:`, err);
       return "Unknown location";
     }
   };
@@ -156,43 +179,61 @@ export default function Jobs(): React.ReactElement {
 
     if (!worker || !tkn) return;
 
-    if (!isRefresh) setLoading(true); // ✅ Only show full spinner on initial load, not on pull-to-refresh
+    if (!isRefresh) setLoading(true);
     try {
+      console.log("🔄 [1] Starting fetch from:", `${API_BASE}/jobs/my-accepted`);
+      
       const res = await fetch(`${API_BASE}/jobs/my-accepted`, {
         method: "GET",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${tkn}` },
       });
 
-      if (!res.ok) throw new Error("Failed to fetch jobs");
+      console.log("🔄 [2] Response status:", res.status, res.ok);
+      
+      if (!res.ok) throw new Error(`HTTP ${res.status}: Failed to fetch jobs`);
 
+      console.log("🔄 [3] Parsing JSON response...");
       const response = await res.json();
-      console.log("📥 Jobs response:", response); // ✅ Debug: Log full response
+      console.log("🔄 [4] Response received:", JSON.stringify(response).substring(0, 200));
       
-      // ✅ Extract gigs array from response object
+      console.log("🔄 [5] Extracting gigs array...");
       const gigsArray = response.gigs || response || [];
+      console.log("🔄 [6] gigsArray type:", typeof gigsArray, "isArray:", Array.isArray(gigsArray));
       
-      // ✅ Ensure we have an array
       if (!Array.isArray(gigsArray)) {
-        console.error("❌ Response is not an array:", gigsArray);
+        console.error("❌ [7] Response is not an array:", JSON.stringify(gigsArray));
         throw new Error("Invalid job response format");
       }
       
+      console.log("🔄 [8] Found", gigsArray.length, "jobs");
       const jobs: Job[] = gigsArray;
       
       // Log rating data for debugging
+      console.log("🔄 [9] Iterating jobs for rating data...");
       jobs.forEach((job) => {
         if (job.rating) {
-          console.log(`⭐ Job ${job._id} has rating:`, job.rating);
+          console.log(`   ⭐ Job ${job._id} has rating:`, job.rating);
         }
       });
       
+      console.log("🔄 [10] Processing jobs with location data...");
       // No need to filter by worker name anymore - the endpoint returns only this worker's jobs
       const jobsWithLocation = await Promise.all(
-        jobs.map(async (job) => {
+        jobs.map(async (job, index) => {
           try {
+            console.log(`   🔄 [10.${index}] Processing job ${job._id}...`);
+            const location = job.location || (await getAddressFromCoords(job.lat, job.lon));
+            
+            // ✅ Type-safe substring for logging
+            const locationDisplay = typeof location === "string"
+              ? location.substring(0, 30)
+              : location;
+            
+            console.log(`   ✅ [10.${index}] Job processed with location:`, locationDisplay);
+            
             return {
               ...job,
-              location: job.location || (await getAddressFromCoords(job.lat, job.lon)),
+              location,
               paymentStatus: job.paymentStatus || null,
             };
           } catch (mapErr) {
@@ -206,6 +247,8 @@ export default function Jobs(): React.ReactElement {
         })
       );
 
+      console.log("🔄 [11] All jobs processed, checking for payment updates...");
+      
       // Alert for new payments - only show if not already notified
       jobsWithLocation.forEach((job) => {
         if (previousPaymentState.current[job._id] !== "Paid" && job.paymentStatus === "Paid") {
@@ -223,16 +266,20 @@ export default function Jobs(): React.ReactElement {
         previousPaymentState.current[job._id] = job.paymentStatus || null;
       });
 
+      console.log("✅ [12] Setting accepted jobs, count:", jobsWithLocation.length);
       setAcceptedJobs(jobsWithLocation);
     } catch (err) {
       console.error("❌ Error fetching jobs:", err);
       if (err instanceof Error) {
-        console.error("   Error message:", err.message);
-        console.error("   Error stack:", err.stack);
+        console.error("   Message:", err.message);
+        console.error("   Stack:", err.stack);
       }
-      if (!isRefresh) Alert.alert("Error", `Could not fetch jobs: ${err instanceof Error ? err.message : 'Unknown error'}`);
+      if (!isRefresh) {
+        const errorMsg = err instanceof Error ? err.message : 'Unknown error';
+        Alert.alert("Error", `Could not fetch jobs:\n${errorMsg}`);
+      }
     } finally {
-      if (!isRefresh) setLoading(false); // ✅ Only reset loading on initial load
+      if (!isRefresh) setLoading(false);
     }
   };
 
@@ -386,7 +433,9 @@ export default function Jobs(): React.ReactElement {
               <View style={{ flexDirection: "row", alignItems: "center", flex: 1 }}>
                 <MaterialIcons name="event" size={14} color="#999" />
                 <Text style={{ color: "#666", fontSize: 12, marginLeft: 6 }}>
-                  {job.date ? new Date(job.date).toLocaleDateString() : "N/A"}
+                  {job.date && !isNaN(Date.parse(job.date))
+                    ? new Date(job.date).toLocaleDateString()
+                    : "N/A"}
                 </Text>
               </View>
 

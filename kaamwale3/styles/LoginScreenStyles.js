@@ -62,6 +62,17 @@ export default StyleSheet.create({
     fontSize: 16,
     textDecorationLine: 'underline',
   },
+  forgotPasswordButton: {
+    marginTop: 15,
+    alignItems: 'center',
+    paddingVertical: 8,
+  },
+  forgotPasswordText: {
+    color: '#667eea',
+    fontSize: 14,
+    fontWeight: '600',
+    textDecorationLine: 'underline',
+  },
   passwordContainer: {
     flexDirection: 'row',
     alignItems: 'center',
