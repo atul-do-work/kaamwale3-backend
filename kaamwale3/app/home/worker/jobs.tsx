@@ -57,6 +57,18 @@ export default function Jobs(): React.ReactElement {
   const previousUserPhoneRef = useRef<string | null>(null); // ✅ Track previous user to detect changes
   const paymentNotifiedJobs = useRef<Set<string>>(new Set()); // ✅ Track jobs already notified
 
+  const normalizeMediaUrl = (url?: string | null): string | null => {
+    if (!url || typeof url !== "string") return null;
+    const trimmed = url.trim();
+    if (!trimmed) return null;
+
+    // Upgrade http media links to https in production to avoid blocked/insecure image loads.
+    if (trimmed.startsWith("http://")) return trimmed.replace("http://", "https://");
+    if (trimmed.startsWith("https://")) return trimmed;
+    if (trimmed.startsWith("/")) return `${API_BASE}${trimmed}`;
+    return `${API_BASE}/${trimmed}`;
+  };
+
   // ✅ Check for user changes when screen comes into focus (no dependency on currentUserPhone to avoid stale closures)
   useFocusEffect(
     React.useCallback(() => {
@@ -392,6 +404,7 @@ export default function Jobs(): React.ReactElement {
 
   // ✅ Render individual job card (optimized for FlatList virtualization)
   const renderJobCard = ({ item: job }: { item: Job }) => {
+    const jobImageUri = normalizeMediaUrl(job.imageUrl);
     return (
       <View style={{ marginHorizontal: 16, marginBottom: 16 }}>
         <View
@@ -409,7 +422,7 @@ export default function Jobs(): React.ReactElement {
           {/* Top Image */}
           <View style={{ height: 180, overflow: "hidden", backgroundColor: "#EEE" }}>
             <Image
-              source={job.imageUrl ? { uri: job.imageUrl } : require("../../../assets/oip2.jpg")}
+              source={jobImageUri ? { uri: jobImageUri } : require("../../../assets/oip2.jpg")}
               style={{ width: "100%", height: "100%", resizeMode: "cover" }}
             />
           </View>

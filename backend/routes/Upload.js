@@ -8,6 +8,18 @@ const jwt = require("jsonwebtoken");
 const { authenticateToken } = require("../utils/auth");
 
 const JWT_SECRET = process.env.JWT_SECRET || "supersecretkey";
+const SERVER_PUBLIC_URL = process.env.SERVER_PUBLIC_URL || "";
+
+function getPublicBaseUrl(req) {
+  if (SERVER_PUBLIC_URL) return SERVER_PUBLIC_URL.replace(/\/$/, "");
+  const forwardedProto = req.headers["x-forwarded-proto"];
+  const protocol = (Array.isArray(forwardedProto) ? forwardedProto[0] : (forwardedProto || req.protocol || "https"))
+    .toString()
+    .split(",")[0]
+    .trim();
+  const host = process.env.SERVER_URL_DOMAIN || req.get("host");
+  return `${protocol}://${host}`;
+}
 
 // Multer storage setup
 const storage = multer.diskStorage({
@@ -25,7 +37,7 @@ router.post("/upload", authenticateToken, upload.single("file"), async (req, res
     const user = await User.findOne({ phone: req.user.phone });
     if (!user) return res.status(404).json({ success: false, message: "User not found" });
 
-    const fileUrl = `${req.protocol}://${req.get("host")}/uploads/${req.file.filename}`;
+    const fileUrl = `${getPublicBaseUrl(req)}/uploads/${req.file.filename}`;
 
     // ✅ Handle type safely - it may not exist in req.body
     const type = (req.body && req.body.type) || "document";

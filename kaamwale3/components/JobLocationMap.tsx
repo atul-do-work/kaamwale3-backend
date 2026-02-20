@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useRef } from 'react';
-import { View, Text, TouchableOpacity, ActivityIndicator, StyleSheet } from 'react-native';
+import { View, Text, TouchableOpacity, ActivityIndicator, StyleSheet, Modal } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import {
   MapView,
@@ -166,7 +166,13 @@ export default function JobLocationMap({
   if (!visible) return null;
 
   return (
-    <View style={styles.container}>
+    <Modal
+      visible={visible}
+      animationType="slide"
+      onRequestClose={onClose}
+      statusBarTranslucent={true}
+    >
+      <View style={styles.container}>
       {/* Header */}
       <View style={styles.header}>
         <Text style={styles.headerTitle}>{jobTitle}</Text>
@@ -291,6 +297,7 @@ export default function JobLocationMap({
         </TouchableOpacity>
       </View>
     </View>
+    </Modal>
   );
 }
 

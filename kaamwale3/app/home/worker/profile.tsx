@@ -77,6 +77,10 @@ export default function Profile(): React.ReactElement {
           setWorkerPhone(parsed.phone || "0000");
           setSelectedSkill(parsed.mainSkill || "");
           setSelectedWage(parsed.expectedWage || "");
+          if (parsed.profilePhoto && !profileStr) {
+            setProfilePhoto(parsed.profilePhoto);
+            await AsyncStorage.setItem("profilePhoto", parsed.profilePhoto);
+          }
         }
 
         if (profileStr) setProfilePhoto(profileStr);

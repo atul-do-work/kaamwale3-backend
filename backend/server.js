@@ -20,6 +20,18 @@ const { sendNotificationToUserPhone } = require('./utils/push');
 // ---------------- CONFIG ----------------
 const PORT = process.env.PORT || 3000;
 const JWT_SECRET = process.env.JWT_SECRET || "supersecretkey";
+const SERVER_PUBLIC_URL = process.env.SERVER_PUBLIC_URL || "";
+
+function getPublicBaseUrl(req) {
+  if (SERVER_PUBLIC_URL) return SERVER_PUBLIC_URL.replace(/\/$/, "");
+  const forwardedProto = req.headers["x-forwarded-proto"];
+  const protocol = (Array.isArray(forwardedProto) ? forwardedProto[0] : (forwardedProto || req.protocol || "https"))
+    .toString()
+    .split(",")[0]
+    .trim();
+  const host = process.env.SERVER_URL_DOMAIN || req.headers.host || `localhost:${PORT}`;
+  return `${protocol}://${host}`;
+}
 
 // ---------------- MONGODB CONNECTION ----------------
 mongoose.connect(process.env.MONGO_URI || "mongodb://127.0.0.1:27017/IndianWorker")
@@ -1071,10 +1083,7 @@ app.post("/users/photo", authenticateToken, upload.single("photo"), async (req, 
     const user = await User.findOne({ phone: req.user.phone });
     if (!user) return res.status(404).json({ success: false, message: "User not found" });
 
-    // Use req.headers.host to get the server's actual IP/domain
-    const protocol = req.protocol || "http";
-    const host = process.env.SERVER_URL_DOMAIN || req.headers.host || "localhost:3000";
-    const serverURL = `${protocol}://${host}`;
+    const serverURL = getPublicBaseUrl(req);
     
     user.profilePhoto = `${serverURL}/uploads/${req.file.filename}`;
     await user.save();
@@ -2280,10 +2289,8 @@ app.post("/jobs/upload-image", authenticateToken, fileUpload(), async (req, res)
 
     await file.mv(uploadPath);
 
-    // Return the image URL that can be accessed - use same logic as profile photos
-    const protocol = req.protocol || "http";
-    const host = process.env.SERVER_URL_DOMAIN || req.headers.host || "localhost:3000";
-    const serverURL = `${protocol}://${host}`;
+    // Return stable public URL (works across devices)
+    const serverURL = getPublicBaseUrl(req);
     const imageUrl = `${serverURL}/uploads/${filename}`;
     
     console.log(`✅ Job image uploaded: ${imageUrl}`);
@@ -2945,7 +2952,8 @@ app.get("/jobs/my-accepted", authenticateToken, async (req, res) => {
 
 // ✅ Get a single job by id for worker push-tap deep link.
 // Returns only active/visible jobs to prevent opening stale offers.
-app.get("/jobs/:id", authenticateToken, async (req, res) => {
+// NOTE: Use /jobs/by-id/:id to avoid clashing with other /jobs/* routes.
+app.get("/jobs/by-id/:id", authenticateToken, async (req, res) => {
   try {
     const jobId = req.params.id;
     const workerPhone = req.user?.phone;

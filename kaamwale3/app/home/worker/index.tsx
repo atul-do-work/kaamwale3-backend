@@ -281,12 +281,20 @@ function WorkerHome() {
       (async () => {
         const userStr = await AsyncStorage.getItem("user");
         const userPhone = userStr ? JSON.parse(userStr).phone : null;
+        const userObj = userStr ? JSON.parse(userStr) : null;
         
         // ✅ RELOAD PROFILE PHOTO when screen comes into focus (after profile update)
         const profilePhotoStr = await AsyncStorage.getItem("profilePhoto");
-        if (profilePhotoStr) {
-          setWorkerProfilePhoto(profilePhotoStr);
+        const effectivePhoto = profilePhotoStr || userObj?.profilePhoto || null;
+        if (effectivePhoto) {
+          setWorkerProfilePhoto(effectivePhoto);
+          // Keep local cache in sync for faster next loads
+          if (!profilePhotoStr) {
+            await AsyncStorage.setItem("profilePhoto", effectivePhoto);
+          }
           console.log("📸 Profile photo reloaded on focus");
+        } else {
+          setWorkerProfilePhoto(null);
         }
         
         // If user changed (compare with ref, not state), reset everything immediately
@@ -406,6 +414,10 @@ function WorkerHome() {
           const user = JSON.parse(userStr);
           if (user?.name) setWorkerName(user.name);
           if (user?.workerType) setWorkerType(user.workerType);
+          if (user?.profilePhoto) {
+            setWorkerProfilePhoto(user.profilePhoto);
+            await AsyncStorage.setItem("profilePhoto", user.profilePhoto);
+          }
         }
 
         if (profilePhotoStr) setWorkerProfilePhoto(profilePhotoStr); // ✅ Set profile photo
@@ -584,7 +596,7 @@ function WorkerHome() {
               return;
             }
 
-            const res = await fetch(`${API_BASE}/jobs/${data.jobId}`, {
+            const res = await fetch(`${API_BASE}/jobs/by-id/${data.jobId}`, {
               headers: { Authorization: `Bearer ${token}` },
             });
 
@@ -876,16 +888,17 @@ function WorkerHome() {
 
       if (!res.ok) return;
 
-      const jobs: any[] = await res.json();
+      const payload = await res.json();
+      const jobs: any[] = Array.isArray(payload) ? payload : (payload?.gigs || []);
+      if (!Array.isArray(jobs)) return;
 
       // Get today's date at midnight
       const today = new Date();
       today.setHours(0, 0, 0, 0);
-      const tomorrow = new Date(today);
-      tomorrow.setDate(tomorrow.getDate() + 1);
 
       // Filter today's jobs that are accepted and either paid or being worked on
       const todayAcceptedJobs = jobs.filter(job => {
+        if (job.status === "cancelled" || job.status === "expired") return false;
         if (!job.acceptedBy) return false;
         const jobDate = new Date(job.date || job.createdAt);
         jobDate.setHours(0, 0, 0, 0);
@@ -907,11 +920,14 @@ function WorkerHome() {
 
       // Total earnings: sum of all paid jobs (all time)
       const totalEarningsSum = jobs
+        .filter(j => j.status !== "cancelled" && j.status !== "expired")
         .filter(j => j.paymentStatus === "Paid")
         .reduce((sum, j) => sum + (Number(j.amount) || 0), 0);
 
       // History count: total count of accepted jobs (all time)
-      const totalHistory = jobs.filter(j => j.acceptedBy).length;
+      const totalHistory = jobs
+        .filter(j => j.status !== "cancelled" && j.status !== "expired")
+        .filter(j => j.acceptedBy).length;
 
       // Update state
       setTodayEarnings(todayEarningsSum);

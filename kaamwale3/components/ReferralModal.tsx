@@ -42,7 +42,7 @@ export default function ReferralModal({
     try {
       setLoading(true);
       // TODO: Replace with actual backend endpoint
-      const API_BASE = process.env.EXPO_PUBLIC_API_URL || 'http://localhost:5000';
+      const API_BASE = process.env.EXPO_PUBLIC_API_URL;
       const response = await fetch(`${API_BASE}/referral/code/${workerPhone}`);
       
       if (response.ok) {
@@ -68,7 +68,7 @@ export default function ReferralModal({
   };
 
   const referralLink = `https://kaamwale.app/ref/${referralCode}`;
-  const referralMessage = `🎉 Join Kaamwale and earn money!\n\nUse my referral code: ${referralCode}\nGet ₹50 bonus when you register!\n\n${referralLink}`;
+  const referralMessage = `🎉 Join IndianWorker and earn money!\n\nUse my referral code: ${referralCode}\nGet reward bonus when you register!\n\n${referralLink}`;
 
   // ✅ FIXED: Use Linking API instead of WebBrowser for WhatsApp
   const shareOnWhatsApp = async () => {
