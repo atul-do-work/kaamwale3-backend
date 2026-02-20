@@ -30,7 +30,7 @@ interface Job {
   lat: number;
   lon: number;
   date: string; // ✅ Job date from backend
-  status?: "pending" | "accepted" | "declined";
+  status?: "pending" | "accepted" | "declined" | "cancelled" | "expired";
   acceptedBy?: string;
   paymentStatus?: "Paid" | null;
   rating?: {
