@@ -211,6 +211,27 @@ function WorkerHome() {
   const fetchAbortControllers = useRef<Map<string, AbortController>>(new Map()); // ✅ Track fetch abort controllers
   const profilePhotoWriteTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null); // ✅ Debounce AsyncStorage writes
 
+  const ensureSocketConnectedWithToken = (authToken: string | null | undefined): boolean => {
+    if (!authToken || authToken.trim() === "") {
+      console.warn("⚠️ Cannot connect socket without auth token");
+      return false;
+    }
+
+    const currentAuthToken = ((socket as any).auth && (socket as any).auth.token) || null;
+    const hasSameToken = currentAuthToken === authToken;
+
+    // If connected anonymously or with stale token, force reconnect with fresh token.
+    if (socket.connected && !hasSameToken) {
+      socket.disconnect();
+    }
+
+    (socket as any).auth = { token: authToken };
+    if (!socket.connected) {
+      socket.connect();
+    }
+    return true;
+  };
+
   useEffect(() => {
     currentJobRef.current = currentJob;
   }, [currentJob]);
@@ -242,13 +263,10 @@ function WorkerHome() {
       // socket.disconnect();
     } else if (isOnline === true) {
       // Worker went online
-      console.log('🟢 Worker online - ensuring socket connected');
-      if (!socket.connected) {
-        socket.auth = { token };
-        socket.connect();
-      }
+      console.log('🟢 Worker online - ensuring authenticated socket connected');
+      ensureSocketConnectedWithToken(token);
     }
-  }, [isOnline]);
+  }, [isOnline, token, currentUserPhone]);
 
   // ✅ Check for user changes when screen comes into focus (no dependency on currentUserPhone to avoid stale closures)
   useFocusEffect(
@@ -430,29 +448,18 @@ function WorkerHome() {
               console.log("🔌 Socket disconnected (user changed, will reconnect)");
             }
             
-            // ✅ Validate token before connecting
-            if (!storedToken || storedToken.trim() === "") {
-              console.error("❌ Cannot connect socket - token is empty");
+            // ✅ Connect/reconnect with guaranteed auth token
+            if (!ensureSocketConnectedWithToken(storedToken)) {
               setError("Authentication token is missing");
             } else {
-              socket.auth = { token: storedToken };
-              socket.connect();
               console.log("✅ Socket reconnecting with new user token");
             }
           } else if (userPhone) {
-            // Same user, just ensure socket is connected
-            if (!socket.connected) {
-              // ✅ Validate token before connecting
-              if (!storedToken || storedToken.trim() === "") {
-                console.error("❌ Cannot connect socket - token is empty");
-                setError("Authentication token is missing");
-              } else {
-                socket.auth = { token: storedToken };
-                socket.connect();
-                console.log("✅ Socket connecting (same user)");
-              }
+            // Same user: still enforce authenticated connect (fixes anonymous connected socket).
+            if (!ensureSocketConnectedWithToken(storedToken)) {
+              setError("Authentication token is missing");
             } else {
-              console.log("✅ Socket already connected (same user)");
+              console.log("✅ Socket connected (same user, authenticated)");
             }
           }
 

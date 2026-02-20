@@ -1,11 +1,19 @@
-import React, { useEffect, useState } from 'react';
-import { View, Text, Modal, TouchableOpacity, ActivityIndicator, StyleSheet } from 'react-native';
+import React, { useEffect, useState, useRef } from 'react';
+import { View, Text, TouchableOpacity, ActivityIndicator, StyleSheet } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
-import MapLibreGL from '@maplibre/maplibre-react-native';
+import {
+  MapView,
+  Camera,
+  PointAnnotation,
+  ShapeSource,
+  LineLayer,
+} from '@maplibre/maplibre-react-native';
 import * as Location from 'expo-location';
 import * as Linking from 'expo-linking';
 
-const MAP_STYLE = 'https://demotiles.maplibre.org/style.json';
+// ✅ MapTiler MapLibre-compatible styles (same as WorkerMap)
+const MAPTILER_API_KEY = "rmEy5CtIKMlSfVx4fckr"; 
+const MAP_STYLE_URL = `https://api.maptiler.com/maps/streets-v2/style.json?key=${MAPTILER_API_KEY}`;
 
 // Distance calculation using Haversine formula
 function getDistanceFromLatLonInKm(
@@ -27,6 +35,15 @@ function getDistanceFromLatLonInKm(
   const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 
   return R * c;
+}
+
+// ✅ Dynamic zoom based on distance (Uber/Ola style)
+function getZoomLevel(distance: number): number {
+  if (distance < 1) return 16;
+  if (distance < 5) return 14;
+  if (distance < 15) return 12;
+  if (distance < 30) return 11;
+  return 9;
 }
 
 interface JobLocationMapProps {
@@ -51,21 +68,15 @@ export default function JobLocationMap({
   const [distance, setDistance] = useState<number>(0);
   const [jobLocationName, setJobLocationName] = useState<string>('Job Location');
   const [currentLocationName, setCurrentLocationName] = useState<string>('Your Location');
-  
-  // ✅ Modal state for alerts
-  const [modalVisible, setModalVisible] = useState(false);
-  const [modalTitle, setModalTitle] = useState("");
-  const [modalMessage, setModalMessage] = useState("");
-  const [modalType, setModalType] = useState<"success" | "error" | "info">("success");
-  
-  const showModal = (type: "success" | "error" | "info", title: string, message: string) => {
-    setModalType(type);
-    setModalTitle(title);
-    setModalMessage(message);
-    setModalVisible(true);
-  };
+  const mountedRef = useRef<boolean>(true);
+
+  // ✅ Calculate estimated travel time (assuming 30km/h avg speed)
+  const estimatedMinutes = distance > 0 ? Math.ceil((distance / 30) * 60) : 0;
 
   useEffect(() => {
+    // ✅ FIX: Reset mountedRef when effect runs (fixes re-mount bug)
+    mountedRef.current = true;
+
     if (!visible) return;
 
     (async () => {
@@ -75,7 +86,7 @@ export default function JobLocationMap({
         // Get current location
         const { status } = await Location.requestForegroundPermissionsAsync();
         if (status !== 'granted') {
-          showModal('error', 'Permission Denied', 'Location permission is required to show the map');
+          setLoading(false);
           return;
         }
 
@@ -84,350 +95,310 @@ export default function JobLocationMap({
           latitude: loc.coords.latitude,
           longitude: loc.coords.longitude,
         };
-        setCurrentLocation(currentLoc);
+        
+        if (mountedRef.current) {
+          setCurrentLocation(currentLoc);
 
-        // Calculate distance
-        const dist = getDistanceFromLatLonInKm(
-          currentLoc.latitude,
-          currentLoc.longitude,
-          jobLat,
-          jobLon
-        );
-        setDistance(dist);
+          // Calculate distance
+          const dist = getDistanceFromLatLonInKm(
+            currentLoc.latitude,
+            currentLoc.longitude,
+            jobLat,
+            jobLon
+          );
+          setDistance(dist);
 
-        // Get location names
-        try {
-          const currentAddress = await Location.reverseGeocodeAsync(currentLoc);
-          if (currentAddress?.[0]) {
-            const { name, city } = currentAddress[0];
-            setCurrentLocationName(name && city ? `${name}, ${city}` : name || 'Your Location');
+          // Get location names
+          try {
+            const currentAddress = await Location.reverseGeocodeAsync(currentLoc);
+            if (currentAddress[0]) {
+              const addr = currentAddress[0];
+              setCurrentLocationName(
+                `${addr.name || addr.street || ''}, ${addr.city || addr.region || ''}`.trim() || 'Your Location'
+              );
+            }
+          } catch (e) {
+            console.log('Error getting current address:', e);
           }
 
-          const jobAddress = await Location.reverseGeocodeAsync({ latitude: jobLat, longitude: jobLon });
-          if (jobAddress?.[0]) {
-            const { name, city } = jobAddress[0];
-            setJobLocationName(name && city ? `${name}, ${city}` : name || 'Job Location');
+          try {
+            const jobAddress = await Location.reverseGeocodeAsync({ latitude: jobLat, longitude: jobLon });
+            if (jobAddress[0]) {
+              const addr = jobAddress[0];
+              setJobLocationName(
+                `${addr.name || addr.street || ''}, ${addr.city || addr.region || ''}`.trim() || 'Job Location'
+              );
+            }
+          } catch (e) {
+            console.log('Error getting job address:', e);
           }
-        } catch (err) {
-          console.log('Could not reverse geocode location names');
+
+          setLoading(false);
         }
-
-        setLoading(false);
-      } catch (err) {
-        console.error('Error getting location:', err);
-        showModal('error', 'Error', 'Could not get current location');
-        setLoading(false);
+      } catch (error) {
+        console.error('Error in JobLocationMap:', error);
+        if (mountedRef.current) {
+          setLoading(false);
+        }
       }
     })();
-  }, [visible]);
 
-  const handleOpenMapbox = () => {
-    if (!currentLocation) return;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, [visible, jobLat, jobLon]);
 
-    // Open in Google Maps
-    const url = `https://www.google.com/maps/dir/?api=1&origin=${currentLocation.latitude},${currentLocation.longitude}&destination=${jobLat},${jobLon}`;
-    Linking.openURL(url).catch(() => {
-      showModal('error', 'Error', 'Could not open Maps');
-    });
+  // Calculate center point between job and current location
+  const centerLat = currentLocation ? (currentLocation.latitude + jobLat) / 2 : jobLat;
+  const centerLon = currentLocation ? (currentLocation.longitude + jobLon) / 2 : jobLon;
+
+  // ✅ Open in Google Maps (safer version with null check + official API format)
+  const openInGoogleMaps = () => {
+    if (!currentLocation) {
+      console.warn('Current location not available');
+      return;
+    }
+
+    const url = `https://www.google.com/maps/dir/?api=1&origin=${currentLocation.latitude},${currentLocation.longitude}&destination=${jobLat},${jobLon}&travelmode=driving`;
+    Linking.openURL(url).catch(err => console.error('Error opening Google Maps:', err));
   };
 
-  if (!currentLocation && visible) {
-    return (
-      <Modal visible={visible} transparent animationType="slide">
-        <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: 'rgba(0,0,0,0.7)' }}>
-          <View style={{ backgroundColor: '#fff', padding: 20, borderRadius: 12, width: '80%' }}>
-            <ActivityIndicator size="large" color="#667eea" />
-            <Text style={{ marginTop: 12, textAlign: 'center', color: '#333' }}>Loading location...</Text>
-          </View>
-        </View>
-      </Modal>
-    );
-  }
+  if (!visible) return null;
 
   return (
-    <Modal visible={visible} transparent animationType="slide">
-      <View style={{ flex: 1, backgroundColor: '#fff' }}>
-        {/* Header */}
-        <View style={{ 
-          paddingTop: 40, 
-          paddingBottom: 12, 
-          paddingHorizontal: 16, 
-          backgroundColor: '#1b1b2f',
-          flexDirection: 'row',
-          justifyContent: 'space-between',
-          alignItems: 'center'
-        }}>
-          <Text style={{ fontSize: 18, fontWeight: '700', color: '#fff', flex: 1 }}>
-            {jobTitle}
-          </Text>
-          <TouchableOpacity onPress={onClose}>
-            <MaterialIcons name="close" size={28} color="#fff" />
-          </TouchableOpacity>
-        </View>
+    <View style={styles.container}>
+      {/* Header */}
+      <View style={styles.header}>
+        <Text style={styles.headerTitle}>{jobTitle}</Text>
+        <TouchableOpacity onPress={onClose} style={styles.closeButton}>
+          <MaterialIcons name="close" size={24} color="#fff" />
+        </TouchableOpacity>
+      </View>
 
-        {/* Map */}
-        {currentLocation && (
-          <MapLibreGL.MapView
-            style={{ flex: 1 }}
+      {/* Map Container */}
+      <View style={styles.mapContainer}>
+        {loading ? (
+          <View style={styles.loaderContainer}>
+            <ActivityIndicator size="large" color="#2196F3" />
+          </View>
+        ) : currentLocation ? (
+          <MapView
+            style={styles.map}
+            mapStyle={MAP_STYLE_URL}
+            logoEnabled={false}
+            attributionEnabled={false}
           >
-            <MapLibreGL.Camera
-              centerCoordinate={[
-                (currentLocation.longitude + jobLon) / 2,
-                (currentLocation.latitude + jobLat) / 2,
-              ]}
-              zoomLevel={13}
+            <Camera
+              centerCoordinate={[centerLon, centerLat]}
+              zoomLevel={getZoomLevel(distance)}
               animationDuration={500}
             />
 
-            {/* Worker Location Marker */}
-            <MapLibreGL.PointAnnotation
-              id="worker-location"
+            {/* ✅ Route Line (connects both markers) */}
+            {currentLocation && (
+              <ShapeSource
+                id="route"
+                shape={{
+                  type: 'Feature',
+                  geometry: {
+                    type: 'LineString',
+                    coordinates: [
+                      [currentLocation.longitude, currentLocation.latitude],
+                      [jobLon, jobLat],
+                    ],
+                  },
+                  properties: {},
+                }}
+              >
+                <LineLayer
+                  id="route-line"
+                  style={{
+                    lineColor: '#2196F3',
+                    lineWidth: 4,
+                    lineOpacity: 0.7,
+                    lineDasharray: [2, 2],
+                  }}
+                />
+              </ShapeSource>
+            )}
+
+            {/* Current Location Marker */}
+            <PointAnnotation
+              id="current-location"
               coordinate={[currentLocation.longitude, currentLocation.latitude]}
             >
-              <View style={{ 
-                width: 40, 
-                height: 40, 
-                borderRadius: 20, 
-                backgroundColor: '#2196F3',
-                justifyContent: 'center',
-                alignItems: 'center',
-                borderWidth: 3,
-                borderColor: '#fff'
-              }} />
-            </MapLibreGL.PointAnnotation>
+              <View style={styles.currentLocationMarker}>
+                <MaterialIcons name="my-location" size={20} color="#fff" />
+              </View>
+            </PointAnnotation>
 
             {/* Job Location Marker */}
-            <MapLibreGL.PointAnnotation
+            <PointAnnotation
               id="job-location"
               coordinate={[jobLon, jobLat]}
             >
-              <View style={{ 
-                width: 40, 
-                height: 40, 
-                borderRadius: 20, 
-                backgroundColor: '#FF6B6B',
-                justifyContent: 'center',
-                alignItems: 'center',
-                borderWidth: 3,
-                borderColor: '#fff'
-              }} />
-            </MapLibreGL.PointAnnotation>
-
-            {/* Route Line */}
-            <MapLibreGL.ShapeSource
-              id="route-source"
-              shape={{
-                type: 'Feature',
-                properties: {},
-                geometry: {
-                  type: 'LineString',
-                  coordinates: [
-                    [currentLocation.longitude, currentLocation.latitude],
-                    [jobLon, jobLat],
-                  ],
-                },
-              }}
-            >
-              <MapLibreGL.LineLayer
-                id="route-line"
-                style={{
-                  lineColor: '#667eea',
-                  lineWidth: 3,
-                  lineOpacity: 0.7,
-                }}
-              />
-            </MapLibreGL.ShapeSource>
-          </MapLibreGL.MapView>
+              <View style={styles.jobLocationMarker}>
+                <MaterialIcons name="location-on" size={24} color="#fff" />
+              </View>
+            </PointAnnotation>
+          </MapView>
+        ) : (
+          <View style={styles.loaderContainer}>
+            <Text style={styles.errorText}>Unable to load map</Text>
+          </View>
         )}
-
-        {/* Bottom Info Card */}
-        <View style={{ 
-          backgroundColor: '#1b1b2f', 
-          padding: 16,
-          borderTopLeftRadius: 12,
-          borderTopRightRadius: 12
-        }}>
-          {/* Distance Info */}
-          <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 16 }}>
-            <MaterialIcons name="straighten" size={24} color="#667eea" />
-            <View style={{ marginLeft: 12, flex: 1 }}>
-              <Text style={{ color: '#aaa', fontSize: 12 }}>Distance</Text>
-              <Text style={{ color: '#fff', fontSize: 18, fontWeight: '700' }}>
-                {distance.toFixed(2)} km
-              </Text>
-            </View>
-          </View>
-
-          {/* Location Info */}
-          <View style={{ marginBottom: 16 }}>
-            <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 8 }}>
-              <MaterialIcons name="my-location" size={20} color="#2196F3" />
-              <Text style={{ color: '#2196F3', marginLeft: 8, fontWeight: '600' }}>Your Location</Text>
-            </View>
-            <Text style={{ color: '#ccc', fontSize: 13, marginLeft: 28 }}>
-              {currentLocationName}
-            </Text>
-          </View>
-
-          <View style={{ marginBottom: 16 }}>
-            <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 8 }}>
-              <MaterialIcons name="location-on" size={20} color="#FF6B6B" />
-              <Text style={{ color: '#FF6B6B', marginLeft: 8, fontWeight: '600' }}>Job Location</Text>
-            </View>
-            <Text style={{ color: '#ccc', fontSize: 13, marginLeft: 28 }}>
-              {jobLocationName}
-            </Text>
-          </View>
-
-          {/* Open Maps Button */}
-          <TouchableOpacity 
-            onPress={handleOpenMapbox}
-            style={{ 
-              backgroundColor: '#667eea',
-              paddingVertical: 14,
-              borderRadius: 10,
-              flexDirection: 'row',
-              justifyContent: 'center',
-              alignItems: 'center'
-            }}
-          >
-            <MaterialIcons name="directions" size={20} color="#fff" />
-            <Text style={{ color: '#fff', fontWeight: '700', marginLeft: 8, fontSize: 16 }}>
-              Get Directions
-            </Text>
-          </TouchableOpacity>
-        </View>
       </View>
 
-      {/* ✅ Custom Alert Modal */}
-      <Modal
-        transparent={true}
-        animationType="fade"
-        visible={modalVisible}
-        onRequestClose={() => setModalVisible(false)}
-      >
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalContainer}>
-            {/* Modal Header with Icon */}
-            <View style={[
-              styles.modalHeader,
-              {
-                backgroundColor: modalType === "success" ? "#10B98120" : modalType === "error" ? "#EF444420" : "#3B82F620",
-              }
-            ]}>
-              <View style={[
-                styles.modalIconBg,
-                {
-                  backgroundColor: modalType === "success" ? "#10B981" : modalType === "error" ? "#EF4444" : "#3B82F6",
-                }
-              ]}>
-                <MaterialIcons
-                  name={
-                    modalType === "success" ? "check-circle" :
-                    modalType === "error" ? "error" :
-                    "info"
-                  }
-                  size={32}
-                  color="#fff"
-                />
-              </View>
-            </View>
-
-            {/* Modal Content */}
-            <View style={styles.modalContent}>
-              <Text style={styles.modalTitle}>{modalTitle}</Text>
-              <Text style={styles.modalMessage}>{modalMessage}</Text>
-            </View>
-
-            {/* Modal Footer - OK Button */}
-            <TouchableOpacity
-              style={[
-                styles.modalButton,
-                {
-                  backgroundColor: modalType === "success" ? "#10B981" : modalType === "error" ? "#EF4444" : "#3B82F6",
-                }
-              ]}
-              onPress={() => setModalVisible(false)}
-            >
-              <Text style={styles.modalButtonText}>OK</Text>
-            </TouchableOpacity>
+      {/* Info Footer */}
+      <View style={styles.infoSection}>
+        <View style={styles.infoItem}>
+          <MaterialIcons name="location-on" size={20} color="#2196F3" />
+          <View style={styles.infoTextContainer}>
+            <Text style={styles.label}>Distance</Text>
+            <Text style={styles.value}>{distance.toFixed(2)} km</Text>
           </View>
         </View>
-      </Modal>
-    </Modal>
+
+        {/* ✅ Estimated Travel Time */}
+        <View style={styles.infoItem}>
+          <MaterialIcons name="schedule" size={20} color="#f59e0b" />
+          <View style={styles.infoTextContainer}>
+            <Text style={styles.label}>Estimated Time</Text>
+            <Text style={styles.value}>{estimatedMinutes} mins</Text>
+          </View>
+        </View>
+
+        <View style={styles.infoItem}>
+          <MaterialIcons name="my-location" size={20} color="#10b981" />
+          <View style={styles.infoTextContainer}>
+            <Text style={styles.label}>Your Location</Text>
+            <Text style={styles.value}>{currentLocationName}</Text>
+          </View>
+        </View>
+
+        <View style={styles.infoItem}>
+          <MaterialIcons name="work-outline" size={20} color="#f59e0b" />
+          <View style={styles.infoTextContainer}>
+            <Text style={styles.label}>Job Location</Text>
+            <Text style={styles.value}>{jobLocationName}</Text>
+          </View>
+        </View>
+
+        {/* Google Maps Button */}
+        <TouchableOpacity style={styles.googleMapsButton} onPress={openInGoogleMaps}>
+          <MaterialIcons name="map" size={20} color="#fff" />
+          <Text style={styles.googleMapsButtonText}>Open in Google Maps</Text>
+        </TouchableOpacity>
+      </View>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  // ✅ Modal Styles
-  modalOverlay: {
+  container: {
     flex: 1,
-    backgroundColor: "rgba(0, 0, 0, 0.5)",
-    justifyContent: "center",
-    alignItems: "center",
-    paddingHorizontal: 20,
+    backgroundColor: '#1a1a1a',
   },
-
-  modalContainer: {
-    backgroundColor: "#fff",
-    borderRadius: 16,
-    overflow: "hidden",
-    width: "100%",
-    maxWidth: 320,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.25,
-    shadowRadius: 8,
-    elevation: 8,
-  },
-
-  modalHeader: {
-    paddingVertical: 24,
-    alignItems: "center",
-  },
-
-  modalIconBg: {
-    width: 64,
-    height: 64,
-    borderRadius: 32,
-    justifyContent: "center",
-    alignItems: "center",
-  },
-
-  modalContent: {
-    paddingHorizontal: 20,
-    paddingVertical: 20,
-    alignItems: "center",
-  },
-
-  modalTitle: {
-    fontSize: 18,
-    fontWeight: "700",
-    color: "#1A1A1A",
-    marginBottom: 8,
-    textAlign: "center",
-  },
-
-  modalMessage: {
-    fontSize: 14,
-    color: "#666",
-    textAlign: "center",
-    lineHeight: 20,
-  },
-
-  modalButton: {
+  header: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 16,
     paddingVertical: 12,
-    paddingHorizontal: 20,
-    marginHorizontal: 20,
-    marginBottom: 20,
-    borderRadius: 10,
-    justifyContent: "center",
-    alignItems: "center",
+    backgroundColor: '#2a2a2a',
   },
-
-  modalButtonText: {
-    color: "#fff",
+  headerTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#fff',
+  },
+  closeButton: {
+    padding: 8,
+  },
+  mapContainer: {
+    flex: 1,
+    backgroundColor: '#e0e0e0',
+  },
+  map: {
+    flex: 1,
+  },
+  loaderContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  errorText: {
+    color: '#ff6b6b',
     fontSize: 16,
-    fontWeight: "700",
+    fontWeight: '500',
+  },
+  currentLocationMarker: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: '#2196F3',
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 3,
+    borderColor: '#fff',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.3,
+    shadowRadius: 4,
+  },
+  jobLocationMarker: {
+    width: 45,
+    height: 45,
+    borderRadius: 22.5,
+    backgroundColor: '#f59e0b',
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 3,
+    borderColor: '#fff',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.3,
+    shadowRadius: 4,
+  },
+  infoSection: {
+    backgroundColor: '#2a2a2a',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderTopWidth: 1,
+    borderTopColor: '#3a3a3a',
+  },
+  infoItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  infoTextContainer: {
+    marginLeft: 12,
+    flex: 1,
+  },
+  label: {
+    fontSize: 12,
+    color: '#999',
+    marginBottom: 2,
+  },
+  value: {
+    fontSize: 14,
+    color: '#fff',
+    fontWeight: '500',
+  },
+  googleMapsButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#2196F3',
+    paddingVertical: 12,
+    borderRadius: 8,
+    marginTop: 12,
+  },
+  googleMapsButtonText: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: '600',
+    marginLeft: 8,
   },
 });

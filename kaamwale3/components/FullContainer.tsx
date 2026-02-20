@@ -72,8 +72,19 @@ export default function FullContainer({
   // ✅ Use native driver for better performance
   const handleScroll = Animated.event(
     [{ nativeEvent: { contentOffset: { y: scrollY } } }],
-    { useNativeDriver: true }
+    { useNativeDriver: false } // ✅ FIX: Disabled native driver to prevent scroll crashes
   );
+
+  // ✅ Wrap scroll handler with error boundary
+  const safeHandleScroll = useCallback((event: any) => {
+    try {
+      if (handleScroll && typeof handleScroll === 'function') {
+        handleScroll(event);
+      }
+    } catch (err) {
+      console.error('Scroll handler error:', err);
+    }
+  }, [handleScroll]);
 
   // ✅ Better interpolation values for subtle stretch
   const welcomeScale = scrollY.interpolate({
@@ -86,8 +97,14 @@ export default function FullContainer({
   const handleRefresh = useCallback(async () => {
     setRefreshing(true);
     try {
-      if (onRefresh && typeof onRefresh === 'function') {
-        await onRefresh();
+      // ✅ FIX: Safe function call with proper error handling
+      if (onRefresh) {
+        try {
+          await Promise.resolve(onRefresh());
+        } catch (callErr) {
+          // Fallback if onRefresh throws
+          console.error('onRefresh callback error:', callErr);
+        }
       }
     } catch (err) {
       console.error('Refresh error:', err);
@@ -101,7 +118,7 @@ export default function FullContainer({
       style={styles.container} 
       contentContainerStyle={styles.scrollContent}
       scrollEventThrottle={16}
-      onScroll={handleScroll}
+      onScroll={safeHandleScroll}
       // ✅ Add pull-to-refresh
       refreshControl={
         <RefreshControl

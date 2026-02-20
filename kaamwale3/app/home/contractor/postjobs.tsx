@@ -65,6 +65,15 @@ export default function PostJobScreen() {
   // SERVER_URL is loaded from central config
   const router = useRouter();   // ⭐ ADDED
 
+  const toSafeBalance = (payload: any): number => {
+    const raw =
+      typeof payload === "number"
+        ? payload
+        : payload?.balance ?? payload?.wallet?.balance ?? 0;
+    const num = Number(raw);
+    return Number.isFinite(num) ? num : 0;
+  };
+
   // ✅ Consolidated user & token loading - single source of truth (no duplicated logic)
   useFocusEffect(
     React.useCallback(() => {
@@ -133,7 +142,7 @@ export default function PostJobScreen() {
       const raw = await res.text();
       let data: any = undefined;
       try { data = raw ? JSON.parse(raw) : undefined; } catch { console.warn('fetchWallet: non-JSON response', raw); }
-      if (res.ok && data && data.success) setWalletBalance(data.wallet.balance);
+      if (res.ok && data && data.success) setWalletBalance(toSafeBalance(data));
     } catch (err) {
       console.error("Failed to fetch wallet", err);
     }
@@ -231,9 +240,7 @@ export default function PostJobScreen() {
     // ✅ FIX: Socket now sends full object, extract balance property
     socket.on("walletUpdated", (data: any) => {
       console.log("💰 Wallet updated via socket:", data);
-      // Handle both old (number) and new (object) socket emit formats
-      const balance = typeof data === 'number' ? data : (data?.balance || 0);
-      setWalletBalance(balance);
+      setWalletBalance(toSafeBalance(data));
     });
 
     socket.on("newJob", (job) => {
@@ -385,7 +392,7 @@ export default function PostJobScreen() {
         console.warn("Failed to save lastJobId", e);
       }
       
-      setWalletBalance(data.wallet.balance);
+      setWalletBalance(toSafeBalance(data));
 
       // ✅ Clear all input fields after successful job posting
       setTitle("");
@@ -416,7 +423,7 @@ export default function PostJobScreen() {
       <View style={styles.container}>
         <Text style={styles.header}>Post a New Job</Text>
 
-        <Text style={styles.walletText}>Wallet Balance: ₹{walletBalance}</Text>
+        <Text style={styles.walletText}>Wallet Balance: ₹{Number(walletBalance) || 0}</Text>
 
         {/* ✅ Show Posting Fee Transparently */}
         <View style={styles.feeDisplay}>

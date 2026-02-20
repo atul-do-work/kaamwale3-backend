@@ -2940,9 +2940,13 @@ app.get("/jobs/my-accepted", authenticateToken, async (req, res) => {
 });
 
 // ✅ GET worker details by phone - return full worker info with ID and profile photo
-app.get("/worker/:phone", authenticateToken, async (req, res) => {
+app.get("/worker/:phone", authenticateToken, async (req, res, next) => {
   try {
     const workerPhone = req.params.phone;
+    // Let the dedicated /worker/profile route handle this exact path.
+    if (workerPhone === "profile") {
+      return next();
+    }
     console.log(`📋 Fetching worker details for phone: ${workerPhone}`);
     
     const worker = await WorkerModel.findOne({ phone: workerPhone });
