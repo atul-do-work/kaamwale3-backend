@@ -1,16 +1,16 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import {
   View,
   Text,
-  ScrollView,
+  FlatList,
   TouchableOpacity,
   StyleSheet,
   ActivityIndicator,
 } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { MaterialIcons, Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import { useRouter } from "expo-router";
-import { useAuth } from "../context/AuthContext";
 import api from "../utils/api";
 
 interface Transaction {
@@ -22,12 +22,15 @@ interface Transaction {
   status: "completed" | "pending" | "failed";
 }
 
+type FilterType = "all" | "credit" | "debit" | "refund";
+
 export default function PaymentHistoryScreen(): React.ReactElement {
   const router = useRouter();
-  const { accessToken } = useAuth();
-  const [filter, setFilter] = useState<"all" | "credit" | "debit" | "refund">("all");
+  const insets = useSafeAreaInsets();
+  const [filter, setFilter] = useState<FilterType>("all");
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
 
   useEffect(() => {
     fetchTransactions();
@@ -35,13 +38,17 @@ export default function PaymentHistoryScreen(): React.ReactElement {
 
   const fetchTransactions = async () => {
     try {
+      setError("");
       const res = await api.get(`/wallet/transactions`);
       const data = res.data;
       if (data.success && data.transactions) {
         setTransactions(data.transactions);
+      } else {
+        setError("Failed to load transactions");
       }
     } catch (err) {
       console.error("Failed to fetch transactions:", err);
+      setError("Unable to fetch transactions. Please try again.");
     } finally {
       setLoading(false);
     }
@@ -53,14 +60,17 @@ export default function PaymentHistoryScreen(): React.ReactElement {
     refund: { icon: "undo", color: "#4ECDC4", label: "Refunded" },
   };
 
-  const filteredTransactions = transactions
-    .filter((t) => (filter === "all" ? true : t.type === filter))
-    .reverse(); // ✅ Show recent transactions at top
+  // ✅ Fix: Memoize filtered & reversed transactions (avoid mutating state)
+  const filteredTransactions = useMemo(() => {
+    return [...transactions]
+      .filter((t) => (filter === "all" ? true : t.type === filter))
+      .reverse(); // Show recent transactions at top
+  }, [transactions, filter]);
 
   return (
     <View style={styles.container}>
       {/* Header */}
-      <LinearGradient colors={["#6C63FF", "#A78BFA"]} style={styles.header}>
+      <LinearGradient colors={["#6C63FF", "#A78BFA"]} style={[styles.header, { paddingTop: insets.top + 10 }]}>
         <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}>
           <Ionicons name="arrow-back" size={24} color="#fff" />
         </TouchableOpacity>
@@ -70,14 +80,14 @@ export default function PaymentHistoryScreen(): React.ReactElement {
 
       {/* Filter Tabs */}
       <View style={styles.filterContainer}>
-        {["all", "credit", "debit", "refund"].map((f) => (
+        {(["all", "credit", "debit", "refund"] as FilterType[]).map((f) => (
           <TouchableOpacity
             key={f}
             style={[
               styles.filterTab,
               filter === f && styles.filterTabActive,
             ]}
-            onPress={() => setFilter(f as any)}
+            onPress={() => setFilter(f)}
           >
             <Text
               style={[
@@ -91,61 +101,73 @@ export default function PaymentHistoryScreen(): React.ReactElement {
         ))}
       </View>
 
-      {/* Transactions List */}
-      <ScrollView style={styles.content}>
-        {loading ? (
-          <View style={styles.loadingContainer}>
-            <ActivityIndicator size="large" color="#6C63FF" />
-          </View>
-        ) : filteredTransactions.length === 0 ? (
-          <View style={styles.emptyContainer}>
-            <MaterialIcons name="receipt" size={48} color="#CCC" />
-            <Text style={styles.emptyText}>No transactions yet</Text>
-          </View>
-        ) : (
-          filteredTransactions.map((transaction) => {
-            const config = typeConfig[transaction.type];
-            const isPositive = transaction.type === "credit" || transaction.type === "refund";
+      {/* ✅ Fix: Replace ScrollView with FlatList for performance */}
+      <FlatList
+        style={styles.content}
+        data={filteredTransactions}
+        keyExtractor={(item) => item.id}
+        renderItem={({ item: transaction }) => {
+          const config = typeConfig[transaction.type];
+          const isPositive = transaction.type === "credit" || transaction.type === "refund";
 
-            return (
-              <View key={transaction.id} style={styles.transactionCard}>
-                <View style={[styles.iconBg, { backgroundColor: config.color + "20" }]}>
-                  <MaterialIcons name={config.icon as any} size={20} color={config.color} />
-                </View>
-
-                <View style={styles.transactionInfo}>
-                  <Text style={styles.description}>{transaction.description}</Text>
-                  <Text style={styles.date}>{transaction.date}</Text>
-                </View>
-
-                <View style={styles.amountContainer}>
-                  <Text
-                    style={[
-                      styles.amount,
-                      { color: isPositive ? "#2ECC71" : "#FF6B6B" },
-                    ]}
-                  >
-                    {isPositive ? "+" : "-"}₹{Math.abs(transaction.amount).toFixed(2)}
-                  </Text>
-                  <View
-                    style={[
-                      styles.statusDot,
-                      {
-                        backgroundColor:
-                          transaction.status === "completed"
-                            ? "#2ECC71"
-                            : transaction.status === "pending"
-                            ? "#F39C12"
-                            : "#FF6B6B",
-                      },
-                    ]}
-                  />
-                </View>
+          return (
+            <View style={styles.transactionCard}>
+              <View style={[styles.iconBg, { backgroundColor: config.color + "20" }]}>
+                <MaterialIcons name={config.icon as any} size={20} color={config.color} />
               </View>
-            );
-          })
-        )}
-      </ScrollView>
+
+              <View style={styles.transactionInfo}>
+                <Text style={styles.description}>{transaction.description}</Text>
+                {/* ✅ Fix: Format date properly */}
+                <Text style={styles.date}>
+                  {new Date(transaction.date).toLocaleDateString()}
+                </Text>
+              </View>
+
+              <View style={styles.amountContainer}>
+                <Text
+                  style={[
+                    styles.amount,
+                    { color: isPositive ? "#2ECC71" : "#FF6B6B" },
+                  ]}
+                >
+                  {isPositive ? "+" : "-"}₹{Math.abs(transaction.amount).toFixed(2)}
+                </Text>
+                <View
+                  style={[
+                    styles.statusDot,
+                    {
+                      backgroundColor:
+                        transaction.status === "completed"
+                          ? "#2ECC71"
+                          : transaction.status === "pending"
+                          ? "#F39C12"
+                          : "#FF6B6B",
+                    },
+                  ]}
+                />
+              </View>
+            </View>
+          );
+        }}
+        ListEmptyComponent={
+          loading ? (
+            <View style={styles.loadingContainer}>
+              <ActivityIndicator size="large" color="#6C63FF" />
+            </View>
+          ) : error ? (
+            <View style={styles.emptyContainer}>
+              <MaterialIcons name="error-outline" size={48} color="#FF6B6B" />
+              <Text style={styles.emptyText}>{error}</Text>
+            </View>
+          ) : (
+            <View style={styles.emptyContainer}>
+              <MaterialIcons name="receipt" size={48} color="#CCC" />
+              <Text style={styles.emptyText}>No transactions yet</Text>
+            </View>
+          )
+        }
+      />
     </View>
   );
 }
@@ -160,7 +182,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "space-between",
     paddingHorizontal: 16,
-    paddingTop: 40,
+    // ✅ paddingTop is now dynamic (set in component with insets.top)
     paddingBottom: 20,
   },
   backBtn: {

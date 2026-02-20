@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useMemo } from "react";
 import {
   View,
   Text,
@@ -6,11 +6,18 @@ import {
   TextInput,
   TouchableOpacity,
   StyleSheet,
-  Image,
   Linking,
-  Alert,
+  LayoutAnimation,
+  Platform,
+  UIManager,
 } from "react-native";
-import { MaterialIcons, FontAwesome5 } from "@expo/vector-icons";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { MaterialIcons } from "@expo/vector-icons";
+
+// ✅ Enable layout animations for Android
+if (Platform.OS === "android" && UIManager.setLayoutAnimationEnabledExperimental) {
+  UIManager.setLayoutAnimationEnabledExperimental(true);
+}
 import { LinearGradient } from "expo-linear-gradient";
 import { useRouter } from "expo-router";
 
@@ -26,8 +33,8 @@ const faqData: FAQItem[] = [
   {
     id: "1",
     category: "General",
-    question: "What is Kaamwale?",
-    answer: "Kaamwale is a platform connecting contractors with workers for short-term job postings and task completion.",
+    question: "What is IndianWorker?",
+    answer: "IndianWorker is a platform connecting contractors with workers for short-term job postings and task completion.",
   },
   {
     id: "2",
@@ -53,7 +60,7 @@ const faqData: FAQItem[] = [
     id: "5",
     category: "Contractors",
     question: "What is the posting fee?",
-    answer: "Standard posts are free. Premium features like featured posting cost ₹50-100 depending on the tier.",
+    answer: "Standard posts are free. Premium features like featured posting cost ₹25-40 depending on the tier.",
   },
   {
     id: "6",
@@ -149,30 +156,59 @@ const faqData: FAQItem[] = [
 
 export default function HelpCentre() {
   const router = useRouter();
+  const insets = useSafeAreaInsets();
   const [searchText, setSearchText] = useState("");
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [selectedCategory, setSelectedCategory] = useState("All");
 
-  const categories = ["All", ...new Set(faqData.map((item) => item.category))];
+  // ✅ Fix: Stable category order with sort
+  const categories = [
+    "All",
+    ...Array.from(new Set(faqData.map((item) => item.category))).sort(),
+  ];
 
-  const filteredFAQ = faqData.filter((item) => {
-    const matchesSearch =
-      item.question.toLowerCase().includes(searchText.toLowerCase()) ||
-      item.answer.toLowerCase().includes(searchText.toLowerCase());
-    const matchesCategory = selectedCategory === "All" || item.category === selectedCategory;
-    return matchesSearch && matchesCategory;
-  });
+  // ✅ Optimize: Memoize filtered results to avoid re-filtering on every render
+  const filteredFAQ = useMemo(() => {
+    return faqData.filter((item) => {
+      const matchesSearch =
+        item.question.toLowerCase().includes(searchText.toLowerCase()) ||
+        item.answer.toLowerCase().includes(searchText.toLowerCase());
+      const matchesCategory = selectedCategory === "All" || item.category === selectedCategory;
+      return matchesSearch && matchesCategory;
+    });
+  }, [searchText, selectedCategory]);
 
   const handleContactSupport = () => {
     router.push("/SupportTickets" as any);
   };
 
-  const handleCallSupport = () => {
-    Linking.openURL("tel:+919876543210");
+  // ✅ Fix: Add error handling for Linking.openURL
+  const handleCallSupport = async () => {
+    const url = "tel:+919876543210";
+    try {
+      const supported = await Linking.canOpenURL(url);
+      if (supported) {
+        await Linking.openURL(url);
+      } else {
+        console.warn("Phone dialer not available");
+      }
+    } catch (err) {
+      console.error("Error opening phone dialer:", err);
+    }
   };
 
-  const handleEmailSupport = () => {
-    Linking.openURL("mailto:support@kaamwale.com");
+  const handleEmailSupport = async () => {
+    const url = "mailto:support@kaamwale.com";
+    try {
+      const supported = await Linking.canOpenURL(url);
+      if (supported) {
+        await Linking.openURL(url);
+      } else {
+        console.warn("Email client not available");
+      }
+    } catch (err) {
+      console.error("Error opening email client:", err);
+    }
   };
 
   return (
@@ -182,7 +218,7 @@ export default function HelpCentre() {
         colors={["#1a2f4d", "#2d5a8c"]}
         start={{ x: 0, y: 0 }}
         end={{ x: 1, y: 1 }}
-        style={styles.header}
+        style={[styles.header, { paddingTop: insets.top + 10 }]}
       >
         <TouchableOpacity
           style={styles.backButton}
@@ -268,9 +304,13 @@ export default function HelpCentre() {
             <View key={item.id} style={styles.faqItem}>
               <TouchableOpacity
                 style={styles.faqQuestion}
-                onPress={() =>
-                  setExpandedId(expandedId === item.id ? null : item.id)
-                }
+                onPress={() => {
+                  // ✅ Add: Layout animation for smooth expansion
+                  LayoutAnimation.configureNext(
+                    LayoutAnimation.Presets.easeInEaseOut
+                  );
+                  setExpandedId(expandedId === item.id ? null : item.id);
+                }}
               >
                 <View style={styles.questionContent}>
                   <Text style={styles.categoryLabel}>{item.category}</Text>
@@ -359,7 +399,7 @@ const styles = StyleSheet.create({
     backgroundColor: "#F8F9FA",
   },
   header: {
-    paddingTop: 40,
+    // ✅ paddingTop is now dynamic (set in component with insets.top)
     paddingBottom: 30,
     paddingHorizontal: 20,
     flexDirection: "row",
