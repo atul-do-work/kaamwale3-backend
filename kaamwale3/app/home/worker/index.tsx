@@ -236,6 +236,13 @@ function WorkerHome() {
     currentJobRef.current = currentJob;
   }, [currentJob]);
 
+  // Always stop alert loop when modal/job is cleared, regardless of close path.
+  useEffect(() => {
+    if (!currentJob) {
+      cleanupJobAlert().catch(() => {});
+    }
+  }, [currentJob]);
+
   // ✅ Error catching wrapper
   useEffect(() => {
     console.log("✅ WorkerHome component mounted");
@@ -568,7 +575,7 @@ function WorkerHome() {
         console.log("👆 User tapped notification:", response);
         const data: any = response.notification.request.content.data || {};
 
-        // If notification contains jobId, fetch job details and open modal
+        // If notification contains jobId, fetch job details and open modal ONLY if still active.
         if (data.jobId) {
           console.log("📱 Notification contains jobId:", data.jobId);
           try {
@@ -581,49 +588,29 @@ function WorkerHome() {
               headers: { Authorization: `Bearer ${token}` },
             });
 
-            let job = null;
             if (!res.ok) {
-              console.warn('Failed to fetch job details for notification tap, will fallback to payload if available');
-            } else {
-              job = await res.json();
+              // Job no longer available (cancelled/expired/accepted by someone else) -> do not open modal.
+              console.warn('Job not available anymore for notification tap:', data.jobId, res.status);
+              return;
             }
+
+            const payload = await res.json();
+            const job = payload?.job || payload;
             console.log('📥 Job details fetched from server via notification tap', job);
 
             // Normalize job object shape like socket handler does
-            let normalizedJob = null;
-
-            if (job) {
-              normalizedJob = {
-                ...job,
-                attendanceStatus: job.attendanceStatus ?? null,
-                paymentStatus: job.paymentStatus ?? null,
-                timestamp: new Date().toISOString(),
-              };
-            } else if (data) {
-              // Fallback: construct a minimal job object from notification payload
-              const meta: any = data.metadata || {};
-              normalizedJob = {
-                _id: data.jobId || (meta.jobId || `notif-${Date.now()}`),
-                title: meta.jobTitle || data.title || 'New Job',
-                description: meta.workerType || data.workerType || data.description || '',
-                amount: meta.amount || data.amount || data.body || '0',
-                contractorName: data.title || 'Contractor',
-                location: (meta.lat && meta.lon) ? `${meta.lat}, ${meta.lon}` : data.location || '',
-                lat: meta.lat || data.lat || 0,
-                lon: meta.lon || data.lon || 0,
-                attendanceStatus: null,
-                paymentStatus: null,
-                timestamp: new Date().toISOString(),
-              };
-            }
+            const normalizedJob = {
+              ...job,
+              attendanceStatus: job.attendanceStatus ?? null,
+              paymentStatus: job.paymentStatus ?? null,
+              timestamp: new Date().toISOString(),
+            };
 
             if (normalizedJob) {
               // Set as current job to open modal/UI
               setCurrentJob(normalizedJob);
               // Trigger alert (sound/vibrate) for tapped job as well
               await triggerJobAlert();
-            } else {
-              console.warn('No job details available from server or payload to open modal');
             }
           } catch (fetchErr) {
             console.error('Error fetching job on notification tap:', fetchErr);

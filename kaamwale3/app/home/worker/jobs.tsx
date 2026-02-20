@@ -52,6 +52,7 @@ export default function Jobs(): React.ReactElement {
   const [selectedJobForMap, setSelectedJobForMap] = useState<Job | null>(null);
   const [paymentModalVisible, setPaymentModalVisible] = useState<boolean>(false);
   const [paymentJobData, setPaymentJobData] = useState<{ title: string; amount: string; contractor: string } | null>(null);
+  const [paymentSupportModalVisible, setPaymentSupportModalVisible] = useState<boolean>(false);
   const previousPaymentState = useRef<Record<string, string | null>>({});
   const previousUserPhoneRef = useRef<string | null>(null); // ✅ Track previous user to detect changes
   const paymentNotifiedJobs = useRef<Set<string>>(new Set()); // ✅ Track jobs already notified
@@ -206,7 +207,7 @@ export default function Jobs(): React.ReactElement {
       }
       
       console.log("🔄 [8] Found", gigsArray.length, "jobs");
-      const jobs: Job[] = gigsArray;
+      const jobs: Job[] = gigsArray.filter((j: Job) => j.status !== "cancelled" && j.status !== "expired");
       
       // Log rating data for debugging
       console.log("🔄 [9] Iterating jobs for rating data...");
@@ -339,6 +340,11 @@ export default function Jobs(): React.ReactElement {
       // ✅ Optimized: Use findIndex to avoid double .find() calls
       setAcceptedJobs((prev) => {
         const index = prev.findIndex((j) => j._id === job._id);
+
+        // Remove cancelled/expired jobs from worker list immediately.
+        if (job.status === "cancelled" || job.status === "expired") {
+          return prev.filter((j) => j._id !== job._id);
+        }
         
         if (index !== -1) {
           // Job exists - merge with existing job, preserving all fields including rating
@@ -670,23 +676,70 @@ export default function Jobs(): React.ReactElement {
               </View>
             </View>
 
-            {/* Close Button */}
-            <TouchableOpacity
-              onPress={() => setPaymentModalVisible(false)}
-              style={{
-                width: "100%",
-                backgroundColor: "rgba(255, 255, 255, 0.25)",
-                paddingVertical: 12,
-                borderRadius: 10,
-                borderWidth: 1.5,
-                borderColor: "#FFF",
-              }}
-            >
-              <Text style={{ color: "#FFF", fontSize: 15, fontWeight: "700", textAlign: "center" }}>
-                Got It!
-              </Text>
-            </TouchableOpacity>
+            {/* Action Buttons */}
+            <View style={{ width: "100%", flexDirection: "row", gap: 10 }}>
+              <TouchableOpacity
+                onPress={() => setPaymentModalVisible(false)}
+                style={{
+                  flex: 1,
+                  backgroundColor: "rgba(255, 255, 255, 0.25)",
+                  paddingVertical: 12,
+                  borderRadius: 10,
+                  borderWidth: 1.5,
+                  borderColor: "#FFF",
+                }}
+              >
+                <Text style={{ color: "#FFF", fontSize: 14, fontWeight: "700", textAlign: "center" }}>
+                  Okay
+                </Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                onPress={() => {
+                  setPaymentModalVisible(false);
+                  setPaymentSupportModalVisible(true);
+                }}
+                style={{
+                  flex: 1,
+                  backgroundColor: "rgba(231, 76, 60, 0.9)",
+                  paddingVertical: 12,
+                  borderRadius: 10,
+                  borderWidth: 1.5,
+                  borderColor: "#FFF",
+                }}
+              >
+                <Text style={{ color: "#FFF", fontSize: 14, fontWeight: "700", textAlign: "center" }}>
+                  Didn't receive money
+                </Text>
+              </TouchableOpacity>
+            </View>
           </LinearGradient>
+        </View>
+      </Modal>
+
+      {/* Payment Support Modal */}
+      <Modal
+        visible={paymentSupportModalVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setPaymentSupportModalVisible(false)}
+      >
+        <View style={{ flex: 1, backgroundColor: "rgba(0, 0, 0, 0.5)", justifyContent: "center", alignItems: "center" }}>
+          <View style={{ backgroundColor: "#fff", width: "82%", borderRadius: 14, padding: 20, alignItems: "center" }}>
+            <MaterialIcons name="support-agent" size={40} color="#2ecc71" />
+            <Text style={{ fontSize: 18, fontWeight: "800", color: "#1f2937", marginTop: 10, marginBottom: 8 }}>
+              Support Request Sent
+            </Text>
+            <Text style={{ fontSize: 14, color: "#4b5563", textAlign: "center", marginBottom: 16 }}>
+              Support will reach you in few minutes.
+            </Text>
+            <TouchableOpacity
+              onPress={() => setPaymentSupportModalVisible(false)}
+              style={{ backgroundColor: "#2ecc71", paddingVertical: 10, paddingHorizontal: 24, borderRadius: 8 }}
+            >
+              <Text style={{ color: "#fff", fontWeight: "700" }}>OK</Text>
+            </TouchableOpacity>
+          </View>
         </View>
       </Modal>
 

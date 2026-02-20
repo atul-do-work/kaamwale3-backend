@@ -2901,11 +2901,15 @@ app.get("/jobs/my-accepted", authenticateToken, async (req, res) => {
     const skip = (page - 1) * pageSize;
 
     // ✅ Get total count for pagination info
-    const totalCount = await Job.countDocuments({ acceptedBy: workerPhone });
+    const myAcceptedFilter = {
+      acceptedBy: workerPhone,
+      status: { $nin: ['cancelled', 'expired'] } // Exclude cancelled/expired from worker cards and metrics
+    };
+    const totalCount = await Job.countDocuments(myAcceptedFilter);
 
     // ✅ Get paginated jobs - sorted by date descending (newest first)
     // ✅ IMPORTANT: Always return hoursWorked from recentGigs in Worker model
-    const jobs = await Job.find({ acceptedBy: workerPhone })
+    const jobs = await Job.find(myAcceptedFilter)
       .sort({ date: -1 }) // Newest first
       .skip(skip)
       .limit(pageSize)
@@ -2936,6 +2940,38 @@ app.get("/jobs/my-accepted", authenticateToken, async (req, res) => {
   } catch (err) {
     console.error("❌ Failed to load worker's accepted jobs:", err);
     res.status(500).json({ success: false, message: "Failed to load jobs", error: err.message });
+  }
+});
+
+// ✅ Get a single job by id for worker push-tap deep link.
+// Returns only active/visible jobs to prevent opening stale offers.
+app.get("/jobs/:id", authenticateToken, async (req, res) => {
+  try {
+    const jobId = req.params.id;
+    const workerPhone = req.user?.phone;
+
+    let job = await Job.findById(jobId).lean();
+    if (!job) {
+      job = await Job.findOne({ id: jobId }).lean();
+    }
+    if (!job) {
+      return res.status(404).json({ success: false, message: "Job not found" });
+    }
+
+    const notVisibleStatuses = new Set(["cancelled", "expired"]);
+    if (notVisibleStatuses.has(job.status || "")) {
+      return res.status(404).json({ success: false, message: "Job not available" });
+    }
+
+    // Pending offers are visible; accepted job is visible only to the accepted worker.
+    if (job.status === "accepted" && workerPhone && job.acceptedBy && job.acceptedBy !== workerPhone) {
+      return res.status(404).json({ success: false, message: "Job not available" });
+    }
+
+    return res.json({ success: true, job });
+  } catch (err) {
+    console.error("Failed to fetch job by id", err);
+    return res.status(500).json({ success: false, message: "Failed to fetch job" });
   }
 });
 
