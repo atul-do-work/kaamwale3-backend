@@ -185,24 +185,12 @@ export default function LoginScreen() {
         console.warn('⚠️ Could not get FCM token:', (err as Error).message);
       }
 
-      // ✅ IMPROVED: Request location with retry logic
+      // ✅ IMPROVED: Location is now optional and non-blocking during login
+      // Will be captured after login succeeds or when user goes online
       let latitude = null;
       let longitude = null;
-
-      try {
-        console.log('📍 Requesting location during login...');
-        const locationResult = await getLocationWithRetries(3);
-        latitude = locationResult.latitude;
-        longitude = locationResult.longitude;
-        
-        if (latitude !== null && longitude !== null) {
-          console.log(`✅ Location obtained during login:`, { latitude, longitude });
-        } else {
-          console.warn('⚠️ Location not available during login - coordinates will default to [0,0]');
-        }
-      } catch (locError) {
-        console.warn('⚠️ Could not get location:', (locError as Error).message);
-      }
+      
+      console.log('📍 Location will be captured post-login or when going online');
 
       const response = await fetch(`${API_BASE}/login`, {
         method: "POST",

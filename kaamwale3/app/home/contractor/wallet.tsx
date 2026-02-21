@@ -1101,7 +1101,7 @@ export default function ContractorWalletAttendance() {
         // ✅ Fallback wallet sync in case socket missed update
         fetchWallet();
       }}>
-        <SafeAreaView edges={['top', 'left', 'right']} style={{ flex: 1, backgroundColor: "#fff" }}>
+        <SafeAreaView edges={['top', 'left', 'right', 'bottom']} style={{ flex: 1, backgroundColor: "#fff" }}>
           <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingTop: 12, paddingHorizontal: 12, paddingBottom: 12, borderBottomWidth: 1, borderBottomColor: "#DDD" }}>
             <Text style={{ fontSize: 16, fontWeight: "600", color: "#333" }}>Wallet Deposit</Text>
             <TouchableOpacity onPress={() => {
@@ -1150,7 +1150,7 @@ export default function ContractorWalletAttendance() {
       {/* ✅ Bank Account Modal */}
       {/* ✅ Bank Account Modal - Only visible in Wallet tab */}
       <Modal visible={showAddBank && activeTab === "Wallet"} transparent animationType="slide">
-        <SafeAreaView edges={['top', 'left', 'right']} style={{ flex: 1, backgroundColor: "#fff" }}>
+        <SafeAreaView edges={['top', 'left', 'right', 'bottom']} style={{ flex: 1, backgroundColor: "#fff" }}>
           <ScrollView style={{ flex: 1 }}>
             <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingTop: 12, paddingHorizontal: 16, paddingBottom: 12, borderBottomWidth: 1, borderBottomColor: "#EEE" }}>
               <Text style={{ fontSize: 18, fontWeight: "700", color: "#333" }}>Add Bank Account</Text>

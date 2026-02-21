@@ -65,6 +65,14 @@ export default function PostJobScreen() {
   // SERVER_URL is loaded from central config
   const router = useRouter();   // ⭐ ADDED
 
+  // ✅ Helper: Format time as HH:MM AM/PM for consistent display across Android devices
+  const formatTimeDisplay = (date: Date): string => {
+    let hours = date.getHours() % 12 || 12;
+    const mins = date.getMinutes().toString().padStart(2, '0');
+    const ampm = date.getHours() >= 12 ? 'PM' : 'AM';
+    return `${hours}:${mins} ${ampm}`;
+  };
+
   const toSafeBalance = (payload: any): number => {
     const raw =
       typeof payload === "number"
@@ -259,6 +267,32 @@ export default function PostJobScreen() {
     // ✅ Guard: Prevent double-click during posting
     if (isPostingJob) return;
     
+    // ✅ CHECK: Contractor must have location enabled
+    try {
+      const userStr = await AsyncStorage.getItem('user');
+      if (userStr) {
+        const user = JSON.parse(userStr);
+        const hasDefaultLocation = (user.latitude === 0 && user.longitude === 0) || 
+                                   !(user.latitude && user.longitude);
+        
+        if (hasDefaultLocation) {
+          return Alert.alert(
+            "Location Required",
+            "You must enable location to post a job. This helps us match you with workers in your area.",
+            [
+              {
+                text: "Enable Location",
+                onPress: () => router.push("/(tabs)/home/contractor") // Navigate back to contractor home to enable location
+              },
+              { text: "Cancel", style: "cancel" }
+            ]
+          );
+        }
+      }
+    } catch (err) {
+      console.error('Error checking contractor location:', err);
+    }
+    
     if (!title) return Alert.alert("Missing", "Please select a job title");
     if (!mainSkill) return Alert.alert("Missing", "Please select main skill");
     // ✅ FIXED: Worker type required ONLY for Mason, not for other skills
@@ -418,7 +452,7 @@ export default function PostJobScreen() {
   };
 
   return (
-    <SafeAreaView edges={['top', 'left', 'right']} style={{ flex: 1, backgroundColor: '#f3f3f3' }}>
+    <SafeAreaView edges={['top', 'left', 'right', 'bottom']} style={{ flex: 1, backgroundColor: '#f3f3f3' }}>
       <ScrollView contentContainerStyle={styles.scroll}>
       <View style={styles.container}>
         <Text style={styles.header}>Post a New Job</Text>
@@ -551,7 +585,7 @@ export default function PostJobScreen() {
           <TouchableOpacity style={styles.inputCard} onPress={() => setShowStartTimePicker(true)}>
             <Ionicons name="time-outline" size={22} color="#bcbec7ff" />
             <Text style={[styles.input, { color: "#fff" }]}>
-              {startTime.getHours().toString().padStart(2, '0')}:{startTime.getMinutes().toString().padStart(2, '0')}
+              {formatTimeDisplay(startTime)}
             </Text>
           </TouchableOpacity>
           {showStartTimePicker && (
@@ -575,7 +609,7 @@ export default function PostJobScreen() {
           <TouchableOpacity style={styles.inputCard} onPress={() => setShowEndTimePicker(true)}>
             <Ionicons name="time-outline" size={22} color="#bcbec7ff" />
             <Text style={[styles.input, { color: "#fff" }]}>
-              {endTime.getHours().toString().padStart(2, '0')}:{endTime.getMinutes().toString().padStart(2, '0')}
+              {formatTimeDisplay(endTime)}
             </Text>
           </TouchableOpacity>
           {showEndTimePicker && (

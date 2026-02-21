@@ -11,6 +11,8 @@ const Wallet = require('../models/Wallet');
 const BankAccount = require('../models/BankAccount');
 const VerificationDocument = require('../models/VerificationDocument');
 const ActivityLog = require('../models/ActivityLog');
+const ContractorStats = require('../models/ContractorStats');
+const CancellationLog = require('../models/CancellationLog');
 const CityLeaderboard = require('../models/CityLeaderboard');
 const SupportTicket = require('../models/SupportTicket');
 const District = require('../models/City'); // File is City.js, exports as "District" model for GeoJSON import
@@ -21,6 +23,30 @@ const checkAdmin = (req, res, next) => {
         return res.status(403).json({ success: false, message: 'Admin access required' });
     }
     next();
+};
+
+const isValidPhone = (phone) => /^\d{10}$/.test(String(phone || '').trim());
+
+const buildWorkerGigSummary = (jobs, phone) => {
+    const workerJobs = jobs.filter((j) => {
+        const inBulk = Array.isArray(j.acceptedWorkers) && j.acceptedWorkers.some((w) => w.phone === phone);
+        return j.acceptedBy === phone || inBulk;
+    });
+
+    const completed = workerJobs.filter((j) => j.paymentStatus === 'Paid').length;
+    const cancelled = workerJobs.filter((j) => j.status === 'cancelled' || j.isCancelled === true).length;
+    const pending = workerJobs.filter((j) => j.paymentStatus !== 'Paid' && j.status !== 'cancelled').length;
+    const earnings = workerJobs
+        .filter((j) => j.paymentStatus === 'Paid')
+        .reduce((sum, j) => sum + (Number(j.amount) || 0), 0);
+
+    return {
+        totalJobs: workerJobs.length,
+        completedJobs: completed,
+        cancelledJobs: cancelled,
+        pendingJobs: pending,
+        totalEarnings: earnings
+    };
 };
 
 // ============================
@@ -865,6 +891,140 @@ router.post('/support-tickets/:ticketId/resolve', authenticateToken, checkAdmin,
     } catch (error) {
         console.error('Resolve ticket error:', error);
         res.status(500).json({ success: false, message: error.message });
+    }
+});
+
+// ============================
+// SUPPORT TICKET - Update status/notes (admin)
+// ============================
+router.patch('/support-tickets/:ticketId/status', authenticateToken, checkAdmin, async (req, res) => {
+    try {
+        const { status, resolution, resolutionNotes, priority } = req.body || {};
+        const allowedStatus = ['open', 'under_review', 'waiting_user_response', 'resolved', 'closed'];
+
+        if (!status || !allowedStatus.includes(status)) {
+            return res.status(400).json({ success: false, message: 'Valid status is required' });
+        }
+
+        const update = {
+            status,
+            updatedAt: new Date(),
+            assignedToAdmin: req.user.phone || req.user._id
+        };
+
+        if (priority) update.priority = priority;
+        if (resolution !== undefined) update.resolution = resolution;
+        if (resolutionNotes !== undefined) update.resolutionNotes = resolutionNotes;
+        if (status === 'resolved' || status === 'closed') update.resolvedAt = new Date();
+
+        const ticket = await SupportTicket.findOneAndUpdate(
+            { ticketId: req.params.ticketId },
+            update,
+            { new: true }
+        );
+
+        if (!ticket) {
+            return res.status(404).json({ success: false, message: 'Ticket not found' });
+        }
+
+        await ActivityLog.create({
+            userId: req.user.id || req.user._id || 'admin',
+            phone: ticket.reporterPhone,
+            action: 'ticket_status_updated',
+            description: `Ticket ${ticket.ticketId} moved to ${status}`,
+            metadata: { status, priority, adminPhone: req.user.phone },
+            timestamp: new Date()
+        });
+
+        return res.json({ success: true, message: 'Ticket status updated', ticket });
+    } catch (error) {
+        console.error('Support ticket status update error:', error);
+        return res.status(500).json({ success: false, message: error.message });
+    }
+});
+
+// ============================
+// LOOKUP BY PHONE - Worker/Contractor/Jobs/Wallet/Verification/Tickets
+// ============================
+router.get('/lookup/:phone', authenticateToken, checkAdmin, async (req, res) => {
+    try {
+        const phone = String(req.params.phone || '').trim();
+        if (!isValidPhone(phone)) {
+            return res.status(400).json({ success: false, message: 'Valid 10-digit phone is required' });
+        }
+
+        const [
+            user,
+            worker,
+            wallet,
+            bankAccount,
+            verification,
+            contractorStats,
+            jobsAsContractor,
+            jobsAsWorkerRaw,
+            supportTickets,
+            activityLogs,
+            cancellationLogs
+        ] = await Promise.all([
+            User.findOne({ phone }).select('-password -refreshTokens -otpCode -otpExpiry').lean(),
+            Worker.findOne({ phone }).lean(),
+            Wallet.findOne({ phone }).lean(),
+            BankAccount.findOne({ phone }).lean(),
+            VerificationDocument.findOne({ phone }).lean(),
+            ContractorStats.find({ phone }).sort({ date: -1 }).limit(60).lean(),
+            Job.find({ contractorPhone: phone }).sort({ createdAt: -1 }).limit(300).lean(),
+            Job.find({
+                $or: [
+                    { acceptedBy: phone },
+                    { 'acceptedWorkers.phone': phone }
+                ]
+            }).sort({ createdAt: -1 }).limit(300).lean(),
+            SupportTicket.find({ $or: [{ reporterPhone: phone }, { reportedPhone: phone }] }).sort({ createdAt: -1 }).limit(100).lean(),
+            ActivityLog.find({ phone }).sort({ timestamp: -1 }).limit(100).lean(),
+            CancellationLog.find({ $or: [{ contractorPhone: phone }, { workerPhone: phone }] }).sort({ cancelledAt: -1 }).limit(100).lean()
+        ]);
+
+        const dedupedWorkerJobsMap = new Map();
+        for (const j of jobsAsWorkerRaw) dedupedWorkerJobsMap.set(String(j._id), j);
+        const jobsAsWorker = Array.from(dedupedWorkerJobsMap.values());
+
+        const workerGigSummary = buildWorkerGigSummary(jobsAsWorker, phone);
+
+        const contractorSummary = {
+            totalJobsPosted: jobsAsContractor.length,
+            totalPaidJobs: jobsAsContractor.filter((j) => j.paymentStatus === 'Paid').length,
+            totalCancelledJobs: jobsAsContractor.filter((j) => j.status === 'cancelled' || j.isCancelled === true).length,
+            totalSpending: jobsAsContractor
+                .filter((j) => j.paymentStatus === 'Paid')
+                .reduce((sum, j) => sum + (Number(j.amount) || 0), 0)
+        };
+
+        return res.json({
+            success: true,
+            phone,
+            data: {
+                user,
+                worker,
+                wallet,
+                bankAccount,
+                verification,
+                contractorStats,
+                supportTickets,
+                activityLogs,
+                cancellationLogs,
+                jobs: {
+                    asContractor: jobsAsContractor,
+                    asWorker: jobsAsWorker
+                },
+                summaries: {
+                    worker: workerGigSummary,
+                    contractor: contractorSummary
+                }
+            }
+        });
+    } catch (error) {
+        console.error('Admin lookup error:', error);
+        return res.status(500).json({ success: false, message: error.message });
     }
 });
 

@@ -1,5 +1,5 @@
-import React from 'react';
-import { View, Text, Image, TouchableOpacity, ScrollView, FlatList, Alert } from 'react-native';
+import React, { useEffect, useState } from 'react';
+import { View, Text, Image, TouchableOpacity, ScrollView, FlatList, Alert, Modal } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialIcons, FontAwesome } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -7,8 +7,10 @@ import { BlurView } from 'expo-blur';
 import { useRouter } from 'expo-router';
 import { useFocusEffect } from '@react-navigation/native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as Location from 'expo-location';
 import { socket } from '../../../utils/socket';
 import { SERVER_URL } from '../../../utils/config';
+import { API_BASE } from '../../../utils/config';
 import PremiumPlansModal from '../../../components/PremiumPlansModal';
 import { useLanguage } from '../../../context/LanguageContext';
 import { useAuth } from '../../../context/AuthContext';
@@ -34,6 +36,8 @@ export default function ContractorHome() {
   const [totalSpending, setTotalSpending] = React.useState(0);
   const [workersEngaged, setWorkersEngaged] = React.useState(0);
   const [notificationCount, setNotificationCount] = React.useState<number>(0); // ✅ Add notification count state
+  const [showLocationModal, setShowLocationModal] = React.useState<boolean>(false); // ✅ Location modal state
+  const [requestingLocation, setRequestingLocation] = React.useState<boolean>(false); // ✅ Loading state for location request
   // ✅ Removed dead token state - use accessToken from context instead
 
   // ✅ Separate premium listener effect - runs on login, not on every tab focus
@@ -394,6 +398,98 @@ export default function ContractorHome() {
     }
   };
 
+  // ✅ REQUEST AND UPDATE LOCATION FOR CONTRACTOR
+  const requestAndUpdateLocation = async (): Promise<boolean> => {
+    try {
+      setRequestingLocation(true);
+      console.log('📍 Requesting location permission for contractor...');
+
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      
+      if (status !== 'granted') {
+        console.warn('⚠️ Location permission denied');
+        return false;
+      }
+
+      console.log('✅ Location permission granted, getting position...');
+      const location = await Location.getCurrentPositionAsync({
+        accuracy: Location.Accuracy.Balanced,
+      });
+
+      const latitude = location.coords.latitude;
+      const longitude = location.coords.longitude;
+
+      console.log(`📍 Location obtained: lat=${latitude}, lon=${longitude}`);
+
+      // Update location on backend
+      const response = await fetch(`${API_BASE}/user/update-location`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${accessToken}`,
+        },
+        body: JSON.stringify({ latitude, longitude }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok || !data.success) {
+        console.error('❌ Failed to update location:', data.message);
+        return false;
+      }
+
+      console.log('✅ Location updated on backend:', data.user);
+      
+      // Update local user data
+      const userStr = await AsyncStorage.getItem('user');
+      if (userStr) {
+        const user = JSON.parse(userStr);
+        user.latitude = data.user.latitude;
+        user.longitude = data.user.longitude;
+        user.city = data.user.city;
+        user.state = data.user.state;
+        await AsyncStorage.setItem('user', JSON.stringify(user));
+        console.log('✅ Contractor location data updated in local storage');
+      }
+
+      // Close modal after successful location update
+      setShowLocationModal(false);
+      return true;
+    } catch (err) {
+      console.error('❌ Error requesting location:', err);
+      return false;
+    } finally {
+      setRequestingLocation(false);
+    }
+  };
+
+  // ✅ CHECK FOR DEFAULT LOCATION AND SHOW MODAL POST-LOGIN
+  useEffect(() => {
+    (async () => {
+      if (!accessToken) return;
+
+      try {
+        const userStr = await AsyncStorage.getItem('user');
+        if (!userStr) return;
+
+        const user = JSON.parse(userStr);
+
+        // Check if location is default (0,0) or missing
+        const hasDefaultLocation = (user.latitude === 0 && user.longitude === 0) || 
+                                   !(user.latitude && user.longitude);
+
+        if (hasDefaultLocation) {
+          console.log("📍 Contractor has default location (0,0) - showing location permission modal");
+          setShowLocationModal(true);
+        } else {
+          console.log("✅ Contractor already has location set:", { lat: user.latitude, lon: user.longitude });
+        }
+      } catch (err) {
+        console.error("Error checking contractor location:", err);
+      }
+    })();
+  }, [accessToken]);
+
   const handlePlanSelected = async (planId: string) => {
     try {
       if (!accessToken) {
@@ -486,7 +582,7 @@ export default function ContractorHome() {
   };
 
   return (
-    <SafeAreaView edges={['top', 'left', 'right']} style={styles.container}>
+    <SafeAreaView edges={['top', 'left', 'right', 'bottom']} style={styles.container}>
       {/* Header with Gradient */}
       <LinearGradient 
         colors={['#1a2f4d', '#2d5a8c']} 
@@ -667,6 +763,87 @@ export default function ContractorHome() {
         onClose={() => setPremiumModalVisible(false)}
         onPlanSelected={handlePlanSelected}
       />
+
+      {/* ✅ POST-LOGIN LOCATION PERMISSION MODAL FOR CONTRACTOR */}
+      <Modal visible={showLocationModal} transparent animationType="fade">
+        <TouchableOpacity 
+          style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.6)' }}
+          activeOpacity={1}
+        >
+          <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', padding: 20 }}>
+            <TouchableOpacity 
+              style={{ 
+                backgroundColor: '#fff', 
+                borderRadius: 16, 
+                padding: 24, 
+                width: '100%',
+                maxWidth: 350,
+                shadowColor: '#000',
+                shadowOffset: { width: 0, height: 2 },
+                shadowOpacity: 0.25,
+                shadowRadius: 3.84,
+                elevation: 5,
+              }}
+              onPress={(e) => e.stopPropagation()}
+            >
+              {/* Icon */}
+              <View style={{ alignItems: 'center', marginBottom: 16 }}>
+                <MaterialIcons name="location-on" size={48} color="#3498db" />
+              </View>
+
+              {/* Title */}
+              <Text style={{ fontSize: 20, fontWeight: '700', color: '#1a2f4d', textAlign: 'center', marginBottom: 8 }}>
+                Enable Location
+              </Text>
+
+              {/* Subtitle */}
+              <Text style={{ fontSize: 14, color: '#7f8c8d', textAlign: 'center', marginBottom: 20 }}>
+                We need your location to match you with nearby workers and to provide location-based job recommendations.
+              </Text>
+
+              {/* Enable Button */}
+              <TouchableOpacity 
+                style={{ 
+                  backgroundColor: '#3498db', 
+                  borderRadius: 10, 
+                  paddingVertical: 14,
+                  alignItems: 'center',
+                  marginBottom: 10,
+                  opacity: requestingLocation ? 0.6 : 1,
+                }}
+                onPress={requestAndUpdateLocation}
+                disabled={requestingLocation}
+              >
+                <Text style={{ color: '#fff', fontSize: 15, fontWeight: '700' }}>
+                  {requestingLocation ? 'Getting Location...' : 'Enable Location'}
+                </Text>
+              </TouchableOpacity>
+
+              {/* Skip Button */}
+              <TouchableOpacity 
+                style={{ 
+                  borderWidth: 1.5,
+                  borderColor: '#bdc3c7',
+                  borderRadius: 10, 
+                  paddingVertical: 12,
+                  alignItems: 'center',
+                }}
+                onPress={() => setShowLocationModal(false)}
+                disabled={requestingLocation}
+              >
+                <Text style={{ color: '#7f8c8d', fontSize: 14, fontWeight: '700' }}>
+                  Skip for Now
+                </Text>
+              </TouchableOpacity>
+
+              {/* Info Text */}
+              <Text style={{ fontSize: 12, color: '#95a5a6', textAlign: 'center', marginTop: 16 }}>
+                You can enable location anytime in Settings
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </TouchableOpacity>
+      </Modal>
     </SafeAreaView>
   );
 }

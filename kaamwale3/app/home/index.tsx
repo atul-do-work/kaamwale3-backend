@@ -39,6 +39,9 @@ export default function HomeIndex() {
     } else if (user.role === 'contractor') {
       console.log('→ [HomeIndex] Setting redirect to /home/contractor');
       setRedirect('/home/contractor');
+    } else if (user.role === 'admin') {
+      console.log('→ [HomeIndex] Setting redirect to /dashboard (admin)');
+      setRedirect('/dashboard');
     } else {
       console.warn(`⚠️ [HomeIndex] Unknown role: ${user.role}`);
       setRedirect('/');
@@ -53,6 +56,11 @@ export default function HomeIndex() {
   // Redirect to contractor home
   if (redirect === '/home/contractor') {
     return <Redirect href="/home/contractor" />;
+  }
+
+  // ✅ Redirect to admin dashboard
+  if (redirect === '/dashboard') {
+    return <Redirect href="/dashboard" />;
   }
 
   // Redirect to login if no role

@@ -39,6 +39,7 @@ const userSchema = new mongoose.Schema({
   latitude: { type: Number, default: 0 },
   longitude: { type: Number, default: 0 },
   locationLastUpdated: { type: Date, default: null },
+  locationEnabled: { type: Boolean, default: false }, // ✅ Track if user has explicitly enabled location
   // Premium Plan (old format - keep as is)
   premiumPlan: {
     type: { type: String, default: 'free' },

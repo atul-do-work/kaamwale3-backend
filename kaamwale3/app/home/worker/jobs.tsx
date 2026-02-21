@@ -570,7 +570,7 @@ export default function Jobs(): React.ReactElement {
   };
 
   return (
-    <SafeAreaView edges={['top', 'left', 'right']} style={{ flex: 1 }}>
+    <SafeAreaView edges={['top', 'left', 'right', 'bottom']} style={{ flex: 1 }}>
       <FlatList
         data={acceptedJobs}
         keyExtractor={(item) => item._id}

@@ -1361,6 +1361,7 @@ app.post("/login", loginLimiter, async (req, res) => {
             coordinates: [parsedLon, parsedLat],
           };
           user.locationLastUpdated = new Date();
+          user.locationEnabled = true; // ✅ Mark location as enabled when coordinates provided during login
           
           try {
             await user.save();
@@ -3302,7 +3303,7 @@ app.post("/jobs/rate/:id", authenticateToken, async (req, res) => {
           const averageRating = totalStars / ratedJobs.length;
 
           // Update worker's performance metrics
-          const worker = await Worker.findOneAndUpdate(
+          const worker = await WorkerModel.findOneAndUpdate(
             { phone: workerPhone },
             {
               $set: {
@@ -4102,11 +4103,12 @@ app.post('/workers/verify-profile', authenticateToken, async (req, res) => {
 // ✅ UPDATE WORKER AVAILABILITY (ONLINE/OFFLINE)
 app.put('/workers/availability', authenticateToken, async (req, res) => {
   try {
-    const { isAvailable } = req.body;
+    const { isAvailable, latitude, longitude } = req.body;
     const phone = req.user.phone;
 
     console.log(`\n📱 Availability toggle request for phone: ${phone}`);
     console.log(`🔘 Setting isAvailable to: ${isAvailable}`);
+    console.log(`📍 Location: lat=${latitude}, lon=${longitude}`);
 
     // Validate input
     if (typeof isAvailable !== 'boolean') {
@@ -4114,14 +4116,83 @@ app.put('/workers/availability', authenticateToken, async (req, res) => {
       return res.status(400).json({ success: false, message: 'isAvailable must be a boolean' });
     }
 
+    // ✅ If worker is going ONLINE and has fresh location, update it
+    let updateObj = { 
+      isAvailable: isAvailable,
+      updatedAt: new Date()
+    };
+
+    if (isAvailable === true && latitude !== undefined && latitude !== null && longitude !== undefined && longitude !== null) {
+      const parsedLat = parseFloat(latitude);
+      const parsedLon = parseFloat(longitude);
+
+      if (!isNaN(parsedLat) && !isNaN(parsedLon)) {
+        console.log(`✅ Updating location when going online: lat=${parsedLat}, lon=${parsedLon}`);
+        
+        // Find district for this location
+        try {
+          const District = require('./models/City');
+          const point = {
+            type: 'Point',
+            coordinates: [parsedLon, parsedLat],
+          };
+
+          let district = await District.findOne({
+            geometry: {
+              $geoIntersects: {
+                $geometry: point,
+              },
+            },
+          }).lean();
+
+          if (!district) {
+            district = await District.findOne(
+              {
+                centroid: {
+                  $nearSphere: {
+                    $geometry: point,
+                    $maxDistance: 50000,
+                  },
+                },
+              },
+              null,
+              { lean: true }
+            );
+          }
+
+          if (district) {
+            updateObj.latitude = parsedLat;
+            updateObj.longitude = parsedLon;
+            updateObj.city = district.name;
+            updateObj.state = district.state;
+            updateObj.location = {
+              type: 'Point',
+              coordinates: [parsedLon, parsedLat],
+            };
+            updateObj.locationLastUpdated = new Date();
+            updateObj.locationEnabled = true; // ✅ Mark location as enabled when updating on availability toggle
+            console.log(`✅ District found: ${district.name}, ${district.state}`);
+          }
+        } catch (distErr) {
+          console.error('⚠️ Error finding district:', distErr.message);
+          // Still update coordinates even if district lookup fails
+          updateObj.latitude = parsedLat;
+          updateObj.longitude = parsedLon;
+          updateObj.location = {
+            type: 'Point',
+            coordinates: [parsedLon, parsedLat],
+          };
+          updateObj.locationLastUpdated = new Date();
+          updateObj.locationEnabled = true; // ✅ Mark location as enabled even if district lookup fails
+        }
+      }
+    }
+
     // ✅ Update User model (PRIMARY - where user profile lives)
     console.log(`🔄 Updating User model for phone: ${phone}`);
     const updatedUser = await User.findOneAndUpdate(
       { phone: phone },
-      { 
-        isAvailable: isAvailable,
-        updatedAt: new Date()
-      },
+      updateObj,
       { new: true }
     );
 
@@ -4144,10 +4215,7 @@ app.put('/workers/availability', authenticateToken, async (req, res) => {
     console.log(`🔄 Updating Worker model for phone: ${phone}`);
     const updatedWorker = await WorkerModel.findOneAndUpdate(
       { phone: phone },
-      { 
-        isAvailable: isAvailable,
-        updatedAt: new Date()
-      },
+      updateObj,
       { new: true }
     );
 
@@ -4158,6 +4226,12 @@ app.put('/workers/availability', authenticateToken, async (req, res) => {
     for (const [socketId, worker] of connectedWorkers.entries()) {
       if (worker.phone === phone) {
         worker.isAvailable = isAvailable;
+        // Update location if provided
+        if (updateObj.latitude !== undefined) {
+          worker.latitude = updateObj.latitude;
+          worker.longitude = updateObj.longitude;
+          worker.city = updateObj.city;
+        }
         console.log(`🔄 Updated connected worker ${worker.name} isAvailable to: ${isAvailable}`);
         found = true;
         break;
@@ -4186,7 +4260,10 @@ app.put('/workers/availability', authenticateToken, async (req, res) => {
         phone: updatedUser.phone,
         name: updatedUser.name,
         isAvailable: updatedUser.isAvailable,
-        role: updatedUser.role
+        role: updatedUser.role,
+        city: updatedUser.city,
+        latitude: updatedUser.latitude,
+        longitude: updatedUser.longitude,
       }
     });
   } catch (err) {
@@ -4221,6 +4298,133 @@ app.post("/auth/refresh-fcm-token", authenticateToken, async (req, res) => {
   }
 });
 
+// ✅ UPDATE USER LOCATION - Called post-login or when worker goes online
+app.post("/user/update-location", authenticateToken, async (req, res) => {
+  try {
+    const { latitude, longitude } = req.body;
+    const phone = req.user.phone;
+
+    // Validate coordinates
+    if (latitude === undefined || latitude === null || longitude === undefined || longitude === null) {
+      return res.status(400).json({ success: false, message: "Latitude and longitude required" });
+    }
+
+    const parsedLat = parseFloat(latitude);
+    const parsedLon = parseFloat(longitude);
+
+    // Check for invalid coordinates
+    if (isNaN(parsedLat) || isNaN(parsedLon)) {
+      return res.status(400).json({ success: false, message: "Invalid coordinates" });
+    }
+
+    console.log(`\n📍 Location update request for ${phone}: lat=${parsedLat}, lon=${parsedLon}`);
+
+    // Find district for this location
+    let city = 'Unknown';
+    let state = 'Unknown';
+
+    try {
+      const District = require('./models/City');
+      const point = {
+        type: 'Point',
+        coordinates: [parsedLon, parsedLat],
+      };
+
+      // Try exact polygon match first
+      let district = await District.findOne({
+        geometry: {
+          $geoIntersects: {
+            $geometry: point,
+          },
+        },
+      }).lean();
+
+      // Fallback to nearest centroid if no exact match
+      if (!district) {
+        console.warn(`⚠️ No exact polygon match, trying nearest centroid...`);
+        district = await District.findOne(
+          {
+            centroid: {
+              $nearSphere: {
+                $geometry: point,
+                $maxDistance: 50000, // 50km radius
+              },
+            },
+          },
+          null,
+          { lean: true }
+        );
+      }
+
+      if (district) {
+        city = district.name;
+        state = district.state;
+        console.log(`✅ Found district: ${city}, ${state}`);
+      } else {
+        console.warn(`⚠️ No district found for coordinates [${parsedLon}, ${parsedLat}]`);
+      }
+    } catch (distErr) {
+      console.error('❌ Error finding district:', distErr.message);
+    }
+
+    // Update user location
+    const user = await User.findOneAndUpdate(
+      { phone },
+      {
+        latitude: parsedLat,
+        longitude: parsedLon,
+        city,
+        state,
+        location: {
+          type: 'Point',
+          coordinates: [parsedLon, parsedLat],
+        },
+        locationLastUpdated: new Date(),
+        locationEnabled: true, // ✅ Mark location as enabled when coordinates are updated
+      },
+      { new: true }
+    );
+
+    if (!user) {
+      return res.status(404).json({ success: false, message: "User not found" });
+    }
+
+    // Also update Worker model if exists (for worker consistency)
+    if (user.role === 'worker') {
+      await WorkerModel.findOneAndUpdate(
+        { phone },
+        {
+          latitude: parsedLat,
+          longitude: parsedLon,
+          city,
+          state,
+          location: {
+            type: 'Point',
+            coordinates: [parsedLon, parsedLat],
+          },
+          updatedAt: new Date(),
+        }
+      );
+    }
+
+    console.log(`✅ Location updated for ${phone}: ${city}, ${state}`);
+
+    res.json({
+      success: true,
+      message: "Location updated successfully",
+      user: {
+        phone: user.phone,
+        latitude: user.latitude,
+        longitude: user.longitude,
+        city: user.city,
+        state: user.state,
+      },
+    });
+  } catch (err) {
+    console.error("❌ Error updating location:", err);
+    res.status(500).json({ success: false, message: "Error updating location", error: err.message });
+  }
+});
 
 
 // 🐛 DEBUG: List all workers with their locations (for troubleshooting)

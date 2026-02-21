@@ -195,6 +195,10 @@ function WorkerHome() {
   const [togglingStatus, setTogglingStatus] = useState<boolean>(false);
   const [profileIncompleteModalVisible, setProfileIncompleteModalVisible] = useState<boolean>(false);
   
+  // ✅ Location permission modal state (shown post-login)
+  const [showLocationModal, setShowLocationModal] = useState<boolean>(false);
+  const [requestingLocation, setRequestingLocation] = useState<boolean>(false);
+  
   // One-time profile setup modal
   const [showProfileSetupModal, setShowProfileSetupModal] = useState<boolean>(false);
   const [setupModalSkill, setSetupModalSkill] = useState<string>("");
@@ -387,6 +391,69 @@ function WorkerHome() {
     return null;
   };
 
+  // ✅ REQUEST LOCATION AND UPDATE ON BACKEND
+  const requestAndUpdateLocation = async (): Promise<boolean> => {
+    try {
+      setRequestingLocation(true);
+      console.log('📍 Requesting location permission...');
+
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      
+      if (status !== 'granted') {
+        console.warn('⚠️ Location permission denied');
+        return false;
+      }
+
+      console.log('✅ Location permission granted, getting position...');
+      const location = await Location.getCurrentPositionAsync({
+        accuracy: Location.Accuracy.Balanced,
+      });
+
+      const latitude = location.coords.latitude;
+      const longitude = location.coords.longitude;
+
+      console.log(`📍 Location obtained: lat=${latitude}, lon=${longitude}`);
+
+      // Update location on backend
+      const response = await fetch(`${API_BASE}/user/update-location`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ latitude, longitude }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok || !data.success) {
+        console.error('❌ Failed to update location:', data.message);
+        return false;
+      }
+
+      console.log('✅ Location updated on backend:', data.user);
+      
+      // Update local user data
+      const userStr = await AsyncStorage.getItem('user');
+      if (userStr) {
+        const user = JSON.parse(userStr);
+        user.latitude = data.user.latitude;
+        user.longitude = data.user.longitude;
+        user.city = data.user.city;
+        user.state = data.user.state;
+        await AsyncStorage.setItem('user', JSON.stringify(user));
+        console.log('✅ User data updated in local storage');
+      }
+
+      return true;
+    } catch (err) {
+      console.error('❌ Error requesting location:', err);
+      return false;
+    } finally {
+      setRequestingLocation(false);
+    }
+  };
+
   // ✅ LOAD WORKER DATA & AUTO-REGISTER ----------------
   useEffect(() => {
     (async () => {
@@ -562,6 +629,33 @@ function WorkerHome() {
       }
     })();
   }, []);
+
+  // ✅ POST-LOGIN LOCATION CHECK - Show location modal if user has 0,0 coordinates
+  useEffect(() => {
+    (async () => {
+      try {
+        if (!token) return; // Wait for token to load
+        
+        const userStr = await AsyncStorage.getItem("user");
+        if (!userStr) return;
+
+        const user = JSON.parse(userStr);
+
+        // Check if location is default (0,0) or missing
+        const hasDefaultLocation = (user.latitude === 0 && user.longitude === 0) || 
+                                   !(user.latitude && user.longitude);
+
+        if (hasDefaultLocation) {
+          console.log("📍 User has default location (0,0) - showing location permission modal");
+          setShowLocationModal(true);
+        } else {
+          console.log("✅ User already has location set:", { lat: user.latitude, lon: user.longitude });
+        }
+      } catch (err) {
+        console.error("Error checking location:", err);
+      }
+    })();
+  }, [token]);
 
   // ✅ LISTEN FOR FOREGROUND PUSH NOTIFICATIONS
   useEffect(() => {
@@ -1058,15 +1152,40 @@ function WorkerHome() {
     const newStatus = !isOnline;
 
     try {
+      // ✅ Get fresh location when going online
+      let locationForToggle = null;
+      if (newStatus) {
+        try {
+          console.log('📍 Getting fresh location for online status...');
+          const loc = await Location.getCurrentPositionAsync({
+            accuracy: Location.Accuracy.Balanced,
+          });
+          locationForToggle = {
+            latitude: loc.coords.latitude,
+            longitude: loc.coords.longitude,
+          };
+          console.log(`✅ Got location for toggle: lat=${locationForToggle.latitude}, lon=${locationForToggle.longitude}`);
+        } catch (locErr) {
+          console.warn('⚠️ Could not get location for toggle:', locErr);
+          // Continue without location - backend will accept it
+        }
+      }
+
       // STEP 3: UPDATE AVAILABILITY ON BACKEND
       console.log(`🟢 Updating availability to: ${newStatus}`);
+      const body: any = { isAvailable: newStatus };
+      if (locationForToggle) {
+        body.latitude = locationForToggle.latitude;
+        body.longitude = locationForToggle.longitude;
+      }
+
       const res = await fetch(`${API_BASE}/workers/availability`, {
         method: "PUT",
         headers: {
           "Content-Type": "application/json",
           Authorization: `Bearer ${token}`,
         },
-        body: JSON.stringify({ isAvailable: newStatus }),
+        body: JSON.stringify(body),
       });
 
       if (!res.ok) {
@@ -1078,6 +1197,31 @@ function WorkerHome() {
       
       // STEP 4: UPDATE LOCAL STATE & STORAGE
       setIsOnline(newStatus);
+
+      // ✅ Update location in local storage if returned from backend
+      if (newStatus && data.user && data.user.latitude && data.user.longitude) {
+        console.log(`📍 Updating local location from server: lat=${data.user.latitude}, lon=${data.user.longitude}`);
+        setCurrentLocation({ lat: data.user.latitude, lon: data.user.longitude });
+        
+        // Update AsyncStorage with new location
+        const userStr = await AsyncStorage.getItem("user");
+        if (userStr) {
+          const user = JSON.parse(userStr);
+          user.isAvailable = newStatus;
+          user.latitude = data.user.latitude;
+          user.longitude = data.user.longitude;
+          user.city = data.user.city;
+          await AsyncStorage.setItem("user", JSON.stringify(user));
+        }
+      } else {
+        // Just update availability
+        const userStr = await AsyncStorage.getItem("user");
+        if (userStr) {
+          const user = JSON.parse(userStr);
+          user.isAvailable = newStatus;
+          await AsyncStorage.setItem("user", JSON.stringify(user));
+        }
+      }
 
       // Re-register worker location when going online so backend matching map is always fresh.
       if (newStatus && currentLocation) {
@@ -1091,14 +1235,6 @@ function WorkerHome() {
           lon: currentLocation.lon,
         });
         console.log("📡 Re-registered worker location after going online");
-      }
-      
-      // Update AsyncStorage
-      const userStr = await AsyncStorage.getItem("user");
-      if (userStr) {
-        const user = JSON.parse(userStr);
-        user.isAvailable = newStatus;
-        await AsyncStorage.setItem("user", JSON.stringify(user));
       }
 
       Alert.alert(
@@ -1846,6 +1982,87 @@ function WorkerHome() {
             </TouchableOpacity>
           </View>
         </View>
+      </Modal>
+
+      {/* ✅ POST-LOGIN LOCATION PERMISSION MODAL */}
+      <Modal visible={showLocationModal} transparent animationType="fade">
+        <TouchableOpacity 
+          style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.6)' }}
+          activeOpacity={1}
+        >
+          <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', padding: 20 }}>
+            <TouchableOpacity 
+              style={{ 
+                backgroundColor: '#fff', 
+                borderRadius: 16, 
+                padding: 24, 
+                width: '100%',
+                maxWidth: 350,
+                shadowColor: '#000',
+                shadowOffset: { width: 0, height: 2 },
+                shadowOpacity: 0.25,
+                shadowRadius: 3.84,
+                elevation: 5,
+              }}
+              onPress={(e) => e.stopPropagation()}
+            >
+              {/* Icon */}
+              <View style={{ alignItems: 'center', marginBottom: 16 }}>
+                <MaterialIcons name="location-on" size={48} color="#3498db" />
+              </View>
+
+              {/* Title */}
+              <Text style={{ fontSize: 20, fontWeight: '700', color: '#1a2f4d', textAlign: 'center', marginBottom: 8 }}>
+                Enable Location
+              </Text>
+
+              {/* Subtitle */}
+              <Text style={{ fontSize: 14, color: '#7f8c8d', textAlign: 'center', marginBottom: 20 }}>
+                We need your location to match you with nearby jobs. This helps contractors find workers in their area.
+              </Text>
+
+              {/* Enable Button */}
+              <TouchableOpacity 
+                style={{ 
+                  backgroundColor: '#3498db', 
+                  borderRadius: 10, 
+                  paddingVertical: 14,
+                  alignItems: 'center',
+                  marginBottom: 10,
+                  opacity: requestingLocation ? 0.6 : 1,
+                }}
+                onPress={requestAndUpdateLocation}
+                disabled={requestingLocation}
+              >
+                <Text style={{ color: '#fff', fontSize: 15, fontWeight: '700' }}>
+                  {requestingLocation ? 'Getting Location...' : 'Enable Location'}
+                </Text>
+              </TouchableOpacity>
+
+              {/* Skip Button */}
+              <TouchableOpacity 
+                style={{ 
+                  borderWidth: 1.5,
+                  borderColor: '#bdc3c7',
+                  borderRadius: 10, 
+                  paddingVertical: 12,
+                  alignItems: 'center',
+                }}
+                onPress={() => setShowLocationModal(false)}
+                disabled={requestingLocation}
+              >
+                <Text style={{ color: '#7f8c8d', fontSize: 14, fontWeight: '700' }}>
+                  Skip
+                </Text>
+              </TouchableOpacity>
+
+              {/* Info Text */}
+              <Text style={{ fontSize: 12, color: '#95a5a6', textAlign: 'center', marginTop: 16 }}>
+                You can enable location anytime in Settings
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </TouchableOpacity>
       </Modal>
 
       <FullContainer 

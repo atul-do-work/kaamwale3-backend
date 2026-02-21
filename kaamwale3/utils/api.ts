@@ -60,4 +60,33 @@ api.interceptors.response.use(
   }
 );
 
+// ✅ API helper functions
+export const updateUserLocation = async (latitude: number, longitude: number) => {
+  try {
+    const response = await api.post('/user/update-location', {
+      latitude,
+      longitude,
+    });
+    return response.data;
+  } catch (error) {
+    console.error('Error updating location:', error);
+    throw error;
+  }
+};
+
+export const updateWorkerAvailability = async (isAvailable: boolean, latitude?: number, longitude?: number) => {
+  try {
+    const body: any = { isAvailable };
+    if (latitude !== undefined && longitude !== undefined) {
+      body.latitude = latitude;
+      body.longitude = longitude;
+    }
+    const response = await api.put('/workers/availability', body);
+    return response.data;
+  } catch (error) {
+    console.error('Error updating availability:', error);
+    throw error;
+  }
+};
+
 export default api;

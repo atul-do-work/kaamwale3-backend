@@ -9,10 +9,10 @@ import {
   Modal,
   Image,
   Linking,
+  TextInput,
 } from 'react-native';
 import { MaterialIcons, Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useRouter } from 'expo-router';
 import { useLanguage } from '../../context/LanguageContext';
 import { useAuth } from '../../context/AuthContext';
@@ -54,6 +54,34 @@ interface AggregatedStats {
   avgCompletionPerDay: string | number;
 }
 
+interface AdminStats {
+  totalUsers: number;
+  totalWorkers: number;
+  totalJobs: number;
+  openTickets: number;
+  pendingDocuments: number;
+}
+
+interface AdminLookupData {
+  user?: any;
+  worker?: any;
+  wallet?: any;
+  bankAccount?: any;
+  verification?: any;
+  contractorStats?: any[];
+  supportTickets?: any[];
+  activityLogs?: any[];
+  cancellationLogs?: any[];
+  jobs?: {
+    asContractor?: any[];
+    asWorker?: any[];
+  };
+  summaries?: {
+    worker?: any;
+    contractor?: any;
+  };
+}
+
 export default function DashboardScreen() {
   const router = useRouter();
   const { t } = useLanguage();
@@ -61,10 +89,8 @@ export default function DashboardScreen() {
   const [jobs, setJobs] = useState<Job[]>([]);
   const [loading, setLoading] = useState(true);
   const [token, setToken] = useState<string>('');
-  const [contractorName, setContractorName] = useState<string>('');
   const [dateRange, setDateRange] = useState<'today' | 'week' | 'month'>('today');
   const [stats, setStats] = useState<AggregatedStats | null>(null);
-  const [historicalStats, setHistoricalStats] = useState<any[]>([]);
   
   // Worker details modal state
   const [showWorkerModal, setShowWorkerModal] = useState(false);
@@ -78,12 +104,43 @@ export default function DashboardScreen() {
   const [modalTitle, setModalTitle] = useState("");
   const [modalMessage, setModalMessage] = useState("");
   const [modalType, setModalType] = useState<"success" | "error" | "info">("success");
+
+  // Admin dashboard state
+  const [adminStats, setAdminStats] = useState<AdminStats | null>(null);
+  const [pendingVerifications, setPendingVerifications] = useState<any[]>([]);
+  const [pendingBankAccounts, setPendingBankAccounts] = useState<any[]>([]);
+  const [supportTickets, setSupportTickets] = useState<any[]>([]);
+  const [lookupPhone, setLookupPhone] = useState('');
+  const [lookupData, setLookupData] = useState<AdminLookupData | null>(null);
+  const [adminLoading, setAdminLoading] = useState(false);
+  const [adminActionLoading, setAdminActionLoading] = useState(false);
   
   const showModal = (type: "success" | "error" | "info", title: string, message: string) => {
     setModalType(type);
     setModalTitle(title);
     setModalMessage(message);
     setModalVisible(true);
+  };
+
+  const isAdmin = authUser?.role === 'admin';
+
+  const adminFetch = async (path: string, options: RequestInit = {}) => {
+    if (!token) throw new Error('Missing auth token');
+    const response = await fetch(`${API_BASE}${path}`, {
+      ...options,
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+        ...(options.headers || {}),
+      },
+    });
+
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || data?.success === false) {
+      throw new Error(data?.message || 'Request failed');
+    }
+
+    return data;
   };
 
   useEffect(() => {
@@ -93,12 +150,9 @@ export default function DashboardScreen() {
         const savedToken = accessToken;
 
         if (savedToken) setToken(savedToken);
-        if (userStr) {
-          const user = JSON.parse(userStr);
-          if (user?.name) setContractorName(user.name);
-        }
-
-        if (savedToken) {
+        if (savedToken && isAdmin) {
+          await loadAdminData(savedToken);
+        } else if (savedToken) {
           await fetchJobs(savedToken, userStr ? JSON.parse(userStr).name : '');
           await fetchStats(savedToken, 'today');
         }
@@ -106,10 +160,11 @@ export default function DashboardScreen() {
         console.error('Failed to load user or token', err);
       }
     })();
-  }, [accessToken, authUser]);
+  }, [accessToken, authUser, isAdmin]);
 
   // Listen for real-time worker location updates
   useEffect(() => {
+    if (isAdmin) return;
     if (!showWorkerModal || !selectedJob || !workerDetails) return;
 
     const handleWorkerLocationUpdate = (data: any) => {
@@ -127,6 +182,143 @@ export default function DashboardScreen() {
       socket.off("workerLocationUpdate", handleWorkerLocationUpdate);
     };
   }, [showWorkerModal, selectedJob, workerDetails]);
+
+  const loadAdminData = async (providedToken?: string) => {
+    const currentToken = providedToken || token;
+    if (!currentToken) return;
+
+    setAdminLoading(true);
+    try {
+      const headers = {
+        Authorization: `Bearer ${currentToken}`,
+        'Content-Type': 'application/json',
+      };
+
+      const [dashboardRes, verificationsRes, bankRes, ticketsRes] = await Promise.all([
+        fetch(`${API_BASE}/admin/dashboard`, { headers }),
+        fetch(`${API_BASE}/admin/verifications`, { headers }),
+        fetch(`${API_BASE}/admin/bank-accounts`, { headers }),
+        fetch(`${API_BASE}/admin/support-tickets?status=open`, { headers }),
+      ]);
+
+      const dashboardData = await dashboardRes.json().catch(() => ({}));
+      const verificationsData = await verificationsRes.json().catch(() => ({}));
+      const bankData = await bankRes.json().catch(() => ({}));
+      const ticketsData = await ticketsRes.json().catch(() => ({}));
+
+      if (dashboardData?.success) {
+        setAdminStats({
+          totalUsers: dashboardData.stats?.totalUsers || 0,
+          totalWorkers: dashboardData.stats?.totalWorkers || 0,
+          totalJobs: dashboardData.stats?.totalJobs || 0,
+          openTickets: dashboardData.stats?.openTickets || 0,
+          pendingDocuments: dashboardData.stats?.pendingDocuments || 0,
+        });
+      }
+
+      if (verificationsData?.success && Array.isArray(verificationsData.verifications)) {
+        const pending = verificationsData.verifications.filter((v: any) =>
+          Array.isArray(v.documents) && v.documents.some((d: any) => d.verificationStatus === 'pending')
+        );
+        setPendingVerifications(pending);
+      } else {
+        setPendingVerifications([]);
+      }
+
+      if (bankData?.success && Array.isArray(bankData.bankAccounts)) {
+        setPendingBankAccounts(bankData.bankAccounts.filter((b: any) => b.verificationStatus === 'pending'));
+      } else {
+        setPendingBankAccounts([]);
+      }
+
+      if (ticketsData?.success && Array.isArray(ticketsData.tickets)) {
+        setSupportTickets(ticketsData.tickets);
+      } else {
+        setSupportTickets([]);
+      }
+    } catch (err) {
+      console.error('Admin dashboard load error:', err);
+      showModal('error', 'Admin Error', err instanceof Error ? err.message : 'Failed to load admin data');
+    } finally {
+      setAdminLoading(false);
+    }
+  };
+
+  const handlePhoneLookup = async () => {
+    const phone = lookupPhone.trim();
+    if (!/^\d{10}$/.test(phone)) {
+      showModal('error', 'Invalid Phone', 'Enter a valid 10-digit phone number.');
+      return;
+    }
+
+    setAdminActionLoading(true);
+    try {
+      const data = await adminFetch(`/admin/lookup/${phone}`);
+      setLookupData(data.data || null);
+    } catch (err) {
+      setLookupData(null);
+      showModal('error', 'Lookup Failed', err instanceof Error ? err.message : 'Failed to lookup phone');
+    } finally {
+      setAdminActionLoading(false);
+    }
+  };
+
+  const handleVerifyBank = async (bankId: string, approve: boolean) => {
+    setAdminActionLoading(true);
+    try {
+      const path = approve ? `/admin/bank-accounts/${bankId}/verify` : `/admin/bank-accounts/${bankId}/reject`;
+      await adminFetch(path, {
+        method: 'POST',
+        body: JSON.stringify({ reason: approve ? '' : 'Rejected by admin from mobile dashboard' }),
+      });
+      await loadAdminData();
+      showModal('success', 'Bank Updated', `Bank account ${approve ? 'approved' : 'rejected'} successfully.`);
+    } catch (err) {
+      showModal('error', 'Bank Action Failed', err instanceof Error ? err.message : 'Failed to update bank account');
+    } finally {
+      setAdminActionLoading(false);
+    }
+  };
+
+  const handleVerifyDocument = async (verificationId: string, documentId: string, approve: boolean) => {
+    setAdminActionLoading(true);
+    try {
+      await adminFetch('/admin/verify-document', {
+        method: 'POST',
+        body: JSON.stringify({
+          verificationId,
+          documentId,
+          status: approve ? 'approved' : 'rejected',
+          rejectionReason: approve ? '' : 'Rejected by admin from mobile dashboard',
+        }),
+      });
+      await loadAdminData();
+      showModal('success', 'Verification Updated', `Document ${approve ? 'approved' : 'rejected'} successfully.`);
+    } catch (err) {
+      showModal('error', 'Verification Failed', err instanceof Error ? err.message : 'Failed to update document');
+    } finally {
+      setAdminActionLoading(false);
+    }
+  };
+
+  const handleSupportStatus = async (ticketId: string, status: string) => {
+    setAdminActionLoading(true);
+    try {
+      await adminFetch(`/admin/support-tickets/${ticketId}/status`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          status,
+          resolutionNotes: status === 'resolved' ? 'Resolved by admin from mobile dashboard' : '',
+        }),
+      });
+      await loadAdminData();
+      showModal('success', 'Ticket Updated', `Ticket moved to ${status}.`);
+    } catch (err) {
+      showModal('error', 'Support Update Failed', err instanceof Error ? err.message : 'Failed to update support ticket');
+    } finally {
+      setAdminActionLoading(false);
+    }
+  };
 
   const fetchJobs = async (savedToken: string, name: string) => {
     setLoading(true);
@@ -169,7 +361,6 @@ export default function DashboardScreen() {
       const data = await res.json();
       if (data.success) {
         setStats(data.aggregated);
-        setHistoricalStats(data.stats);
       }
     } catch (err) {
       console.error('Stats fetch error:', err);
@@ -262,6 +453,212 @@ export default function DashboardScreen() {
     setSelectedJob(null);
     setWorkerDetails(null);
   };
+
+  if (isAdmin) {
+    return (
+      <ScrollView style={styles.container}>
+        <View style={styles.header}>
+          <TouchableOpacity onPress={() => router.back()}>
+            <MaterialIcons name="arrow-back" size={28} color="#fff" />
+          </TouchableOpacity>
+          <Text style={styles.headerTitle}>Admin Console</Text>
+          <TouchableOpacity onPress={() => loadAdminData()}>
+            <MaterialIcons name="refresh" size={24} color="#fff" />
+          </TouchableOpacity>
+        </View>
+
+        {(adminLoading || adminActionLoading) && (
+          <ActivityIndicator size="small" color="#1a2f4d" style={{ marginTop: 14 }} />
+        )}
+
+        <View style={styles.adminStatsRow}>
+          <View style={styles.adminStatCard}>
+            <Text style={styles.adminStatNumber}>{adminStats?.totalUsers || 0}</Text>
+            <Text style={styles.adminStatLabel}>Contractors</Text>
+          </View>
+          <View style={styles.adminStatCard}>
+            <Text style={styles.adminStatNumber}>{adminStats?.totalWorkers || 0}</Text>
+            <Text style={styles.adminStatLabel}>Workers</Text>
+          </View>
+          <View style={styles.adminStatCard}>
+            <Text style={styles.adminStatNumber}>{adminStats?.totalJobs || 0}</Text>
+            <Text style={styles.adminStatLabel}>Jobs</Text>
+          </View>
+          <View style={styles.adminStatCard}>
+            <Text style={styles.adminStatNumber}>{adminStats?.openTickets || 0}</Text>
+            <Text style={styles.adminStatLabel}>Open Tickets</Text>
+          </View>
+        </View>
+
+        <View style={styles.sectionContainer}>
+          <Text style={styles.sectionTitle}>Phone Lookup</Text>
+          <View style={styles.lookupRow}>
+            <TextInput
+              value={lookupPhone}
+              onChangeText={setLookupPhone}
+              keyboardType="phone-pad"
+              maxLength={10}
+              placeholder="Enter 10-digit phone"
+              style={styles.lookupInput}
+            />
+            <TouchableOpacity style={styles.lookupBtn} onPress={handlePhoneLookup}>
+              <Text style={styles.lookupBtnText}>Search</Text>
+            </TouchableOpacity>
+          </View>
+
+          {lookupData && (
+            <View style={styles.lookupCard}>
+              <Text style={styles.lookupTitle}>User: {lookupData.user?.name || '-'}</Text>
+              <Text style={styles.lookupLine}>Role: {lookupData.user?.role || '-'}</Text>
+              <Text style={styles.lookupLine}>Wallet: ₹{lookupData.wallet?.balance || 0}</Text>
+              <Text style={styles.lookupLine}>Bank: {lookupData.bankAccount?.verificationStatus || 'not added'}</Text>
+              <Text style={styles.lookupLine}>KYC: {lookupData.verification?.overallVerificationStatus || 'pending'}</Text>
+              <Text style={styles.lookupLine}>
+                Worker gigs: {lookupData.summaries?.worker?.totalJobs || 0} | Earnings: ₹{lookupData.summaries?.worker?.totalEarnings || 0}
+              </Text>
+              <Text style={styles.lookupLine}>
+                Contractor jobs: {lookupData.summaries?.contractor?.totalJobsPosted || 0} | Spending: ₹{lookupData.summaries?.contractor?.totalSpending || 0}
+              </Text>
+              <Text style={styles.lookupLine}>Jobs as worker: {lookupData.jobs?.asWorker?.length || 0}</Text>
+              <Text style={styles.lookupLine}>Jobs as contractor: {lookupData.jobs?.asContractor?.length || 0}</Text>
+            </View>
+          )}
+        </View>
+
+        <View style={styles.sectionContainer}>
+          <Text style={styles.sectionTitle}>Pending Bank Verification</Text>
+          {pendingBankAccounts.length === 0 ? (
+            <Text style={styles.noDataText}>No pending bank verification.</Text>
+          ) : (
+            pendingBankAccounts.map((bank) => (
+              <View key={bank._id} style={styles.adminListCard}>
+                <Text style={styles.lookupTitle}>{bank.phone}</Text>
+                <Text style={styles.lookupLine}>{bank.accountHolderName} • {bank.bankName}</Text>
+                <View style={styles.adminActionRow}>
+                  <TouchableOpacity style={styles.approveBtn} onPress={() => handleVerifyBank(bank._id, true)}>
+                    <Text style={styles.actionBtnText}>Approve</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity style={styles.rejectBtn} onPress={() => handleVerifyBank(bank._id, false)}>
+                    <Text style={styles.actionBtnText}>Reject</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            ))
+          )}
+        </View>
+
+        <View style={styles.sectionContainer}>
+          <Text style={styles.sectionTitle}>Pending Document Verification</Text>
+          {pendingVerifications.length === 0 ? (
+            <Text style={styles.noDataText}>No pending document verification.</Text>
+          ) : (
+            pendingVerifications.map((verification) => {
+              const pendingDocs = (verification.documents || []).filter((doc: any) => doc.verificationStatus === 'pending');
+              return (
+                <View key={verification._id} style={styles.adminListCard}>
+                  <Text style={styles.lookupTitle}>{verification.phone}</Text>
+                  {pendingDocs.map((doc: any) => (
+                    <View key={doc._id} style={{ marginTop: 8 }}>
+                      <Text style={styles.lookupLine}>{doc.type} • {doc.fileName || 'document'}</Text>
+                      <View style={styles.adminActionRow}>
+                        <TouchableOpacity
+                          style={styles.approveBtn}
+                          onPress={() => handleVerifyDocument(verification._id, doc._id, true)}
+                        >
+                          <Text style={styles.actionBtnText}>Approve</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                          style={styles.rejectBtn}
+                          onPress={() => handleVerifyDocument(verification._id, doc._id, false)}
+                        >
+                          <Text style={styles.actionBtnText}>Reject</Text>
+                        </TouchableOpacity>
+                      </View>
+                    </View>
+                  ))}
+                </View>
+              );
+            })
+          )}
+        </View>
+
+        <View style={styles.sectionContainer}>
+          <Text style={styles.sectionTitle}>Support Tickets</Text>
+          {supportTickets.length === 0 ? (
+            <Text style={styles.noDataText}>No open support tickets.</Text>
+          ) : (
+            supportTickets.map((ticket) => (
+              <View key={ticket._id} style={styles.adminListCard}>
+                <Text style={styles.lookupTitle}>{ticket.ticketId}</Text>
+                <Text style={styles.lookupLine}>{ticket.reporterPhone} • {ticket.type}</Text>
+                <Text style={styles.lookupLine}>{ticket.subject}</Text>
+                <View style={styles.adminActionRow}>
+                  <TouchableOpacity style={styles.reviewBtn} onPress={() => handleSupportStatus(ticket.ticketId, 'under_review')}>
+                    <Text style={styles.actionBtnText}>Under Review</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity style={styles.approveBtn} onPress={() => handleSupportStatus(ticket.ticketId, 'resolved')}>
+                    <Text style={styles.actionBtnText}>Resolve</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            ))
+          )}
+        </View>
+
+        <View style={{ height: 30 }} />
+
+        <Modal
+          transparent={true}
+          animationType="fade"
+          visible={modalVisible}
+          onRequestClose={() => setModalVisible(false)}
+        >
+          <View style={styles.alertModalOverlay}>
+            <View style={styles.alertModalContainer}>
+              <View style={[
+                styles.alertModalHeader,
+                {
+                  backgroundColor: modalType === "success" ? "#10B98120" : modalType === "error" ? "#EF444420" : "#3B82F620",
+                }
+              ]}>
+                <View style={[
+                  styles.alertModalIconBg,
+                  {
+                    backgroundColor: modalType === "success" ? "#10B981" : modalType === "error" ? "#EF4444" : "#3B82F6",
+                  }
+                ]}>
+                  <MaterialIcons
+                    name={
+                      modalType === "success" ? "check-circle" :
+                      modalType === "error" ? "error" :
+                      "info"
+                    }
+                    size={32}
+                    color="#fff"
+                  />
+                </View>
+              </View>
+              <View style={styles.alertModalContent}>
+                <Text style={styles.alertModalTitle}>{modalTitle}</Text>
+                <Text style={styles.alertModalMessage}>{modalMessage}</Text>
+              </View>
+              <TouchableOpacity
+                style={[
+                  styles.alertModalButton,
+                  {
+                    backgroundColor: modalType === "success" ? "#10B981" : modalType === "error" ? "#EF4444" : "#3B82F6",
+                  }
+                ]}
+                onPress={() => setModalVisible(false)}
+              >
+                <Text style={styles.alertModalButtonText}>OK</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </Modal>
+      </ScrollView>
+    );
+  }
 
   const today = new Date().toDateString();
   // ✅ Show jobs that were ACCEPTED today (not just jobs with attendance marked)
@@ -688,6 +1085,119 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: '#2d3436',
     marginBottom: 12,
+  },
+  adminStatsRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    paddingHorizontal: 16,
+    marginTop: 14,
+    gap: 10,
+  },
+  adminStatCard: {
+    width: '47%',
+    backgroundColor: '#fff',
+    borderRadius: 10,
+    paddingVertical: 12,
+    paddingHorizontal: 10,
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOpacity: 0.05,
+    shadowRadius: 3,
+    elevation: 2,
+  },
+  adminStatNumber: {
+    fontSize: 20,
+    color: '#111827',
+    fontWeight: '800',
+  },
+  adminStatLabel: {
+    fontSize: 12,
+    color: '#6b7280',
+    marginTop: 4,
+  },
+  lookupRow: {
+    flexDirection: 'row',
+    gap: 8,
+    alignItems: 'center',
+  },
+  lookupInput: {
+    flex: 1,
+    borderWidth: 1,
+    borderColor: '#d1d5db',
+    backgroundColor: '#fff',
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    fontSize: 14,
+    color: '#111827',
+  },
+  lookupBtn: {
+    backgroundColor: '#1f2937',
+    borderRadius: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+  },
+  lookupBtnText: {
+    color: '#fff',
+    fontWeight: '700',
+    fontSize: 13,
+  },
+  lookupCard: {
+    marginTop: 10,
+    backgroundColor: '#fff',
+    borderRadius: 10,
+    padding: 12,
+    shadowColor: '#000',
+    shadowOpacity: 0.05,
+    shadowRadius: 3,
+    elevation: 2,
+  },
+  lookupTitle: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: '#111827',
+    marginBottom: 4,
+  },
+  lookupLine: {
+    fontSize: 12,
+    color: '#374151',
+    marginTop: 3,
+  },
+  adminListCard: {
+    backgroundColor: '#fff',
+    borderRadius: 10,
+    padding: 12,
+    marginBottom: 10,
+    shadowColor: '#000',
+    shadowOpacity: 0.05,
+    shadowRadius: 3,
+    elevation: 2,
+  },
+  adminActionRow: {
+    flexDirection: 'row',
+    marginTop: 10,
+    gap: 8,
+  },
+  approveBtn: {
+    flex: 1,
+    backgroundColor: '#10b981',
+    borderRadius: 8,
+    alignItems: 'center',
+    paddingVertical: 8,
+  },
+  rejectBtn: {
+    flex: 1,
+    backgroundColor: '#ef4444',
+    borderRadius: 8,
+    alignItems: 'center',
+    paddingVertical: 8,
+  },
+  reviewBtn: {
+    flex: 1,
+    backgroundColor: '#f59e0b',
+    borderRadius: 8,
+    alignItems: 'center',
+    paddingVertical: 8,
   },
   workerCard: {
     backgroundColor: '#fff',
