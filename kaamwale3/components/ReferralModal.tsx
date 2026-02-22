@@ -73,16 +73,22 @@ export default function ReferralModal({
   // ✅ FIXED: Use Linking API instead of WebBrowser for WhatsApp
   const shareOnWhatsApp = async () => {
     try {
-      const whatsappUrl = `whatsapp://send?text=${encodeURIComponent(referralMessage)}`;
-      const supported = await Linking.canOpenURL(whatsappUrl);
+      const encodedMessage = encodeURIComponent(referralMessage);
+      const whatsappUrl = `whatsapp://send?text=${encodedMessage}`;
+      const supported = await Linking.canOpenURL('whatsapp://send');
 
       if (supported) {
         await Linking.openURL(whatsappUrl);
       } else {
-        Alert.alert('Error', 'WhatsApp is not installed on your device');
+        // Fallback: open WhatsApp web/share endpoint instead of hard-failing.
+        await Linking.openURL(`https://wa.me/?text=${encodedMessage}`);
       }
     } catch (err) {
-      Alert.alert('Error', 'Unable to open WhatsApp');
+      // Final fallback to native share sheet.
+      await Share.share({
+        message: referralMessage,
+        title: 'Kaamwale Referral',
+      });
     }
   };
 

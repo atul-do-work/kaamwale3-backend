@@ -640,12 +640,14 @@ function WorkerHome() {
         if (!userStr) return;
 
         const user = JSON.parse(userStr);
+        const locationProvidedOnLogin = await AsyncStorage.getItem("locationProvidedOnLogin");
 
         // Check if location is default (0,0) or missing
         const hasDefaultLocation = (user.latitude === 0 && user.longitude === 0) || 
                                    !(user.latitude && user.longitude);
+        const shouldPromptForLocation = locationProvidedOnLogin !== "true" && hasDefaultLocation;
 
-        if (hasDefaultLocation) {
+        if (shouldPromptForLocation) {
           console.log("📍 User has default location (0,0) - showing location permission modal");
           setShowLocationModal(true);
         } else {

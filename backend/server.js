@@ -98,6 +98,7 @@ app.use("/api/payment", razorpayRoutes);
 
 // ✅ Mount leaderboard routes (consolidated service with scheduler)
 const { router: leaderboardRoutes, startLeaderboardScheduler } = require("./services/leaderboard");
+const { startWalletReconciliationScheduler } = require("./services/walletReconciliation");
 app.use("/leaderboard", leaderboardRoutes);
 
 // ✅ Mount payout routes for earnings & payouts
@@ -852,18 +853,18 @@ io.on("connection", (socket) => {
                 await emitJobUpdatedToUsers(job, [job.contractorName, job.contractorPhone || job.contractorName]);
                 console.log(`🔄 Forwarded updated location for worker ${workerIdStr} on job ${job._id}`);
               }
-            }
 
-            // ✅ FIXED: Emit only to contractor watching this job (not all clients)
-            // Use socket rooms for targeted emission instead of broadcasting
-            const contractorRoomId = `contractor_${job.contractorPhone}`;
-            io.to(contractorRoomId).emit("workerLocationUpdate", {
-              phone: user.phone,
-              jobId: job._id.toString(),
-              location: updatedWorker.location,
-              timestamp: new Date(),
-            });
-            console.log(`📡 Emitted workerLocationUpdate to contractor ${job.contractorPhone} (room: ${contractorRoomId})`);
+              // ✅ FIXED: Emit only to contractor watching this job (not all clients)
+              // Use socket rooms for targeted emission instead of broadcasting
+              const contractorRoomId = `contractor_${job.contractorPhone}`;
+              io.to(contractorRoomId).emit("workerLocationUpdate", {
+                phone: user.phone,
+                jobId: job._id.toString(),
+                location: updatedWorker.location,
+                timestamp: new Date(),
+              });
+              console.log(`📡 Emitted workerLocationUpdate to contractor ${job.contractorPhone} (room: ${contractorRoomId})`);
+            }
           }
         } catch (e) {
           console.error('Error forwarding worker location to job:', e);
@@ -3364,6 +3365,9 @@ app.post("/jobs/rate/:id", authenticateToken, async (req, res) => {
 });
 
 // ---------------- WALLET ROUTES ----------------
+// Legacy duplicate wallet routes are intentionally disabled.
+// Use mounted router from ./routes/wallet.js only.
+/*
 app.get("/wallet", authenticateToken, async (req, res) => {
   try {
     let wallet = await Wallet.findOne({ phone: req.user.phone });
@@ -3382,6 +3386,7 @@ app.get("/wallet", authenticateToken, async (req, res) => {
   }
 });
 
+// SECURITY NOTE: Disabled because it credits wallet without provider verification.
 app.post("/wallet/deposit", authenticateToken, async (req, res) => {
   try {
     const { amount } = req.body;
@@ -3430,6 +3435,7 @@ app.post("/wallet/withdraw", authenticateToken, async (req, res) => {
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 });
+*/
 
 // ----------------CONTRACTOR STATS ----------------
 // Save/Update contractor daily stats (called after job completion or manually)
@@ -4532,6 +4538,7 @@ const startJobOfferCleanupScheduler = () => {
 setTimeout(() => {
   startLeaderboardScheduler();
   startJobOfferCleanupScheduler();
+  startWalletReconciliationScheduler();
 }, 2000); // Wait 2 seconds for DB to stabilize
 
 // ---------------- START SERVER ----------------

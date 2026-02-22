@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { View, Text, Image, TouchableOpacity, ScrollView, FlatList, Alert, Modal } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MaterialIcons, FontAwesome } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { BlurView } from 'expo-blur';
@@ -20,6 +20,7 @@ const profile = require('../../../assets/oip2.jpg');
 
 export default function ContractorHome() {
   const router = useRouter();
+  const insets = useSafeAreaInsets();
   const { t } = useLanguage();
   const { accessToken, user: authUser } = useAuth();
   const [premiumModalVisible, setPremiumModalVisible] = React.useState(false);
@@ -422,6 +423,7 @@ export default function ContractorHome() {
       console.log(`📍 Location obtained: lat=${latitude}, lon=${longitude}`);
 
       // Update location on backend
+      console.log(`🌐 Sending location update to ${API_BASE}/user/update-location`);
       const response = await fetch(`${API_BASE}/user/update-location`, {
         method: 'POST',
         headers: {
@@ -431,10 +433,17 @@ export default function ContractorHome() {
         body: JSON.stringify({ latitude, longitude }),
       });
 
+      console.log(`📊 Backend response status: ${response.status}`);
       const data = await response.json();
+      console.log(`📦 Backend response data:`, data);
 
-      if (!response.ok || !data.success) {
-        console.error('❌ Failed to update location:', data.message);
+      if (!response.ok) {
+        console.error('❌ Backend returned error status:', response.status, data.message);
+        return false;
+      }
+
+      if (!data.success) {
+        console.error('❌ Backend returned success=false:', data.message);
         return false;
       }
 
@@ -453,12 +462,17 @@ export default function ContractorHome() {
       }
 
       // Close modal after successful location update
+      console.log('🔄 Closing location modal...');
       setShowLocationModal(false);
+      console.log(`✅ Location enabled! City: ${data.user.city}, State: ${data.user.state}`);
       return true;
     } catch (err) {
       console.error('❌ Error requesting location:', err);
+      const errorMsg = err instanceof Error ? err.message : String(err);
+      console.error(`Error details: ${errorMsg}`);
       return false;
     } finally {
+      console.log('🟢 Cleanup: Setting requestingLocation to false');
       setRequestingLocation(false);
     }
   };
@@ -473,12 +487,14 @@ export default function ContractorHome() {
         if (!userStr) return;
 
         const user = JSON.parse(userStr);
+        const locationProvidedOnLogin = await AsyncStorage.getItem('locationProvidedOnLogin');
 
         // Check if location is default (0,0) or missing
         const hasDefaultLocation = (user.latitude === 0 && user.longitude === 0) || 
                                    !(user.latitude && user.longitude);
+        const shouldPromptForLocation = locationProvidedOnLogin !== 'true' && hasDefaultLocation;
 
-        if (hasDefaultLocation) {
+        if (shouldPromptForLocation) {
           console.log("📍 Contractor has default location (0,0) - showing location permission modal");
           setShowLocationModal(true);
         } else {
@@ -582,7 +598,10 @@ export default function ContractorHome() {
   };
 
   return (
-    <SafeAreaView edges={['top', 'left', 'right', 'bottom']} style={styles.container}>
+    <SafeAreaView
+      edges={['top', 'left', 'right', 'bottom']}
+      style={[styles.container, { paddingBottom: Math.max(insets.bottom, 12) }]}
+    >
       {/* Header with Gradient */}
       <LinearGradient 
         colors={['#1a2f4d', '#2d5a8c']} 

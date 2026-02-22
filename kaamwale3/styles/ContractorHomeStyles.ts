@@ -1,5 +1,5 @@
 import { StyleSheet, Dimensions } from 'react-native';
-const { width, height } = Dimensions.get('window');
+const { width } = Dimensions.get('window');
 
 export default StyleSheet.create({
   container: { flex: 1, backgroundColor: '#f0f2f7', position: 'relative' },
@@ -152,7 +152,8 @@ export default StyleSheet.create({
 
   // LEADERBOARD CONTAINER - Modern styling
   leaderboardWrapper: {
-    height: height * 0.72,
+    flex: 1,
+    minHeight: 320,
     borderTopLeftRadius: 32,
     borderTopRightRadius: 32,
     padding: 24,

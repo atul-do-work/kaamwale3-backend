@@ -185,12 +185,23 @@ export default function LoginScreen() {
         console.warn('⚠️ Could not get FCM token:', (err as Error).message);
       }
 
-      // ✅ IMPROVED: Location is now optional and non-blocking during login
-      // Will be captured after login succeeds or when user goes online
+      // ✅ Try to fetch location before login so backend can save city/state immediately
       let latitude = null;
       let longitude = null;
-      
-      console.log('📍 Location will be captured post-login or when going online');
+      let locationProvidedOnLogin = false;
+      try {
+        const locationData = await getLocationWithRetries(2);
+        if (locationData.latitude !== null && locationData.longitude !== null) {
+          latitude = locationData.latitude;
+          longitude = locationData.longitude;
+          locationProvidedOnLogin = true;
+          console.log(`📍 Sending location in login request: lat=${latitude}, lon=${longitude}`);
+        } else {
+          console.log('⚠️ Location not available for login request');
+        }
+      } catch (locErr) {
+        console.warn('⚠️ Could not fetch location before login:', (locErr as Error).message);
+      }
 
       const response = await fetch(`${API_BASE}/login`, {
         method: "POST",
@@ -237,6 +248,7 @@ export default function LoginScreen() {
       }
 
       await AsyncStorage.setItem("user", JSON.stringify(data.user)); // save user object
+      await AsyncStorage.setItem("locationProvidedOnLogin", locationProvidedOnLogin ? "true" : "false");
       
       // ✅ FIX: Update AuthContext state immediately
       await saveTokens(accessToken, refreshToken, data.user);

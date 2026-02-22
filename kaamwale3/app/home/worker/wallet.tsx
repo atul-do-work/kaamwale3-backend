@@ -52,6 +52,7 @@ export default function Wallet(): React.ReactElement {
   const [currentDepositAmount, setCurrentDepositAmount] = useState(0);
   const [currentDepositOrderId, setCurrentDepositOrderId] = useState('');
   const [depositLoading, setDepositLoading] = useState(false);
+  const [displayedCardCount, setDisplayedCardCount] = useState(4);
 
   // ✅ Bank account states
   const [bankAccount, setBankAccount] = useState<any>(null);
@@ -518,6 +519,10 @@ export default function Wallet(): React.ReactElement {
     icon: t.type === 'deposit' ? 'attach-money' : (t.type === 'payment' ? 'paid' : 'money-off')
   }));
 
+  useEffect(() => {
+    setDisplayedCardCount(4);
+  }, [wallet.transactions.length]);
+
   return (
     <ScrollView style={styles.container}>
       {/* Earnings Header */}
@@ -612,7 +617,7 @@ export default function Wallet(): React.ReactElement {
 
       {/* Cards Grid */}
       <View style={styles.cardsRow}>
-        {cards.map((card) => (
+        {cards.slice(0, displayedCardCount).map((card) => (
           <View key={card.id} style={styles.cardContainer}>
             <MaterialIcons name={card.icon as any} size={28} color="#1a2f4d" />
             <Text style={styles.cardAmount}>₹{card.amount}</Text>
@@ -621,6 +626,22 @@ export default function Wallet(): React.ReactElement {
           </View>
         ))}
       </View>
+      {displayedCardCount < cards.length && (
+        <TouchableOpacity
+          style={{
+            marginHorizontal: 20,
+            marginTop: 4,
+            marginBottom: 18,
+            paddingVertical: 12,
+            borderRadius: 10,
+            backgroundColor: '#1a2f4d',
+            alignItems: 'center',
+          }}
+          onPress={() => setDisplayedCardCount((prev) => prev + 4)}
+        >
+          <Text style={{ color: '#fff', fontWeight: '700' }}>See More</Text>
+        </TouchableOpacity>
+      )}
 
       {/* ✅ Razorpay Deposit Modal with Security */}
       <Modal visible={depositModalVisible} transparent animationType="slide" onDismiss={() => {

@@ -15,7 +15,14 @@ const walletSchema = new mongoose.Schema({
       description: String,
       orderId: String, // For deposit/withdraw tracking
       paymentId: { type: String}, // 🔐 Unique index prevents duplicate payments globally
-      status: { type: String, default: 'completed' } // completed, pending, failed
+      status: { type: String, default: 'completed' }, // completed, pending, failed
+      // Immutable audit fields for forensic accounting
+      openingBalance: { type: Number, immutable: true },
+      closingBalance: { type: Number, immutable: true },
+      source: { type: String, immutable: true }, // app, webhook, admin, reconciliation
+      provider: { type: String, immutable: true }, // razorpay, internal
+      providerEventId: { type: String, immutable: true }, // webhook/payment/payout id
+      metadata: { type: mongoose.Schema.Types.Mixed, default: null }
     }
   ],
   

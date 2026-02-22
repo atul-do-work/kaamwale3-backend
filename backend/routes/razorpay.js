@@ -8,6 +8,7 @@ const Job = require('../models/Jobs');
 const NotificationHistory = require('../models/NotificationHistory');
 const WorkerEarnings = require('../models/WorkerEarnings');
 const ActivityLog = require('../models/ActivityLog');
+const { sendOpsAlert } = require('../utils/opsAlert');
 
 const router = express.Router();
 
@@ -496,7 +497,7 @@ router.post('/webhook', async (req, res) => {
     );
 
     // Update job payment status
-    await Job.findByIdAndUpdate(
+    const updatedJobFromWebhook = await Job.findByIdAndUpdate(
       jobId,
       { paymentStatus: 'Paid', paymentTime: new Date() },
       { new: true, session }
@@ -549,12 +550,12 @@ router.post('/webhook', async (req, res) => {
   } catch (error) {
     await session.abortTransaction();
     console.error('Webhook processing error:', error);
+    await sendOpsAlert('Razorpay payment webhook failed', { error: error && error.message });
     
-    // Still return 200 to Razorpay so it doesn't retry unnecessarily
-    // Server logs will show the error for debugging
-    res.status(200).json({
-      received: true,
-      message: 'Webhook received (processing error logged)'
+    // Return non-2xx so Razorpay retries webhook delivery.
+    res.status(500).json({
+      success: false,
+      message: 'Webhook processing failed, retry expected'
     });
   } finally {
     session.endSession();

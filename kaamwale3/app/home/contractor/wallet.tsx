@@ -83,6 +83,7 @@ export default function ContractorWalletAttendance() {
 
   // ✅ Pagination state for attendance cards
   const [displayedCount, setDisplayedCount] = useState(5); // Show 5 cards initially
+  const [walletDisplayedCount, setWalletDisplayedCount] = useState(4); // Show 2x2 cards initially
 
   // ✅ Razorpay deposit states
   const [depositModalVisible, setDepositModalVisible] = useState(false);
@@ -946,7 +947,7 @@ export default function ContractorWalletAttendance() {
 
           {/* Cards */}
           <View style={styles.cardsRow}>
-            {walletCards.map(card => (
+            {walletCards.slice(0, walletDisplayedCount).map(card => (
               <TouchableOpacity
                 key={card.id}
                 style={styles.cardContainer}
@@ -962,6 +963,21 @@ export default function ContractorWalletAttendance() {
               </TouchableOpacity>
             ))}
           </View>
+          {walletDisplayedCount < walletCards.length && (
+            <TouchableOpacity
+              style={{
+                marginHorizontal: 16,
+                marginBottom: 20,
+                paddingVertical: 12,
+                backgroundColor: "#1a2f4d",
+                borderRadius: 8,
+                alignItems: "center"
+              }}
+              onPress={() => setWalletDisplayedCount(prev => prev + 4)}
+            >
+              <Text style={{ color: "#fff", fontSize: 14, fontWeight: "600" }}>See More</Text>
+            </TouchableOpacity>
+          )}
         </ScrollView>
       )}
 

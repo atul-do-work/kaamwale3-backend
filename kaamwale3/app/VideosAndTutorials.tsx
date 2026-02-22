@@ -15,6 +15,7 @@ import { useRouter } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useAuth } from '../context/AuthContext';
 import { API_BASE } from '../utils/config';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
 const logActivity = async (token: string | null, action: string, details: string) => {
   try {
@@ -201,7 +202,7 @@ export default function VideosAndTutorials() {
   );
 
   return (
-    <View style={styles.container}>
+    <SafeAreaView edges={['top', 'left', 'right', 'bottom']} style={styles.container}>
       {/* Header */}
       <View style={[styles.header, { paddingTop: Platform.OS === 'ios' ? 12 : 8 }]}>
         <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
@@ -260,7 +261,7 @@ export default function VideosAndTutorials() {
           </View>
         </ScrollView>
       )}
-    </View>
+    </SafeAreaView>
   );
 }
 
