@@ -8,6 +8,7 @@ const Job = require('../models/Jobs');
 const NotificationHistory = require('../models/NotificationHistory');
 const WorkerEarnings = require('../models/WorkerEarnings');
 const ActivityLog = require('../models/ActivityLog');
+const JobEventLog = require('../models/JobEventLog');
 const { sendOpsAlert } = require('../utils/opsAlert');
 
 const router = express.Router();
@@ -239,26 +240,40 @@ router.post('/verify-payment', authenticateToken, async (req, res) => {
     }
 
     // 🔐 STEP 7: Create WorkerEarnings record (transactional)
-    const workerEarning = await WorkerEarnings.create(
-      [{
-        workerPhone,
-        jobId,
-        amount: actualAmount,
-        status: 'earned',
-        earnedAt: new Date(),
-        payoutWeek: {
-          year: now.getFullYear(),
-          week: weekNumber,
-          startDate: weekStart,
-          endDate: weekEnd
-        },
-        contractorName: job.contractorName,
-        contractorPhone: job.contractorPhone,
-        jobTitle: job.title
-      }],
-      { session }
+    const workerEarning = await WorkerEarnings.findOneAndUpdate(
+      { workerPhone, jobId },
+      {
+        $setOnInsert: {
+          workerPhone,
+          jobId,
+          amount: actualAmount,
+          currency: 'INR',
+          status: 'earned',
+          source: 'app',
+          provider: 'razorpay',
+          orderId,
+          paymentId,
+          providerEventId: paymentId,
+          idempotencyKey: paymentId,
+          earnedAt: new Date(),
+          payoutWeek: {
+            year: now.getFullYear(),
+            week: weekNumber,
+            startDate: weekStart,
+            endDate: weekEnd
+          },
+          contractorName: job.contractorName,
+          contractorPhone: job.contractorPhone,
+          jobTitle: job.title,
+          metadata: {
+            createdFrom: 'verify-payment',
+            amount: actualAmount,
+          }
+        }
+      },
+      { new: true, upsert: true, session }
     );
-    console.log(`💰 WorkerEarnings record created:`, workerEarning[0]._id);
+    console.log(`💰 WorkerEarnings upserted:`, workerEarning._id);
 
     // 🔐 STEP 8: Create ActivityLog record (transactional)
     await ActivityLog.create(
@@ -278,6 +293,24 @@ router.post('/verify-payment', authenticateToken, async (req, res) => {
       jobId,
       { paymentStatus: 'Paid', paymentTime: new Date() },
       { new: true, session }
+    );
+
+
+    await JobEventLog.create(
+      [{
+        jobId: updatedJobFromWebhook._id,
+        eventType: 'payment_captured',
+        actorType: 'contractor',
+        actorPhone: req.user.phone,
+        oldState: { paymentStatus: job.paymentStatus },
+        newState: { paymentStatus: updatedJobFromWebhook.paymentStatus, paymentTime: updatedJobFromWebhook.paymentTime },
+        source: 'app',
+        idempotencyKey: paymentId,
+        provider: 'razorpay',
+        providerEventId: paymentId,
+        metadata: { orderId, amount: actualAmount }
+      }],
+      { session }
     );
 
     // 🔐 STEP 10: Create notification (transactional)
@@ -463,24 +496,38 @@ router.post('/webhook', async (req, res) => {
     const weekEnd = new Date(weekStart);
     weekEnd.setDate(weekStart.getDate() + 6);
 
-    await WorkerEarnings.create(
-      [{
-        workerPhone,
-        jobId,
-        amount: actualAmount,
-        status: 'earned',
-        earnedAt: new Date(),
-        payoutWeek: {
-          year: now.getFullYear(),
-          week: weekNumber,
-          startDate: weekStart,
-          endDate: weekEnd
-        },
-        contractorName: job.contractorName,
-        contractorPhone: job.contractorPhone,
-        jobTitle: job.title
-      }],
-      { session }
+    await WorkerEarnings.findOneAndUpdate(
+      { workerPhone, jobId },
+      {
+        $setOnInsert: {
+          workerPhone,
+          jobId,
+          amount: actualAmount,
+          currency: 'INR',
+          status: 'earned',
+          source: 'webhook',
+          provider: 'razorpay',
+          orderId,
+          paymentId,
+          providerEventId: paymentId,
+          idempotencyKey: paymentId,
+          earnedAt: new Date(),
+          payoutWeek: {
+            year: now.getFullYear(),
+            week: weekNumber,
+            startDate: weekStart,
+            endDate: weekEnd
+          },
+          contractorName: job.contractorName,
+          contractorPhone: job.contractorPhone,
+          jobTitle: job.title,
+          metadata: {
+            createdFrom: 'payment-webhook',
+            amount: actualAmount,
+          }
+        }
+      },
+      { new: true, upsert: true, session }
     );
 
     // Create ActivityLog record
@@ -501,6 +548,23 @@ router.post('/webhook', async (req, res) => {
       jobId,
       { paymentStatus: 'Paid', paymentTime: new Date() },
       { new: true, session }
+    );
+
+
+    await JobEventLog.create(
+      [{
+        jobId: updatedJobFromWebhook._id,
+        eventType: 'payment_captured_webhook',
+        actorType: 'webhook',
+        oldState: { paymentStatus: job.paymentStatus },
+        newState: { paymentStatus: updatedJobFromWebhook.paymentStatus, paymentTime: updatedJobFromWebhook.paymentTime },
+        source: 'webhook',
+        idempotencyKey: paymentId,
+        provider: 'razorpay',
+        providerEventId: paymentId,
+        metadata: { orderId, amount: actualAmount }
+      }],
+      { session }
     );
 
     // Create notification
@@ -563,3 +627,5 @@ router.post('/webhook', async (req, res) => {
 });
 
 module.exports = router;
+
+

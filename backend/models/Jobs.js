@@ -1,67 +1,193 @@
 const mongoose = require('mongoose');
 
-const jobSchema = new mongoose.Schema({
-  // Note: MongoDB auto-generates _id (ObjectId). No need for custom id field.
-  title: { type: String, required: true },
-  description: String,
-  workerType: String,
-  amount: Number,
-  contractorName: String,
-  contractorPhone: String, // ✅ Store contractor phone for filtering
-  imageUrl: String, // ✅ URL of job image uploaded by contractor
-  lat: Number,
-  lon: Number,
-  date: { type: Date, default: Date.now },
-  startTime: String, // ✅ Start time like "09:00" or "9 AM"
-  endTime: String, // ✅ End time like "18:00" or "6 PM"
-  numberOfDays: { type: Number, default: 1 }, // ✅ Job duration in days (1-30) - only for premium contractors
-  status: { type: String, default: 'pending' },
-  acceptedBy: String, // ✅ Legacy: first accepted worker phone
-  acceptedWorker: { // ✅ Snapshot of worker data when accepted - legacy, use acceptedWorkers for bulk
-    id: String,
-    name: String,
-    phone: String,
-    skills: [String],
-    profilePhoto: String,
-    location: {
-      type: { type: String, enum: ["Point"], default: "Point" },
-      coordinates: [Number], // [longitude, latitude]
-    }
-  },
-  // ✅ NEW: Bulk hiring fields
-  bulkHiring: { type: Boolean, default: false }, // Whether this is a bulk hiring job
-  requiredWorkers: { type: Number, default: 1 }, // How many workers needed
-  acceptedWorkers: [{ // Array of accepted workers with snapshot data
-    phone: String,
-    name: String,
-    profilePhoto: String,
+const JOB_STATUS = ['pending', 'posted', 'offered', 'accepted', 'in_progress', 'completed', 'cancelled', 'expired'];
+const PAYMENT_STATUS = ['pending', 'authorized', 'captured', 'failed', 'refunded', 'Paid', 'Pending', 'Failed'];
+
+const ALLOWED_JOB_STATUS_TRANSITIONS = {
+  pending: ['offered', 'accepted', 'cancelled', 'expired', 'posted'],
+  posted: ['offered', 'accepted', 'cancelled', 'expired'],
+  offered: ['accepted', 'cancelled', 'expired'],
+  accepted: ['in_progress', 'cancelled'],
+  in_progress: ['completed', 'cancelled'],
+  completed: [],
+  cancelled: [],
+  expired: [],
+};
+
+const ALLOWED_PAYMENT_STATUS_TRANSITIONS = {
+  pending: ['authorized', 'captured', 'failed', 'refunded', 'Paid', 'Failed'],
+  authorized: ['captured', 'failed', 'refunded'],
+  captured: ['refunded'],
+  failed: [],
+  refunded: [],
+  Pending: ['Paid', 'Failed'],
+  Paid: ['refunded'],
+  Failed: [],
+};
+
+const jobSchema = new mongoose.Schema(
+  {
+    title: { type: String, required: true },
+    description: String,
+    workerType: String,
+    amount: Number,
+    contractorName: String,
+    contractorPhone: String,
+    imageUrl: String,
+    lat: Number,
+    lon: Number,
+    jobLocation: {
+      type: { type: String, enum: ['Point'], default: 'Point' },
+      coordinates: { type: [Number], default: undefined }, // [longitude, latitude]
+    },
+    date: { type: Date, default: Date.now },
+    startTime: String,
+    endTime: String,
+    numberOfDays: { type: Number, default: 1 },
+    status: { type: String, enum: JOB_STATUS, default: 'pending', index: true },
+    acceptedBy: String,
+    acceptedWorker: {
+      id: String,
+      name: String,
+      phone: String,
+      skills: [String],
+      profilePhoto: String,
+      location: {
+        type: { type: String, enum: ['Point'], default: 'Point' },
+        coordinates: [Number],
+      },
+    },
+    bulkHiring: { type: Boolean, default: false },
+    requiredWorkers: { type: Number, default: 1 },
+    acceptedWorkers: [
+      {
+        phone: String,
+        name: String,
+        profilePhoto: String,
+        acceptedAt: Date,
+        skills: [String],
+        location: {
+          type: { type: String, enum: ['Point'], default: 'Point' },
+          coordinates: [Number],
+        },
+      },
+    ],
+    declinedBy: [String],
+    isCancelled: { type: Boolean, default: false },
+    attendanceStatus: String,
+    attendanceTime: Date,
+    paymentStatus: { type: String, enum: PAYMENT_STATUS, default: 'pending' },
+    paymentMode: String,
+    paymentTime: Date,
+    offerExpiresAt: { type: Date, index: true },
     acceptedAt: Date,
-    skills: [String],
-    location: {
-      type: { type: String, enum: ["Point"], default: "Point" },
-      coordinates: [Number],
-    }
-  }],
-  declinedBy: [String],
-  isCancelled: { type: Boolean, default: false }, // ✅ Flag to exclude cancelled jobs from counts
-  attendanceStatus: String,
-  attendanceTime: Date,
-  paymentStatus: String,
-  paymentMode: String,
-  paymentTime: Date,
-  // ✅ NEW: Memory leak prevention - track when offer expires
-  offerExpiresAt: { type: Date, index: true }, // When the job offer expires (for cleanup)
-  // Time tracking fields
-  acceptedAt: Date, // when worker accepts the job
-  timeSpentMinutes: Number, // duration from acceptance to payment in minutes
-  hoursWorked: { type: Number, default: 0 }, // ✅ Hours worked on this job (0-24 per day)
-  // Rating fields - contractor rates worker after payment
-  rating: {
-    stars: { type: Number, min: 1, max: 5 }, // 1-5 star rating
-    feedback: String, // optional feedback text
-    ratedAt: Date, // when rating was given
-    ratedBy: String, // contractor name/phone who rated
+    timeSpentMinutes: Number,
+    hoursWorked: { type: Number, default: 0 },
+    rating: {
+      stars: { type: Number, min: 1, max: 5 },
+      feedback: String,
+      ratedAt: Date,
+      ratedBy: String,
+    },
   },
-}, { timestamps: true });
+  { timestamps: true }
+);
+
+jobSchema.index({ status: 1, createdAt: -1 });
+jobSchema.index({ contractorPhone: 1, createdAt: -1 });
+jobSchema.index({ acceptedBy: 1, createdAt: -1 });
+jobSchema.index({ jobLocation: '2dsphere' });
+
+function getUpdatedValue(update, key) {
+  if (!update || typeof update !== 'object') return undefined;
+  if (update.$set && Object.prototype.hasOwnProperty.call(update.$set, key)) {
+    return update.$set[key];
+  }
+  if (Object.prototype.hasOwnProperty.call(update, key)) {
+    return update[key];
+  }
+  return undefined;
+}
+
+jobSchema.pre('validate', function syncGeoLocation(next) {
+  if (
+    Number.isFinite(this.lat) &&
+    Number.isFinite(this.lon) &&
+    (!this.jobLocation || !Array.isArray(this.jobLocation.coordinates) || this.jobLocation.coordinates.length !== 2)
+  ) {
+    this.jobLocation = {
+      type: 'Point',
+      coordinates: [this.lon, this.lat],
+    };
+  }
+  next();
+});
+
+jobSchema.pre('save', async function enforceTransitionsOnSave(next) {
+  if (this.isNew) return next();
+
+  const existing = await this.constructor.findById(this._id).select('status paymentStatus').lean();
+  if (!existing) return next();
+
+  if (this.isModified('status') && this.status !== existing.status) {
+    const allowed = ALLOWED_JOB_STATUS_TRANSITIONS[existing.status] || [];
+    if (allowed.length && !allowed.includes(this.status)) {
+      return next(new Error(`Invalid job status transition: ${existing.status} -> ${this.status}`));
+    }
+  }
+
+  if (this.isModified('paymentStatus') && this.paymentStatus !== existing.paymentStatus) {
+    const allowed = ALLOWED_PAYMENT_STATUS_TRANSITIONS[existing.paymentStatus] || [];
+    if (allowed.length && !allowed.includes(this.paymentStatus)) {
+      return next(new Error(`Invalid payment status transition: ${existing.paymentStatus} -> ${this.paymentStatus}`));
+    }
+  }
+
+  return next();
+});
+
+jobSchema.pre('findOneAndUpdate', async function enforceTransitions(next) {
+  const update = this.getUpdate() || {};
+  const nextStatus = getUpdatedValue(update, 'status');
+  const nextPaymentStatus = getUpdatedValue(update, 'paymentStatus');
+
+  if (!nextStatus && !nextPaymentStatus) {
+    return next();
+  }
+
+  const existing = await this.model.findOne(this.getQuery()).select('status paymentStatus').lean();
+  if (!existing) {
+    return next();
+  }
+
+  if (nextStatus && nextStatus !== existing.status) {
+    const allowed = ALLOWED_JOB_STATUS_TRANSITIONS[existing.status] || [];
+    if (allowed.length && !allowed.includes(nextStatus)) {
+      return next(new Error(`Invalid job status transition: ${existing.status} -> ${nextStatus}`));
+    }
+  }
+
+  if (nextPaymentStatus && nextPaymentStatus !== existing.paymentStatus) {
+    const allowed = ALLOWED_PAYMENT_STATUS_TRANSITIONS[existing.paymentStatus] || [];
+    if (allowed.length && !allowed.includes(nextPaymentStatus)) {
+      return next(new Error(`Invalid payment status transition: ${existing.paymentStatus} -> ${nextPaymentStatus}`));
+    }
+  }
+
+  if (
+    Number.isFinite(getUpdatedValue(update, 'lat')) &&
+    Number.isFinite(getUpdatedValue(update, 'lon')) &&
+    getUpdatedValue(update, 'jobLocation') === undefined
+  ) {
+    update.$set = update.$set || {};
+    update.$set.jobLocation = {
+      type: 'Point',
+      coordinates: [getUpdatedValue(update, 'lon'), getUpdatedValue(update, 'lat')],
+    };
+    this.setUpdate(update);
+  }
+
+  next();
+});
 
 module.exports = mongoose.model('Job', jobSchema);

@@ -64,6 +64,15 @@ const SupportTicket = require("./models/SupportTicket");
 const VerificationDocument = require("./models/VerificationDocument");
 const CancellationLog = require("./models/CancellationLog");
 const NotificationHistory = require("./models/NotificationHistory");
+const JobEventLog = require("./models/JobEventLog");
+const { createJobsLifecycleRouter } = require("./routes/jobsLifecycle");
+const { createNotificationsRouter } = require("./routes/notifications");
+const { createAuthSupportRouter } = require("./routes/authSupport");
+const { createOpsSupportRouter } = require("./routes/opsSupport");
+const { createWorkersRouter } = require("./routes/workers");
+const { createPremiumWalletRouter } = require("./routes/premiumWallet");
+const { createContractorStatsRouter } = require("./routes/contractorStats");
+const { createUsersProfileRouter } = require("./routes/usersProfile");
 
 
 
@@ -99,6 +108,7 @@ app.use("/api/payment", razorpayRoutes);
 // ✅ Mount leaderboard routes (consolidated service with scheduler)
 const { router: leaderboardRoutes, startLeaderboardScheduler } = require("./services/leaderboard");
 const { startWalletReconciliationScheduler } = require("./services/walletReconciliation");
+const { startJobReconciliationScheduler } = require("./services/jobReconciliation");
 app.use("/leaderboard", leaderboardRoutes);
 
 // ✅ Mount payout routes for earnings & payouts
@@ -251,6 +261,72 @@ async function emitJobUpdatedToUsers(job, userIdentifiers = []) {
     try { io.emit('jobUpdated', job); } catch (err) { console.error('Fallback broadcast failed', err); }
   }
 }
+
+async function logJobEvent({
+  jobId,
+  eventType,
+  actorType = "system",
+  actorPhone = null,
+  source = "system",
+  oldState = null,
+  newState = null,
+  idempotencyKey = null,
+  provider = null,
+  providerEventId = null,
+  reasonCode = null,
+  reasonText = null,
+  metadata = null,
+}) {
+  try {
+    if (!jobId || !eventType) return;
+    await JobEventLog.create({
+      jobId,
+      eventType,
+      actorType,
+      actorPhone,
+      source,
+      oldState,
+      newState,
+      idempotencyKey,
+      provider,
+      providerEventId,
+      reasonCode,
+      reasonText,
+      metadata,
+      timestamp: new Date(),
+    });
+  } catch (e) {
+    console.error("[job-event] failed:", e && e.message);
+  }
+}
+
+// Mount extracted lifecycle routes (kept paths unchanged).
+app.use(
+  "/",
+  createJobsLifecycleRouter({
+    io,
+    trackingJobs,
+    pendingJobTimeouts,
+    pendingJobExpirations,
+    emitJobUpdatedToUsers,
+    logJobEvent,
+    updateContractorStats,
+  })
+);
+app.use("/", createNotificationsRouter({ io }));
+app.use("/", createAuthSupportRouter({ JWT_SECRET, sendNotificationToUserPhone }));
+app.use(
+  "/",
+  createWorkersRouter({
+    io,
+    connectedWorkers,
+    checkJobMatchesForWorker,
+    getWorkerGigsSummary,
+    sendNotificationToUserPhone,
+  })
+);
+app.use("/", createPremiumWalletRouter({ io }));
+app.use("/", createContractorStatsRouter());
 
 // ✅ NEW HELPER: Check if worker (by phone) matches any pending jobs 
 // This is used when worker toggles availability, BEFORE they may have socket connected
@@ -451,6 +527,19 @@ async function offerJobToNextWorker(job) {
                 totalNearbyWorkers: currentNearbyWorkers.length,
                 bulkOffer: true,
               });
+              await logJobEvent({
+                jobId: job._id,
+                eventType: "offer_sent",
+                actorType: "system",
+                source: "system",
+                newState: { status: job.status },
+                metadata: {
+                  targetPhone: candidate.phone,
+                  bulkOffer: true,
+                  distanceKm: Math.round(realDist * 100) / 100,
+                  amount: job.amount,
+                },
+              });
             } else {
               console.log(`❌ Skipping emit to ${candidate.name} due to distance ${realDist.toFixed(2)}km (>10km)`);
             }
@@ -520,6 +609,19 @@ async function offerJobToNextWorker(job) {
             id: job._id.toString(),
             distance: Math.round(realDist * 10) / 10,
             totalNearbyWorkers: currentNearbyWorkers.length,
+          });
+          await logJobEvent({
+            jobId: job._id,
+            eventType: "offer_sent",
+            actorType: "system",
+            source: "system",
+            newState: { status: job.status },
+            metadata: {
+              targetPhone: nextWorker.phone,
+              bulkOffer: false,
+              distanceKm: Math.round(realDist * 100) / 100,
+              amount: job.amount,
+            },
           });
         } else {
           console.log(`❌ Skipping emit to ${nextWorker.name} due to distance ${realDist.toFixed(2)}km (>10km)`);
@@ -933,6 +1035,15 @@ io.on("connection", (socket) => {
           offerExpiresAt: new Date(Date.now() + 60 * 1000),
         });
         await newJob.save();
+        await logJobEvent({
+          jobId: newJob._id,
+          eventType: "job_posted",
+          actorType: "contractor",
+          actorPhone: user.phone,
+          source: "app",
+          newState: { status: newJob.status, paymentStatus: newJob.paymentStatus },
+          metadata: { title: newJob.title, amount: newJob.amount, bulkHiring: !!newJob.bulkHiring },
+        });
 
         // ✅ Set overall job expiry: expire offers after 30 minutes if no one accepts (socket job post)
         try {
@@ -947,8 +1058,17 @@ io.on("connection", (socket) => {
               if (!jobCheck) return;
               const acceptedCount = jobCheck.bulkHiring ? (jobCheck.acceptedWorkers?.length || 0) : (jobCheck.acceptedBy ? 1 : 0);
               if (jobCheck.status === 'pending' && acceptedCount === 0) {
+                const oldState = { status: jobCheck.status, paymentStatus: jobCheck.paymentStatus };
                 jobCheck.status = 'expired';
                 await jobCheck.save();
+                await logJobEvent({
+                  jobId: jobCheck._id,
+                  eventType: "job_expired",
+                  actorType: "system",
+                  source: "system",
+                  oldState,
+                  newState: { status: jobCheck.status, paymentStatus: jobCheck.paymentStatus },
+                });
                 io.emit('jobCancelled', { ...jobCheck.toObject(), _id: jobCheck._id.toString(), id: jobCheck._id.toString(), status: 'expired', expiredAt: new Date() });
                 if (pendingJobTimeouts.has(jobCheck._id.toString())) {
                   clearTimeout(pendingJobTimeouts.get(jobCheck._id.toString()));
@@ -979,8 +1099,17 @@ io.on("connection", (socket) => {
               // Expire only if still pending and no acceptances
               const acceptedCount = jobCheck.bulkHiring ? (jobCheck.acceptedWorkers?.length || 0) : (jobCheck.acceptedBy ? 1 : 0);
               if (jobCheck.status === 'pending' && acceptedCount === 0) {
+                const oldState = { status: jobCheck.status, paymentStatus: jobCheck.paymentStatus };
                 jobCheck.status = 'expired';
                 await jobCheck.save();
+                await logJobEvent({
+                  jobId: jobCheck._id,
+                  eventType: "job_expired",
+                  actorType: "system",
+                  source: "system",
+                  oldState,
+                  newState: { status: jobCheck.status, paymentStatus: jobCheck.paymentStatus },
+                });
                 io.emit('jobCancelled', { ...jobCheck.toObject(), _id: jobCheck._id.toString(), id: jobCheck._id.toString(), status: 'expired', expiredAt: new Date() });
                 // Clear any retry timeouts
                 if (pendingJobTimeouts.has(jobCheck._id.toString())) {
@@ -1075,76 +1204,14 @@ const upload = multer({
   // Increase file size limits
   limits: { fileSize: 10 * 1024 * 1024 }, // 10MB max file size
 });
+app.use("/", createOpsSupportRouter({ upload, PORT }));
+app.use(
+  "/",
+  createUsersProfileRouter({ upload, io, connectedWorkers, getPublicBaseUrl })
+);
 
 // ---------------- NEW ROUTE: UPLOAD PROFILE PHOTO ----------------
-app.post("/users/photo", authenticateToken, upload.single("photo"), async (req, res) => {
-  try {
-    if (!req.file) return res.status(400).json({ success: false, message: "No file uploaded" });
-
-    const user = await User.findOne({ phone: req.user.phone });
-    if (!user) return res.status(404).json({ success: false, message: "User not found" });
-
-    const serverURL = getPublicBaseUrl(req);
-    
-    user.profilePhoto = `${serverURL}/uploads/${req.file.filename}`;
-    await user.save();
-
-    console.log(`✅ Profile photo uploaded for ${req.user.phone}: ${user.profilePhoto}`);
-
-    // ✅ Emit socket event to notify about profile photo update
-    io.emit('profilePhotoUpdated', {
-      phone: req.user.phone,
-      profilePhoto: user.profilePhoto,
-    });
-
-    return res.json({ success: true, profilePhoto: user.profilePhoto });
-  } catch (err) {
-    console.error("Profile photo upload error", err);
-    return res.status(500).json({ success: false, message: "Internal server error" });
-  }
-});
-// ✅ UPDATE USER PROFILE - Main Skill & Expected Wage
-app.post("/users/update-profile", authenticateToken, async (req, res) => {
-  try {
-    const { mainSkill, expectedWage } = req.body;
-    
-    if (!mainSkill || !expectedWage) {
-      return res.status(400).json({ success: false, message: "Missing required fields" });
-    }
-
-    const user = await User.findOne({ phone: req.user.phone });
-    if (!user) return res.status(404).json({ success: false, message: "User not found" });
-
-    user.mainSkill = mainSkill;
-    user.expectedWage = expectedWage;
-    await user.save();
-
-    // ✅ Update connectedWorkers map if this worker is currently connected
-    for (const [socketId, worker] of connectedWorkers.entries()) {
-      if (worker.phone === req.user.phone) {
-        worker.mainSkill = mainSkill;
-        worker.expectedWage = expectedWage;
-        console.log(`✅ Updated connected worker ${req.user.phone}: mainSkill=${mainSkill}, expectedWage=${expectedWage}`);
-        break;
-      }
-    }
-
-    console.log(`✅ Profile updated for ${req.user.phone}: mainSkill=${mainSkill}, expectedWage=${expectedWage}`);
-    return res.json({ 
-      success: true, 
-      message: "Profile updated successfully",
-      user: {
-        name: user.name,
-        phone: user.phone,
-        mainSkill: user.mainSkill,
-        expectedWage: user.expectedWage,
-      }
-    });
-  } catch (err) {
-    console.error("Profile update error", err);
-    return res.status(500).json({ success: false, message: "Internal server error" });
-  }
-});
+// users photo/update routes moved to routes/usersProfile.js
 
 // ---------------- USER ROUTES ----------------
 app.post("/users/register", async (req, res) => {
@@ -1424,858 +1491,16 @@ app.post("/login", loginLimiter, async (req, res) => {
 });
 
 // ✅ POST: Request OTP for password reset
-app.post("/auth/forgot-password-request", async (req, res) => {
-  try {
-    const { phone } = req.body;
+// auth forgot-password routes moved to routes/authSupport.js
 
-    if (!phone || phone.length < 10) {
-      return res.status(400).json({ success: false, message: "Invalid phone number" });
-    }
-
-    // Check if user exists
-    const user = await User.findOne({ phone });
-    if (!user) {
-      return res.status(404).json({ success: false, message: "User not found" });
-    }
-
-    // Generate OTP
-    const otp = Math.floor(100000 + Math.random() * 900000).toString();
-    const otpExpiry = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
-
-    // Save OTP to user (temporary field)
-    user.otpCode = otp;
-    user.otpExpiry = otpExpiry;
-    await user.save();
-
-    console.log(`✅ [Forgot Password] OTP generated for ${phone}: ${otp}`);
-
-    // ✅ Send OTP via Push Notification
-    try {
-      if (user.fcmToken) {
-        await sendNotificationToUserPhone(phone, {
-          type: 'forgot_password_otp',
-          title: '🔐 Password Reset OTP',
-          body: `Your OTP is: ${otp}. Valid for 10 minutes.`,
-          data: {
-            otp: otp,
-            type: 'forgot_password',
-            actionRequired: true,
-          }
-        });
-        console.log(`📱 [Push] OTP sent to ${phone} via push notification`);
-      } else {
-        console.log(`⚠️ [Push] No FCM token for ${phone}, skipping push notification`);
-      }
-    } catch (pushErr) {
-      console.error(`❌ Failed to send OTP push notification to ${phone}:`, pushErr.message);
-      // Continue anyway - OTP is still saved in DB
-    }
-
-    return res.json({
-      success: true,
-      message: "OTP sent to your phone number",
-    });
-  } catch (err) {
-    console.error("Forgot password request error:", err);
-    return res.status(500).json({ success: false, message: "Internal server error" });
-  }
-});
-
-// ✅ POST: Verify OTP for password reset
-app.post("/auth/forgot-password-verify-otp", async (req, res) => {
-  try {
-    const { phone, otp } = req.body;
-
-    if (!phone || !otp) {
-      return res.status(400).json({ success: false, message: "Phone and OTP required" });
-    }
-
-    const user = await User.findOne({ phone });
-    if (!user) {
-      return res.status(404).json({ success: false, message: "User not found" });
-    }
-
-    // Check OTP validity
-    if (user.otpCode !== otp) {
-      return res.status(401).json({ success: false, message: "Invalid OTP" });
-    }
-
-    if (!user.otpExpiry || new Date() > user.otpExpiry) {
-      return res.status(401).json({ success: false, message: "OTP has expired" });
-    }
-
-    console.log(`✅ [Forgot Password] OTP verified for ${phone}`);
-
-    return res.json({
-      success: true,
-      message: "OTP verified successfully",
-    });
-  } catch (err) {
-    console.error("OTP verification error:", err);
-    return res.status(500).json({ success: false, message: "Internal server error" });
-  }
-});
-
-// ✅ POST: Reset password with OTP
-app.post("/auth/forgot-password-reset", async (req, res) => {
-  try {
-    const { phone, otp, newPassword } = req.body;
-
-    if (!phone || !otp || !newPassword) {
-      return res.status(400).json({ success: false, message: "All fields required" });
-    }
-
-    // Validate password strength
-    if (!newPassword || newPassword.length < 8) {
-      return res.status(400).json({ success: false, message: "Password must be at least 8 characters long" });
-    }
-    if (!/\d/.test(newPassword)) {
-      return res.status(400).json({ success: false, message: "Password must contain at least one number" });
-    }
-    if (!/[A-Z]/.test(newPassword)) {
-      return res.status(400).json({ success: false, message: "Password must contain at least one uppercase letter" });
-    }
-    if (!/[a-z]/.test(newPassword)) {
-      return res.status(400).json({ success: false, message: "Password must contain at least one lowercase letter" });
-    }
-
-    const user = await User.findOne({ phone });
-    if (!user) {
-      return res.status(404).json({ success: false, message: "User not found" });
-    }
-
-    // Verify OTP
-    if (user.otpCode !== otp) {
-      return res.status(401).json({ success: false, message: "Invalid OTP" });
-    }
-
-    if (!user.otpExpiry || new Date() > user.otpExpiry) {
-      return res.status(401).json({ success: false, message: "OTP has expired" });
-    }
-
-    // Hash new password
-    const hashedPassword = await bcrypt.hash(newPassword, 10);
-    user.password = hashedPassword;
-    user.otpCode = null; // Clear OTP
-    user.otpExpiry = null;
-    await user.save();
-
-    console.log(`✅ [Forgot Password] Password reset successfully for ${phone}`);
-
-    // ✅ Send confirmation push notification
-    try {
-      if (user.fcmToken) {
-        await sendNotificationToUserPhone(phone, {
-          type: 'password_reset_success',
-          title: '✅ Password Changed',
-          body: 'Your password has been successfully reset. You can now login with your new password.',
-          data: {
-            type: 'password_reset_success',
-            actionRequired: false,
-          }
-        });
-        console.log(`📱 [Push] Password reset confirmation sent to ${phone}`);
-      }
-    } catch (pushErr) {
-      console.error(`❌ Failed to send confirmation push notification to ${phone}:`, pushErr.message);
-      // Continue anyway - password is already reset
-    }
-
-    return res.json({
-      success: true,
-      message: "Password reset successfully. Please login with your new password.",
-    });
-  } catch (err) {
-    console.error("Password reset error:", err);
-    return res.status(500).json({ success: false, message: "Internal server error" });
-  }
-});
-
-app.get("/users", authenticateToken, async (req, res) => {
-  try {
-    const users = await User.find();
-    res.json(users);
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ message: "Failed to load users" });
-  }
-});
-
-// ✅ GET: User profile (for dashboard authentication)
-app.get("/users/profile", authenticateToken, async (req, res) => {
-  try {
-    const user = await User.findOne({ phone: req.user.phone });
-    
-    if (!user) {
-      return res.status(404).json({ success: false, message: "User not found" });
-    }
-
-    return res.json({
-      success: true,
-      user: {
-        _id: user._id,
-        name: user.name,
-        phone: user.phone,
-        role: user.role,
-        profilePhoto: user.profilePhoto,
-        city: user.city,
-        state: user.state,
-        premiumPlan: user.premiumPlan || { type: 'free' },
-        latitude: user.latitude || (user.location && user.location.coordinates ? user.location.coordinates[1] : 0),
-        longitude: user.longitude || (user.location && user.location.coordinates ? user.location.coordinates[0] : 0),
-        mainSkill: user.mainSkill || '',
-        expectedWage: user.expectedWage || '',
-      }
-    });
-  } catch (err) {
-    console.error("Profile error:", err);
-    return res.status(500).json({ success: false, message: "Internal server error" });
-  }
-});
+// users list/profile routes moved to routes/usersProfile.js
 
 // GET: Find nearby workers for contractor (uses worker's GeoJSON location)
-app.get('/workers/nearby', authenticateToken, async (req, res) => {
-  try {
-    let lat = req.query.lat ? parseFloat(req.query.lat) : null;
-    let lon = req.query.lon ? parseFloat(req.query.lon) : null;
-    const maxMeters = parseInt((req.query.max || '70000'), 10);
-    
-    // ✅ Parse filter parameters
-    const skill = req.query.skill || null;
-    const wageMin = req.query.wageMin ? parseInt(req.query.wageMin, 10) : null;
-    const wageMax = req.query.wageMax ? parseInt(req.query.wageMax, 10) : null;
+// workers nearby/request routes moved to routes/workers.js
 
-    // Validate parsed coordinates
-    if (lat === null || lon === null || isNaN(lat) || isNaN(lon)) {
-      lat = null;
-      lon = null;
-    }
+// premium/wallet/leaderboard routes moved to routes/premiumWallet.js
 
-    // If lat/lon not provided, try user's stored location
-    if ((!lat || !lon) && req.user && req.user.phone) {
-      const u = await User.findOne({ phone: req.user.phone });
-      if (u && u.location && u.location.coordinates) {
-        lon = u.location.coordinates[0];
-        lat = u.location.coordinates[1];
-        console.log(`📍 Using stored user location: [${lon?.toFixed?.(4) || lon}, ${lat?.toFixed?.(4) || lat}]`);
-      }
-    }
-
-    if (!lat || !lon) {
-      return res.status(400).json({ success: false, message: 'Latitude and longitude required' });
-    }
-
-    // ✅ DEBUG: Log input coordinates and filters
-    console.log(`🔍 /workers/nearby query: lat=${lat}, lon=${lon}, maxMeters=${maxMeters}, skill=${skill}, wageMin=${wageMin}, wageMax=${wageMax}`);
-
-    // ✅ Build MongoDB query with $near geospatial operator
-    const query = {
-      location: {
-        $near: {
-          $geometry: {
-            type: 'Point',
-            coordinates: [lon, lat]
-          },
-          $maxDistance: maxMeters || 70000  // 70km default
-        }
-      }
-    };
-
-    // ✅ Add skill filter if provided
-    if (skill && skill !== 'All Skills') {
-      query.$or = [
-        { mainSkill: skill },
-        { skills: skill }
-      ];
-    }
-
-    // ✅ DEBUG: Log the final query
-    console.log(`📋 Query filter:`, JSON.stringify(query, null, 2));
-
-    // ✅ Fetch workers with geospatial query - simpler and more efficient
-    const workers = await WorkerModel.find(query)
-      .limit(100)
-      .lean();
-
-    // ✅ Now get user profiles for all workers
-    const workerPhones = workers.map(w => w.phone);
-    const userProfiles = await User.find({ phone: { $in: workerPhones } }).lean();
-    const userMap = {};
-    userProfiles.forEach(u => {
-      userMap[u.phone] = u;
-    });
-
-    // ✅ Merge worker and user data, apply wage filter
-    const nearby = workers
-      .map(worker => {
-        const userProfile = userMap[worker.phone] || {};
-        // ✅ Use average rating from performanceMetrics, fallback to main rating field
-        const avgRating = worker.performanceMetrics?.averageRating || worker.rating || 0;
-        const totalReviews = worker.performanceMetrics?.totalReviews || 0;
-        
-        return {
-          phone: worker.phone,
-          name: userProfile.name,
-          skills: worker.skills || [],
-          mainSkill: userProfile.mainSkill || worker.mainSkill || 'Not specified',
-          expectedWage: userProfile.expectedWage || 'Negotiable',
-          rating: avgRating,
-          totalReviews: totalReviews,
-          profilePhoto: userProfile.profilePhoto || worker.profilePhoto,
-          distanceKm: worker.distanceKm || 0,
-          distanceMeters: worker.distanceMeters || 0,
-          location: worker.location,
-          isAvailable: worker.isAvailable || false,
-          createdAt: userProfile.createdAt
-        };
-      })
-      .filter(worker => {
-        // ✅ Apply wage filter after merging
-        if (wageMin !== null || wageMax !== null) {
-          const wageMatch = worker.expectedWage.match(/(\d+)/);
-          const workerWage = wageMatch ? parseInt(wageMatch[0]) : 0;
-          
-          if (wageMin !== null && workerWage < wageMin) return false;
-          if (wageMax !== null && workerWage >= wageMax) return false;
-        }
-        return true;
-      })
-      .sort((a, b) => a.distanceMeters - b.distanceMeters);  // Sort by distance
-
-    console.log(`✅ Found ${nearby.length} workers within ${maxMeters / 1000}km (skill: ${skill || 'all'}, wage: ${wageMin || '∞'}-${wageMax || '∞'})`);
-
-    return res.json({
-      success: true,
-      count: nearby.length,
-      maxDistanceMeters: maxMeters || 70000,
-      filters: {
-        skill: skill || 'All Skills',
-        wageMin: wageMin || null,
-        wageMax: wageMax || null
-      },
-      workers: nearby
-    });
-  } catch (err) {
-    console.error('❌ workers/nearby error', err);
-    return res.status(500).json({ success: false, message: 'Failed to fetch nearby workers', error: err.message });
-  }
-});
-
-// POST: Request a specific worker (sends socket event if connected)
-app.post('/workers/request', authenticateToken, async (req, res) => {
-  try {
-    const { workerPhone, message } = req.body || {};
-    if (!workerPhone) return res.status(400).json({ success: false, message: 'workerPhone required' });
-
-    const worker = await WorkerModel.findOne({ phone: workerPhone });
-    if (!worker) return res.status(404).json({ success: false, message: 'Worker not found' });
-
-    // Emit to worker if socketId present
-    if (worker.socketId) {
-      try {
-        io.to(worker.socketId).emit('workerRequested', { from: req.user.phone, message: message || '' });
-      } catch (e) {
-        console.warn('Could not emit workerRequested to socket:', e.message);
-      }
-    }
-
-    // Record notification history
-    try {
-      await NotificationHistory.create({ recipientPhone: workerPhone, phone: workerPhone, type: 'worker_request', message: `Requested by ${req.user.phone}: ${message || ''}` });
-    } catch (e) {
-      console.warn('Could not save notification history:', e.message);
-    }
-
-    // Send push notification to worker if possible
-    try {
-      const title = `Request from contractor`;
-      const body = `You have a new request from ${req.user.phone}`;
-      const payload = {
-        type: 'worker_request',
-        title,
-        body,
-        metadata: { from: req.user.phone, message: message || '' },
-      };
-      const pushRes = await sendNotificationToUserPhone(workerPhone, payload);
-      if (pushRes && pushRes.success) {
-        console.log('Push notification sent to', workerPhone);
-      } else {
-        console.log('Push not sent / no token for', workerPhone);
-      }
-    } catch (e) {
-      console.error('Error sending push for worker request:', e && e.message);
-    }
-
-    return res.json({ success: true, message: 'Request sent' });
-  } catch (err) {
-    console.error('workers/request error', err);
-    return res.status(500).json({ success: false, message: 'Failed to request worker' });
-  }
-});
-
-// ✅ POST: Subscribe to premium plan (simple)
-app.post("/premium/subscribe", authenticateToken, async (req, res) => {
-  try {
-    const { planId } = req.body;
-    const user = await User.findOne({ phone: req.user.phone });
-
-    if (!user) {
-      return res.status(404).json({ success: false, message: "User not found" });
-    }
-
-    // Plan pricing
-    const planPrice = planId === "basic" ? 399 : planId === "pro" ? 699 : 0;
-
-    if (!planPrice) {
-      return res.status(400).json({ success: false, message: "Invalid plan" });
-    }
-
-    // Check wallet balance
-    let wallet = await Wallet.findOne({ phone: req.user.phone });
-    
-    // Create wallet if it doesn't exist
-    if (!wallet) {
-      wallet = new Wallet({
-        phone: req.user.phone,
-        balance: 0,
-        transactions: [],
-      });
-      await wallet.save();
-    }
-    
-    if (wallet.balance < planPrice) {
-      return res.status(400).json({
-        success: false,
-        message: `Insufficient balance. You have ₹${wallet.balance}, but plan costs ₹${planPrice}`,
-      });
-    }
-
-    // Deduct from wallet
-    wallet.balance -= planPrice;
-    wallet.transactions.push({
-      type: "premium_subscription",
-      amount: planPrice,
-      planId: planId,
-      date: new Date(),
-    });
-    await wallet.save();
-
-    // Update user premium plan
-    const startDate = new Date();
-    const endDate = new Date(startDate.getTime() + 30 * 24 * 60 * 60 * 1000); // 30 days
-
-    user.premiumPlan = {
-      type: planId,  // 'basic' or 'pro'
-      price: planPrice,
-      startDate: startDate,
-      expiryDate: endDate,
-      autoRenew: false,
-    };
-
-    await user.save();
-
-    // Log activity
-    await ActivityLog.create({
-      userId: req.user.phone,
-      phone: req.user.phone,
-      action: "premium_subscription",
-      description: `Subscribed to ${planId} plan for ₹${planPrice}`,
-      status: "success",
-    });
-
-    // ✅ NEW: Emit socket event to notify all contractors about premium subscription
-    // This triggers frontend to refresh leaderboard immediately
-    const io = global.io;
-    if (io) {
-      io.emit('premiumSubscriptionUpdate', {
-        contractorPhone: req.user.phone,
-        contractorName: user.name,
-        planType: planId,
-        timestamp: new Date(),
-      });
-      console.log(`📤 Emitted premiumSubscriptionUpdate for contractor ${req.user.phone}`);
-    }
-
-    res.json({
-      success: true,
-      message: `Successfully subscribed to ${planId} plan`,
-      premiumPlan: user.premiumPlan,
-      newBalance: wallet.balance,
-    });
-  } catch (err) {
-    res.status(500).json({ success: false, message: "Subscription failed" });
-  }
-});
-
-// ✅ GET: Check user premium status
-app.get("/premium/status", authenticateToken, async (req, res) => {
-  try {
-    const user = await User.findOne({ phone: req.user.phone });
-
-    if (!user) {
-      return res.status(404).json({ success: false, message: "User not found" });
-    }
-
-    // Check if premium is still active
-    const now = new Date();
-    const isActive = user.premiumPlan?.expiryDate && user.premiumPlan.expiryDate > now;
-
-    res.json({
-      success: true,
-      premiumPlan: user.premiumPlan?.type || "free",
-      isActive: isActive,
-      premiumDetails: user.premiumPlan,
-    });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ success: false, message: "Failed to check status" });
-  }
-});
-
-// ✅ POST: Cancel premium plan
-app.post("/premium/cancel", authenticateToken, async (req, res) => {
-  try {
-    const user = await User.findOne({ phone: req.user.phone });
-
-    if (!user) {
-      return res.status(404).json({ success: false, message: "User not found" });
-    }
-
-    user.premiumPlan = {
-      type: "free",
-      price: 0,
-      startDate: null,
-      expiryDate: null,
-      autoRenew: false,
-    };
-
-    await user.save();
-
-    await ActivityLog.create({
-      userId: req.user.phone,
-      phone: req.user.phone,
-      action: "premium_cancelled",
-      description: "Premium plan cancelled",
-      status: "success",
-    });
-
-    res.json({
-      success: true,
-      message: "Premium plan cancelled",
-    });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ success: false, message: "Failed to cancel plan" });
-  }
-});
-
-// ✅ GET: Get wallet balance
-app.get("/wallet/balance", authenticateToken, async (req, res) => {
-  try {
-    let wallet = await Wallet.findOne({ phone: req.user.phone });
-    
-    if (!wallet) {
-      wallet = new Wallet({
-        phone: req.user.phone,
-        balance: 0,
-        transactions: [],
-      });
-      await wallet.save();
-    }
-
-    res.json({
-      success: true,
-      balance: wallet.balance,
-    });
-  } catch (err) {
-    res.status(500).json({ success: false, message: "Failed to get balance" });
-  }
-});
-
-// ✅ GET transactions for contractor
-app.get("/wallet/transactions", authenticateToken, async (req, res) => {
-  try {
-    let wallet = await Wallet.findOne({ phone: req.user.phone });
-    
-    if (!wallet) {
-      return res.json({ success: true, transactions: [] });
-    }
-    
-    // Sort transactions by date (most recent first)
-    const sortedTransactions = wallet.transactions.sort((a, b) => new Date(b.date) - new Date(a.date));
-    
-    // Format transactions for frontend
-    const formattedTransactions = sortedTransactions.map((t) => {
-      const transactionDate = new Date(t.date);
-      
-      // Explicit date formatting
-      const day = String(transactionDate.getDate()).padStart(2, '0');
-      const month = String(transactionDate.getMonth() + 1).padStart(2, '0');
-      const year = transactionDate.getFullYear();
-      const dateStr = `${day}/${month}/${year}`;
-      
-      // Explicit time formatting
-      let hours = transactionDate.getHours();
-      const minutes = String(transactionDate.getMinutes()).padStart(2, '0');
-      const seconds = String(transactionDate.getSeconds()).padStart(2, '0');
-      const ampm = hours >= 12 ? 'PM' : 'AM';
-      hours = hours % 12;
-      hours = hours ? hours : 12; // the hour '0' should be '12'
-      const hoursStr = String(hours).padStart(2, '0');
-      const timeStr = `${hoursStr}:${minutes}:${seconds} ${ampm}`;
-      
-      return {
-        id: t._id,
-        type: t.type === "deposit" || t.type === "credit" ? "credit" : t.type === "refund" ? "refund" : "debit",
-        description: t.description || `${t.type.charAt(0).toUpperCase() + t.type.slice(1)}`,
-        amount: t.amount,
-        date: `${dateStr} ${timeStr}`,
-        status: "completed",
-      };
-    });
-    
-    res.json({ success: true, transactions: formattedTransactions });
-  } catch (err) {
-    console.error('Transactions fetch error:', err);
-    res.status(500).json({ success: false, message: "Error fetching transactions" });
-  }
-});
-
-// ✅ GET: Get premium plans list
-app.get("/premium/plans", async (req, res) => {
-  try {
-    const plans = [
-      {
-        id: "basic",
-        name: "Basic",
-        price: 399,
-        features: [
-          "🔥 Bulk Hiring",
-          "⚡ 24/7 Instant",
-          "📊 Leaderboard",
-        ],
-        popular: false,
-      },
-      {
-        id: "pro",
-        name: "Pro",
-        price: 699,
-        features: [
-          "🔥 Bulk Hiring",
-          "⚡ 24/7 Instant",
-          "📊 Leaderboard",
-          "✨ Custom Add-ons",
-        ],
-        popular: true,
-      },
-    ];
-    res.json({ success: true, plans });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ success: false, message: "Failed to load plans" });
-  }
-});
-
-// ✅ POST: Add custom add-ons to premium plan (future)
-app.post("/premium/add-ons", authenticateToken, async (req, res) => {
-  try {
-    const { addOns } = req.body;
-    const user = await User.findOne({ phone: req.user.phone });
-
-    if (!user || user.premiumPlan?.type === "free") {
-      return res.status(400).json({
-        success: false,
-        message: "Must have active premium plan to add custom add-ons",
-      });
-    }
-
-    // For now, just return success (implementation for future)
-    res.json({
-      success: true,
-      message: "Custom add-ons feature coming soon",
-    });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ success: false, message: "Failed to add custom add-ons" });
-  }
-});
-
-// ✅ GET: Leaderboard for premium users (top ranked by points) - PUBLIC
-app.get("/leaderboard", async (req, res) => {
-  try {
-    const { limit = 10 } = req.query;
-    
-    // Fetch top users by points (exclude current user if authenticated)
-    const filter = { 
-      role: 'contractor',
-      points: { $gt: 0 }
-    };
-    
-    // If authenticated, exclude current user
-    if (req.user?.phone) {
-      filter.phone = { $ne: req.user.phone };
-    }
-    
-    const topUsers = await User.find(filter)
-      .select('name phone profilePhoto points')
-      .sort({ points: -1 })
-      .limit(parseInt(limit));
-
-    res.json({
-      success: true,
-      leaderboard: topUsers.map(user => ({
-        _id: user._id,
-        phone: user.phone,
-        name: user.name,
-        profilePhoto: user.profilePhoto,
-        points: user.points || 0
-      }))
-    });
-  } catch (err) {
-    console.error('Leaderboard fetch error:', err);
-    res.status(500).json({ success: false, message: "Failed to fetch leaderboard" });
-  }
-});
-
-// ===== OTP & AUTH ROUTES =====
-const { sendOtp } = require('./utils/sendOtp'); // ✅ Import Firebase OTP service
-
-// Request OTP - sends via Firebase Push or Console (for testing)
-app.post('/auth/request-otp', async (req, res) => {
-  try {
-    const { phone, name, role, fcmToken } = req.body;
-    
-    console.log('\n🔐 OTP Request Endpoint Hit');
-    console.log('  - Phone:', phone);
-    console.log('  - Name:', name);
-    console.log('  - Role:', role);
-    console.log('  - FCM Token provided:', !!fcmToken);
-    if (fcmToken) {
-      console.log('  - Token length:', fcmToken.length);
-      console.log('  - Token preview:', fcmToken.substring(0, 50) + '...');
-    }
-
-    if (!phone) return res.status(400).json({ success: false, message: 'Phone is required' });
-
-    let user = await User.findOne({ phone });
-    if (!user) {
-      console.log('  - Creating new user...');
-      user = new User({ phone, name: name || 'Unknown', role: role || 'worker' });
-    } else {
-      console.log('  - User found, updating...');
-    }
-
-    // Store FCM token for push notifications
-    if (fcmToken) {
-      user.fcmToken = fcmToken;
-      console.log('  - FCM Token stored in user document');
-    } else {
-      console.log('  - ⚠️ No FCM Token to store');
-    }
-
-    await user.save();
-    console.log('  - User saved to database');
-
-    // Generate and send OTP. Prefer FCM token from request, fall back to stored token.
-    console.log('  - Calling sendOtp()...');
-    const tokenToUse = fcmToken || user.fcmToken || null;
-    const otpResult = await sendOtp(phone, tokenToUse);
-    
-    if (otpResult.success) {
-      // Store OTP in database for verification
-      user.otpCode = otpResult.otp;
-      user.otpExpiry = new Date(Date.now() + 1000 * 60 * 5); // 5 minutes
-      await user.save();
-
-      console.log('  - OTP stored in database');
-      console.log('  - Response method:', otpResult.method);
-
-      const method = fcmToken ? 'push notification' : 'console (dev-mode)';
-      return res.json({ success: true, message: `OTP sent via ${method}`, method: otpResult.method });
-    } else {
-      console.error('  - ❌ OTP sending failed:', otpResult.message);
-      return res.status(400).json({ success: false, message: otpResult.message });
-    }
-  } catch (err) {
-    console.error('❌ Request OTP error', err);
-    return res.status(500).json({ success: false, message: 'Internal server error' });
-  }
-});
-
-// Verify OTP and issue tokens
-app.post('/auth/verify-otp', async (req, res) => {
-  try {
-    const { phone, otp } = req.body;
-    if (!phone || !otp) return res.status(400).json({ success: false, message: 'Phone and OTP required' });
-
-    const user = await User.findOne({ phone });
-    if (!user) return res.status(404).json({ success: false, message: 'User not found' });
-
-    // Verify OTP from database (simple comparison)
-    if (!user.otpCode || !user.otpExpiry || new Date() > user.otpExpiry || user.otpCode !== otp) {
-      return res.status(400).json({ success: false, message: 'Invalid or expired OTP' });
-    }
-
-    user.phoneVerified = true;
-    user.phoneVerifiedAt = new Date();
-    user.otpCode = null;
-    user.otpExpiry = null;
-
-    // Issue tokens
-    const accessToken = jwt.sign({ name: user.name, phone: user.phone, role: user.role }, JWT_SECRET, { expiresIn: '1h' });
-    const refreshToken = require('crypto').randomBytes(40).toString('hex');
-    const expiresAt = new Date(Date.now() + 1000 * 60 * 60 * 24 * 30); // 30 days
-    user.refreshTokens.push({ token: refreshToken, issuedAt: new Date(), expiresAt, deviceInfo: req.headers['user-agent'] || 'unknown' });
-
-    await user.save();
-
-    return res.json({ success: true, user: { name: user.name, phone: user.phone, role: user.role }, accessToken, refreshToken });
-  } catch (err) {
-    console.error('Verify OTP error', err);
-    return res.status(500).json({ success: false, message: 'Internal server error' });
-  }
-});
-
-// Refresh access token
-app.post('/auth/refresh', async (req, res) => {
-  try {
-    const { refreshToken } = req.body;
-    if (!refreshToken) return res.status(400).json({ success: false, message: 'refreshToken required' });
-
-    const user = await User.findOne({ 'refreshTokens.token': refreshToken });
-    if (!user) return res.status(401).json({ success: false, message: 'Invalid refresh token' });
-
-    const entry = user.refreshTokens.find(r => r.token === refreshToken);
-    if (!entry || new Date() > new Date(entry.expiresAt)) {
-      return res.status(401).json({ success: false, message: 'Refresh token expired' });
-    }
-
-    const accessToken = jwt.sign({ name: user.name, phone: user.phone, role: user.role }, JWT_SECRET, { expiresIn: '1h' });
-    return res.json({ success: true, accessToken });
-  } catch (err) {
-    console.error('Refresh token error', err);
-    return res.status(500).json({ success: false, message: 'Internal server error' });
-  }
-});
-
-// Logout - revoke refresh token
-app.post('/auth/logout', async (req, res) => {
-  try {
-    const { refreshToken } = req.body;
-    if (!refreshToken) return res.status(400).json({ success: false, message: 'refreshToken required' });
-
-    const user = await User.findOne({ 'refreshTokens.token': refreshToken });
-    if (!user) return res.json({ success: true }); // already revoked
-
-    user.refreshTokens = user.refreshTokens.filter(r => r.token !== refreshToken);
-    await user.save();
-    return res.json({ success: true });
-  } catch (err) {
-    console.error('Logout error', err);
-    return res.status(500).json({ success: false, message: 'Internal server error' });
-  }
-});
-
+// OTP/auth support routes moved to routes/authSupport.js
 
 // ---------------- JOB ROUTES ----------------
 // ✅ UPLOAD JOB IMAGE
@@ -2361,6 +1586,61 @@ app.post("/jobs/post", authenticateToken, async (req, res) => {
       offerExpiresAt: new Date(Date.now() + 60 * 1000),
     });
     await newJob.save();
+    await logJobEvent({
+      jobId: newJob._id,
+      eventType: "job_posted",
+      actorType: "contractor",
+      actorPhone: req.user.phone,
+      source: "app",
+      newState: { status: newJob.status, paymentStatus: newJob.paymentStatus },
+      metadata: { title: newJob.title, amount: newJob.amount, bulkHiring: !!newJob.bulkHiring },
+    });
+
+    // Expire job if still unaccepted after configured window
+    try {
+      const EXPIRE_MS = (process.env.JOB_EXPIRE_MINUTES ? Number(process.env.JOB_EXPIRE_MINUTES) : 30) * 60 * 1000;
+      if (pendingJobExpirations.has(newJob._id.toString())) {
+        clearTimeout(pendingJobExpirations.get(newJob._id.toString()));
+        pendingJobExpirations.delete(newJob._id.toString());
+      }
+      const expireId = setTimeout(async () => {
+        try {
+          const jobCheck = await Job.findById(newJob._id);
+          if (!jobCheck) return;
+          const acceptedCount = jobCheck.bulkHiring ? (jobCheck.acceptedWorkers?.length || 0) : (jobCheck.acceptedBy ? 1 : 0);
+          if (jobCheck.status === "pending" && acceptedCount === 0) {
+            const oldState = { status: jobCheck.status, paymentStatus: jobCheck.paymentStatus };
+            jobCheck.status = "expired";
+            await jobCheck.save();
+            await logJobEvent({
+              jobId: jobCheck._id,
+              eventType: "job_expired",
+              actorType: "system",
+              source: "system",
+              oldState,
+              newState: { status: jobCheck.status, paymentStatus: jobCheck.paymentStatus },
+            });
+            io.emit("jobCancelled", {
+              ...jobCheck.toObject(),
+              _id: jobCheck._id.toString(),
+              id: jobCheck._id.toString(),
+              status: "expired",
+              expiredAt: new Date(),
+            });
+            if (pendingJobTimeouts.has(jobCheck._id.toString())) {
+              clearTimeout(pendingJobTimeouts.get(jobCheck._id.toString()));
+              pendingJobTimeouts.delete(jobCheck._id.toString());
+            }
+            pendingJobExpirations.delete(jobCheck._id.toString());
+          }
+        } catch (e) {
+          console.error("Error expiring HTTP posted job:", e);
+        }
+      }, EXPIRE_MS);
+      pendingJobExpirations.set(newJob._id.toString(), expireId);
+    } catch (e) {
+      console.error("Error scheduling HTTP job expiry:", e);
+    }
 
     // ✅ Update contractor's current location when posting job
     // This keeps contractor location fresh and accurate for job prioritization
@@ -2492,6 +1772,16 @@ app.post("/jobs/accept/:id", authenticateToken, async (req, res) => {
       }
 
       const job = updated; // Use the updated job document
+      await logJobEvent({
+        jobId: job._id,
+        eventType: "job_accepted",
+        actorType: "worker",
+        actorPhone: workerPhone,
+        source: "app",
+        oldState: { status: job.status },
+        newState: { status: job.status },
+        metadata: { bulkHiring: true, acceptedCount: job.acceptedWorkers?.length || 0, requiredWorkers: job.requiredWorkers || 1 },
+      });
 
       // Track acceptance
       try {
@@ -2525,6 +1815,16 @@ app.post("/jobs/accept/:id", authenticateToken, async (req, res) => {
           { new: true }
         );
         if (finalized) {
+          await logJobEvent({
+            jobId: finalized._id,
+            eventType: "job_accepted",
+            actorType: "system",
+            actorPhone: workerPhone,
+            source: "app",
+            oldState: { status: job.status },
+            newState: { status: finalized.status, acceptedBy: finalized.acceptedBy },
+            metadata: { bulkHiring: true, finalized: true, acceptedCount, requiredCount },
+          });
           console.log(`✅ Bulk job ${jobId} FINALIZED with ${acceptedCount} workers`);
           // Clean up timeouts
           if (pendingJobTimeouts.has(jobId)) {
@@ -2576,6 +1876,16 @@ app.post("/jobs/accept/:id", authenticateToken, async (req, res) => {
     }
 
     console.log(`✅ Job accepted successfully by ${workerName} (phone: ${workerPhone})`);
+    await logJobEvent({
+      jobId: updated._id,
+      eventType: "job_accepted",
+      actorType: "worker",
+      actorPhone: workerPhone,
+      source: "app",
+      oldState: { status: "pending" },
+      newState: { status: updated.status, acceptedBy: updated.acceptedBy },
+      metadata: { bulkHiring: false },
+    });
 
     // ✅ TRACK: Update gigs data on job acceptance
     try {
@@ -2784,6 +2094,18 @@ app.post("/jobs/decline/:id", authenticateToken, async (req, res) => {
     }
     
     await job.save();
+    await logJobEvent({
+      jobId: job._id,
+      eventType: "job_rejected",
+      actorType: "worker",
+      actorPhone: workerPhone,
+      source: "app",
+      oldState: { status: job.status },
+      newState: { status: job.status },
+      reasonCode: "worker_declined",
+      reasonText: "Worker declined job offer",
+      metadata: { declinedBy: workerName, bulkHiring: !!job.bulkHiring },
+    });
 
     console.log(`✅ Job declined successfully by ${workerName}`);
     // Targeted: notify contractor and declining worker only
@@ -2985,1519 +2307,7 @@ app.get("/jobs/by-id/:id", authenticateToken, async (req, res) => {
   }
 });
 
-// ✅ GET worker details by phone - return full worker info with ID and profile photo
-app.get("/worker/:phone", authenticateToken, async (req, res, next) => {
-  try {
-    const workerPhone = req.params.phone;
-    // Let the dedicated /worker/profile route handle this exact path.
-    if (workerPhone === "profile") {
-      return next();
-    }
-    console.log(`📋 Fetching worker details for phone: ${workerPhone}`);
-    
-    const worker = await WorkerModel.findOne({ phone: workerPhone });
-    if (!worker) {
-      console.log(`❌ Worker not found for phone: ${workerPhone}`);
-      return res.status(404).json({ success: false, message: "Worker not found" });
-    }
 
-    // Also get profile photo from User model
-    const user = await User.findOne({ phone: workerPhone });
-    
-    console.log(`✅ Found worker ${workerPhone}, profilePhoto: ${user?.profilePhoto || 'null'}, location: ${JSON.stringify(worker.location)}`);
-    
-    // Return worker data with location, ID, and profile photo
-    res.json({
-      id: worker._id.toString(),
-      phone: worker.phone,
-      location: worker.location || null,
-      isAvailable: worker.isAvailable || false,
-      profilePhoto: user?.profilePhoto || null,
-      skills: worker.skills || [],
-    });
-  } catch (err) {
-    console.error("Failed to fetch worker details", err);
-    res.status(500).json({ success: false, message: "Failed to fetch worker details" });
-  }
-});
-
-// ✅ GET worker profile with performance metrics and average rating
-app.get("/worker/profile", authenticateToken, async (req, res) => {
-  try {
-    const workerPhone = req.user?.phone;
-    if (!workerPhone) {
-      return res.status(400).json({ success: false, message: "User phone not found in token" });
-    }
-
-    console.log(`📋 Fetching worker profile for phone: ${workerPhone}`);
-    
-    const worker = await WorkerModel.findOne({ phone: workerPhone });
-    if (!worker) {
-      return res.status(404).json({ success: false, message: "Worker not found" });
-    }
-
-    // Get user profile data
-    const user = await User.findOne({ phone: workerPhone });
-    
-    console.log(`✅ Worker profile fetched: ${workerPhone}, Average Rating: ${worker.performanceMetrics?.averageRating}/5 (${worker.performanceMetrics?.totalReviews} reviews)`);
-    
-    res.json({
-      success: true,
-      worker: {
-        phone: worker.phone,
-        name: user?.name || 'Unknown',
-        profilePhoto: user?.profilePhoto,
-        skills: worker.skills || [],
-        mainSkill: user?.mainSkill || worker.mainSkill,
-        expectedWage: user?.expectedWage || 'Negotiable',
-        isAvailable: worker.isAvailable || false,
-        rating: worker.rating || 0,
-        performanceMetrics: {
-          averageRating: worker.performanceMetrics?.averageRating || 0,
-          totalReviews: worker.performanceMetrics?.totalReviews || 0,
-          completionRate: worker.performanceMetrics?.completionRate || 0,
-          cancellationRate: worker.performanceMetrics?.cancellationRate || 0,
-          averageEarningsPerGig: worker.performanceMetrics?.averageEarningsPerGig || 0,
-        },
-        gigsData: {
-          totalGigsCompleted: worker.gigsData?.totalGigsCompleted || 0,
-          totalEarnings: worker.gigsData?.totalEarnings || 0,
-          consecutiveDays: worker.gigsData?.consecutiveDays || 0,
-        }
-      }
-    });
-  } catch (err) {
-    console.error("Failed to fetch worker profile", err);
-    res.status(500).json({ success: false, message: "Failed to fetch worker profile" });
-  }
-});
-
-// ---------------- ATTENDANCE & PAYMENT ----------------
-app.post("/jobs/attendance/:id", authenticateToken, async (req, res) => {
-  try {
-    const jobId = req.params.id;
-    const { status } = req.body;
-
-    const job = await Job.findById(jobId);
-    if (!job) return res.status(404).json({ message: "Job not found" });
-
-    job.attendanceStatus = status;
-    job.attendanceTime = new Date();
-    await job.save();
-
-    // Stop tracking location for this job when attendance is set
-    try {
-      if (trackingJobs.has(jobId)) trackingJobs.delete(jobId);
-    } catch (e) {
-      console.error("Error clearing tracking for job on attendance:", e);
-    }
-
-    // Targeted: notify contractor and accepted worker about attendance change
-    await emitJobUpdatedToUsers(job, [job.contractorName, job.acceptedBy || job.contractorName]);
-    return res.json({ success: true, job });
-  } catch (err) {
-    console.error(err);
-    return res.status(500).json({ success: false, message: "Internal server error" });
-  }
-});
-
-app.post("/jobs/pay/:id", authenticateToken, async (req, res) => {
-  try {
-    const jobId = req.params.id;
-    const { mode } = req.body;
-
-    const job = await Job.findById(jobId);
-    if (!job) return res.status(404).json({ message: "Job not found" });
-
-    if (job.attendanceStatus !== "Present") {
-      return res.status(400).json({ success: false, message: "Payment allowed only for PRESENT workers" });
-    }
-
-    job.paymentStatus = "Paid";
-    job.paymentMode = mode;
-    job.paymentTime = new Date();
-    
-    // Calculate time spent from acceptance to payment
-    if (job.acceptedAt) {
-      const timeSpentMs = job.paymentTime - job.acceptedAt;
-      job.timeSpentMinutes = Math.round(timeSpentMs / 60000); // Convert milliseconds to minutes
-    }
-    
-    await job.save();
-
-    // ✅ RECORD WORK for milestones: convert minutes -> hours
-    try {
-      if (job.acceptedBy) {
-        const worker = await WorkerModel.findOne({ phone: job.acceptedBy });
-        if (worker && typeof worker.recordWork === 'function') {
-          const hoursWorked = (job.timeSpentMinutes || 0) / 60;
-          worker.recordWork(job.paymentTime || new Date(), hoursWorked, false);
-          await worker.save();
-          console.log(`📈 Recorded work for ${job.acceptedBy}: ${hoursWorked.toFixed(2)} hours`);
-        }
-      }
-    } catch (recErr) {
-      console.error('Error recording worker work on payment:', recErr);
-    }
-
-    // ✅ CREATE NOTIFICATION FOR WORKER - PAYMENT SENT (only to the accepted worker)
-    try {
-      if (job.acceptedWorker && job.acceptedWorker.phone) {
-        await NotificationHistory.create({
-          recipientPhone: job.acceptedWorker.phone,
-          senderPhone: req.user.phone,
-          senderName: req.user.name || job.contractorName || 'Contractor',
-          type: 'payment_received',
-          title: `Payment Received: ₹${job.amount}`,
-          body: `Payment for ${job.title} has been transferred to your wallet`,
-          jobId: job._id.toString(),
-          metadata: {
-            jobTitle: job.title,
-            amount: job.amount,
-            actionRequired: false
-          },
-          deepLink: `worker/wallet`,
-          pushNotificationSent: false,
-        });
-        console.log(`📬 Payment notification sent to worker ${job.acceptedWorker.name}`);
-      }
-    } catch (e) {
-      console.error('Error creating payment notification:', e);
-    }
-
-    // ✅ ADD PAYMENT TRANSACTION TO WORKER'S WALLET
-    try {
-      let workerWallet = await Wallet.findOne({ phone: job.acceptedBy });
-      if (!workerWallet) {
-        workerWallet = new Wallet({ phone: job.acceptedBy, balance: 0 });
-      }
-      
-      const oldBalance = workerWallet.balance;
-      // Add payment transaction
-      workerWallet.balance += Number(job.amount);
-      workerWallet.transactions.push({
-        type: "payment",
-        amount: Number(job.amount),
-        date: new Date(),
-      });
-      
-      await workerWallet.save();
-      console.log(`💰 Added ₹${job.amount} to worker ${job.acceptedBy}'s wallet. Balance: ₹${oldBalance} → ₹${workerWallet.balance}`);
-    } catch (walletErr) {
-      console.error('❌ Error updating worker wallet after payment:', walletErr);
-    }
-
-    // ✅ AUTO-UPDATE CONTRACTOR STATS AFTER PAYMENT
-    await updateContractorStats(req.user.phone);
-
-    // ✅ TRACK: Update gigs data on job completion
-    try {
-      await updateGigDataOnCompletion(job.acceptedBy, {
-        jobId: job._id.toString(),
-        title: job.title,
-        amount: job.amount,
-        workerType: job.workerType,
-        timeSpentMinutes: job.timeSpentMinutes || 0
-      });
-      console.log(`✅ Gigs data updated for completion by ${job.acceptedBy}`);
-    } catch (e) {
-      console.error("❌ Error updating gigs data on completion:", e);
-      // Don't fail the request if tracking fails
-    }
-
-    // Targeted: notify contractor and worker about payment
-    await emitJobUpdatedToUsers(job, [job.contractorName, job.acceptedBy || job.contractorName]);
-    return res.json({ success: true, message: "Payment successful", job });
-  } catch (err) {
-    console.error(err);
-    return res.status(500).json({ success: false, message: "Internal server error" });
-  }
-});
-
-// -------- WORKER INCENTIVE DATA ENDPOINT --------
-app.get("/worker/incentive-data", authenticateToken, async (req, res) => {
-  try {
-    const workerPhone = req.user.phone;
-    console.log(`📊 Fetching incentive data for worker: ${workerPhone}`);
-
-    const gigsData = await getWorkerGigsSummary(workerPhone);
-    
-    if (!gigsData) {
-      return res.status(404).json({ 
-        success: false, 
-        message: "Worker not found or no gigs data available" 
-      });
-    }
-
-    return res.json({ 
-      success: true, 
-      data: gigsData 
-    });
-  } catch (err) {
-    console.error("❌ Error fetching incentive data:", err);
-    return res.status(500).json({ 
-      success: false, 
-      message: "Error fetching incentive data" 
-    });
-  }
-});
-
-// -------- RATING ENDPOINT --------
-app.post("/jobs/rate/:id", authenticateToken, async (req, res) => {
-  try {
-    const jobId = req.params.id;
-    const { stars, feedback } = req.body;
-
-    console.log(`⭐ Rating request: Job ${jobId}, Stars: ${stars}, Feedback: ${feedback}`);
-
-    // Validate rating input
-    if (!stars || stars < 1 || stars > 5) {
-      return res.status(400).json({ message: "Rating must be between 1 and 5 stars" });
-    }
-
-    const job = await Job.findById(jobId); // ✅ Fixed: Use MongoDB _id
-    if (!job) return res.status(404).json({ message: "Job not found" });
-
-    // Only allow rating if job is paid
-    if (job.paymentStatus !== "Paid") {
-      return res.status(400).json({ message: "Can only rate jobs that have been paid" });
-    }
-
-    // Only allow rating if worker was marked present
-    if (job.attendanceStatus !== "Present") {
-      return res.status(400).json({ message: "Can only rate workers marked as Present" });
-    }
-
-    // Store rating in job
-    job.rating = {
-      stars: parseInt(stars),
-      feedback: feedback || "",
-      ratedAt: new Date(),
-      ratedBy: req.user.phone || job.contractorName,
-    };
-
-    await job.save();
-    
-    // ✅ Reload job from DB to ensure rating is persisted
-    const updatedJob = await Job.findById(jobId);
-    console.log(`✅ Rating saved for job ${jobId}:`, updatedJob?.rating);
-    
-    // ✅ UPDATE WORKER AVERAGE RATING
-    // Calculate average rating from all paid & rated jobs for this worker
-    try {
-      if (job.acceptedWorker && job.acceptedWorker.phone) {
-        const workerPhone = job.acceptedWorker.phone;
-        
-        // Find all paid jobs where this worker was rated
-        const ratedJobs = await Job.find({
-          $or: [
-            { 'acceptedWorker.phone': workerPhone },
-            { acceptedBy: workerPhone }
-          ],
-          paymentStatus: 'Paid',
-          'rating.stars': { $exists: true, $ne: null }
-        });
-
-        if (ratedJobs.length > 0) {
-          // Calculate average of all ratings
-          const totalStars = ratedJobs.reduce((sum, j) => sum + (j.rating?.stars || 0), 0);
-          const averageRating = totalStars / ratedJobs.length;
-
-          // Update worker's performance metrics
-          const worker = await WorkerModel.findOneAndUpdate(
-            { phone: workerPhone },
-            {
-              $set: {
-                'performanceMetrics.averageRating': Math.round(averageRating * 10) / 10, // ✅ Round to 1 decimal
-                'performanceMetrics.totalReviews': ratedJobs.length,
-                rating: Math.round(averageRating * 10) / 10, // ✅ Also update main rating field
-              }
-            },
-            { new: true }
-          );
-
-          console.log(`✅ Updated worker ${workerPhone} rating: ${worker?.performanceMetrics.averageRating}/5 (${ratedJobs.length} reviews)`);
-        }
-      }
-    } catch (err) {
-      console.error('Error updating worker average rating:', err);
-      // Don't fail the request if rating update fails
-    }
-    
-    // ✅ CREATE NOTIFICATION FOR WORKER - RATING RECEIVED (only to the accepted worker)
-    try {
-      if (job.acceptedWorker && job.acceptedWorker.phone) {
-        const ratingText = `${stars} star${stars > 1 ? 's' : ''}`;
-        await NotificationHistory.create({
-          recipientPhone: job.acceptedWorker.phone,
-          senderPhone: req.user.phone,
-          senderName: req.user.name || job.contractorName || 'Contractor',
-          type: 'rating_received',
-          title: `Rating Received: ${ratingText}`,
-          body: feedback || `You received a ${ratingText} rating for ${job.title}`,
-          jobId: job._id.toString(),
-          metadata: {
-            rating: stars,
-            jobTitle: job.title,
-            actionRequired: false
-          },
-          deepLink: `worker/profile`,
-          pushNotificationSent: false,
-        });
-        console.log(`📬 Rating notification sent to worker ${job.acceptedWorker.name}`);
-      }
-    } catch (e) {
-      console.error('Error creating rating notification:', e);
-    }
-
-    // Targeted: notify contractor and worker about rating
-    await emitJobUpdatedToUsers(updatedJob || job, [job.contractorName, job.acceptedBy || job.contractorName]);
-    console.log(`📤 Sent targeted jobUpdated event with rating`);
-    return res.json({ 
-      success: true, 
-      message: "Rating submitted successfully", 
-      job 
-    });
-  } catch (err) {
-    console.error(err);
-    return res.status(500).json({ success: false, message: "Internal server error" });
-  }
-});
-
-// ---------------- WALLET ROUTES ----------------
-// Legacy duplicate wallet routes are intentionally disabled.
-// Use mounted router from ./routes/wallet.js only.
-/*
-app.get("/wallet", authenticateToken, async (req, res) => {
-  try {
-    let wallet = await Wallet.findOne({ phone: req.user.phone });
-    
-    // Auto-create if missing
-    if (!wallet) {
-      wallet = new Wallet({ phone: req.user.phone });
-      await wallet.save();
-      console.log(`✅ Auto-created wallet for ${req.user.phone} on GET /wallet`);
-    }
-
-    return res.json({ success: true, wallet });
-  } catch (err) {
-    console.error(err);
-    return res.status(500).json({ success: false, message: "Internal server error" });
-  }
-});
-
-// SECURITY NOTE: Disabled because it credits wallet without provider verification.
-app.post("/wallet/deposit", authenticateToken, async (req, res) => {
-  try {
-    const { amount } = req.body;
-    if (!amount || amount <= 0) return res.status(400).json({ success: false, message: "Invalid amount" });
-
-    let wallet = await Wallet.findOne({ phone: req.user.phone });
-    // Auto-create if missing
-    if (!wallet) {
-      wallet = new Wallet({ phone: req.user.phone });
-      await wallet.save();
-      console.log(`✅ Auto-created wallet for ${req.user.phone} on DEPOSIT`);
-    }
-
-    wallet.balance += Number(amount);
-    wallet.transactions.push({ type: "deposit", amount, date: new Date() });
-    await wallet.save();
-
-    return res.json({ success: true, wallet, message: "Deposit successful" });
-  } catch (err) {
-    console.error(err);
-    return res.status(500).json({ success: false, message: "Internal server error" });
-  }
-});
-
-app.post("/wallet/withdraw", authenticateToken, async (req, res) => {
-  try {
-    const { amount } = req.body;
-    if (!amount || amount <= 0) return res.status(400).json({ success: false, message: "Invalid amount" });
-
-    let wallet = await Wallet.findOne({ phone: req.user.phone });
-    // Auto-create if missing
-    if (!wallet) {
-      wallet = new Wallet({ phone: req.user.phone });
-      await wallet.save();
-      console.log(`✅ Auto-created wallet for ${req.user.phone} on WITHDRAW`);
-    }
-    if (wallet.balance < amount) return res.status(400).json({ success: false, message: "Insufficient balance" });
-
-    wallet.balance -= Number(amount);
-    wallet.transactions.push({ type: "withdraw", amount, date: new Date() });
-    await wallet.save();
-
-    return res.json({ success: true, wallet, message: "Withdrawal successful" });
-  } catch (err) {
-    console.error(err);
-    return res.status(500).json({ success: false, message: "Internal server error" });
-  }
-});
-*/
-
-// ----------------CONTRACTOR STATS ----------------
-// Save/Update contractor daily stats (called after job completion or manually)
-app.post('/contractor/stats/save', authenticateToken, async (req, res) => {
-  try {
-    const { phone } = req.user;
-    const { jobsPosted, jobsCompleted, workersEngaged, totalSpending, jobDetails, workersList } = req.body;
-
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-
-    let stats = await ContractorStats.findOne({ phone, date: today });
-
-    if (stats) {
-      // Update existing stats
-      stats.jobsPosted = jobsPosted || stats.jobsPosted;
-      stats.jobsCompleted = jobsCompleted || stats.jobsCompleted;
-      stats.workersEngaged = workersEngaged || stats.workersEngaged;
-      stats.totalSpending = totalSpending || stats.totalSpending;
-      if (jobDetails) stats.jobDetails = jobDetails;
-      if (workersList) stats.workersList = workersList;
-      stats.updatedAt = new Date();
-    } else {
-      // Create new stats entry
-      stats = new ContractorStats({
-        phone,
-        date: today,
-        jobsPosted: jobsPosted || 0,
-        jobsCompleted: jobsCompleted || 0,
-        workersEngaged: workersEngaged || 0,
-        totalSpending: totalSpending || 0,
-        jobDetails: jobDetails || [],
-        workersList: workersList || [],
-      });
-    }
-
-    await stats.save();
-    return res.json({ success: true, stats, message: 'Stats saved successfully' });
-  } catch (err) {
-    console.error('Save stats error', err);
-    return res.status(500).json({ success: false, message: 'Internal server error' });
-  }
-});
-
-// Fetch contractor stats with date range filter
-app.get('/contractor/stats', authenticateToken, async (req, res) => {
-  try {
-    const { phone } = req.user;
-    const { range = 'today' } = req.query; // 'today', 'week', 'month'
-
-    let startDate = new Date();
-    startDate.setHours(0, 0, 0, 0);
-
-    if (range === 'week') {
-      startDate.setDate(startDate.getDate() - 7);
-    } else if (range === 'month') {
-      startDate.setMonth(startDate.getMonth() - 1);
-    }
-
-    const stats = await ContractorStats.find({
-      phone,
-      date: { $gte: startDate },
-    }).sort({ date: -1 });
-
-    // Calculate aggregate stats
-    const aggregated = {
-      totalJobsPosted: stats.reduce((sum, s) => sum + s.jobsPosted, 0),
-      totalJobsCompleted: stats.reduce((sum, s) => sum + s.jobsCompleted, 0),
-      totalWorkersEngaged: new Set(stats.flatMap(s => s.workersList)).size,
-      totalSpending: stats.reduce((sum, s) => sum + s.totalSpending, 0),
-      avgJobsPerDay: stats.length > 0 ? (stats.reduce((sum, s) => sum + s.jobsPosted, 0) / stats.length).toFixed(2) : 0,
-      avgCompletionPerDay: stats.length > 0 ? (stats.reduce((sum, s) => sum + s.jobsCompleted, 0) / stats.length).toFixed(2) : 0,
-    };
-
-    return res.json({ success: true, stats, aggregated, range });
-  } catch (err) {
-    console.error('Fetch stats error', err);
-    return res.status(500).json({ success: false, message: 'Internal server error' });
-  }
-});
-
-// Fetch specific date range stats (for charts/trends)
-app.get('/contractor/stats/range', authenticateToken, async (req, res) => {
-  try {
-    const { phone } = req.user;
-    const { startDate, endDate } = req.query;
-
-    if (!startDate || !endDate) {
-      return res.status(400).json({ success: false, message: 'startDate and endDate required' });
-    }
-
-    const stats = await ContractorStats.find({
-      phone,
-      date: {
-        $gte: new Date(startDate),
-        $lte: new Date(endDate),
-      },
-    }).sort({ date: 1 });
-
-    return res.json({ success: true, stats });
-  } catch (err) {
-    console.error('Fetch range stats error', err);
-    return res.status(500).json({ success: false, message: 'Internal server error' });
-  }
-});
-
-// Auto-save stats endpoint (call this when job is completed/paid)
-app.post('/contractor/stats/update-from-jobs', authenticateToken, async (req, res) => {
-  try {
-    const { phone } = req.user;
-
-    // Fetch all jobs for this contractor
-    const jobs = await Job.find({ contractorName: phone });
-
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-
-    // Filter today's jobs
-      const todayJobs = jobs.filter(j => {
-      const jDate = new Date(j.createdAt); // ✅ Changed from timestamp to createdAt
-      jDate.setHours(0, 0, 0, 0);
-      return jDate.getTime() === today.getTime();
-    });    const jobsPosted = todayJobs.length;
-    const jobsCompleted = todayJobs.filter(j => j.attendanceStatus && j.paymentStatus === 'Paid').length;
-    const workersList = [...new Set(todayJobs.map(j => j.acceptedBy))];
-    const workersEngaged = workersList.length;
-    const totalSpending = todayJobs.reduce((sum, j) => sum + (Number(j.amount) || 0), 0);
-
-    const jobDetails = todayJobs.map(j => ({
-      jobId: j._id, // ✅ Fixed: Use _id instead of id
-      title: j.title,
-      workerName: j.acceptedBy,
-      amount: j.amount,
-      status: j.status,
-      paymentStatus: j.paymentStatus,
-      timestamp: j.createdAt, // ✅ Changed from j.timestamp to j.createdAt
-    }));
-
-    // Save or update stats
-    let stats = await ContractorStats.findOne({ phone, date: today });
-    if (stats) {
-      stats.jobsPosted = jobsPosted;
-      stats.jobsCompleted = jobsCompleted;
-      stats.workersEngaged = workersEngaged;
-      stats.totalSpending = totalSpending;
-      stats.workersList = workersList;
-      stats.jobDetails = jobDetails;
-      stats.updatedAt = new Date();
-    } else {
-      stats = new ContractorStats({
-        phone,
-        date: today,
-        jobsPosted,
-        jobsCompleted,
-        workersEngaged,
-        totalSpending,
-        workersList,
-        jobDetails,
-      });
-    }
-
-    await stats.save();
-    return res.json({ success: true, stats, message: 'Stats updated from jobs' });
-  } catch (err) {
-    console.error('Update stats from jobs error', err);
-    return res.status(500).json({ success: false, message: 'Internal server error' });
-  }
-});
-
-// ============================================================
-// ✅ NEW ENDPOINTS FOR CRITICAL COLLECTIONS
-// ============================================================
-
-// ---------- ACTIVITY LOG ENDPOINTS ----------
-app.post('/activity/log', authenticateToken, async (req, res) => {
-  try {
-    const { action, jobId, relatedPhone, metadata } = req.body;
-
-    const activityLog = new ActivityLog({
-      userId: req.user._id || req.user.phone,
-      phone: req.user.phone,
-      action,
-      jobId,
-      relatedPhone,
-      metadata,
-      status: 'success',
-      timestamp: new Date(),
-    });
-
-    await activityLog.save();
-    console.log(`✅ Activity logged: ${action} by ${req.user.phone}`);
-    res.json({ success: true, activity: activityLog });
-  } catch (err) {
-    console.error('Activity log error:', err);
-    res.status(500).json({ success: false, message: 'Error logging activity' });
-  }
-});
-
-app.get('/activity/history', authenticateToken, async (req, res) => {
-  try {
-    const { limit = 50, skip = 0 } = req.query;
-    
-    const activities = await ActivityLog.find({ phone: req.user.phone })
-      .sort({ timestamp: -1 })
-      .limit(parseInt(limit))
-      .skip(parseInt(skip));
-
-    const total = await ActivityLog.countDocuments({ phone: req.user.phone });
-
-    res.json({ success: true, activities, total, page: Math.ceil((parseInt(skip) + parseInt(limit)) / parseInt(limit)) });
-  } catch (err) {
-    console.error('Activity history error:', err);
-    res.status(500).json({ success: false, message: 'Error fetching activity history' });
-  }
-});
-
-// ---------- SUPPORT TICKET ENDPOINTS ----------
-app.post('/support/create', authenticateToken, async (req, res) => {
-  try {
-    const { type, subject, description, jobId, reportedPhone, screenshots } = req.body;
-    
-    if (!type || !subject || !description) {
-      return res.status(400).json({ success: false, message: 'Missing required fields' });
-    }
-
-    const ticketId = `TICKET-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-
-    const ticket = new SupportTicket({
-      ticketId,
-      reporterPhone: req.user.phone,
-      reportedPhone,
-      jobId,
-      type,
-      subject,
-      description,
-      screenshots: screenshots || [],
-      status: 'open',
-      createdAt: new Date(),
-    });
-
-    await ticket.save();
-
-    // Log activity
-    await ActivityLog.create({
-      userId: req.user._id || req.user.phone,
-      phone: req.user.phone,
-      action: 'support_ticket_created',
-      description: `Support ticket created: ${subject}`,
-      status: 'success',
-      metadata: { ticketId, type },
-    });
-
-    console.log(`📋 Support ticket created: ${ticketId} by ${req.user.phone}`);
-    res.json({ success: true, ticket, message: 'Support ticket created successfully' });
-  } catch (err) {
-    console.error('Support ticket creation error:', err);
-    res.status(500).json({ success: false, message: 'Error creating support ticket' });
-  }
-});
-
-app.get('/support/tickets', authenticateToken, async (req, res) => {
-  try {
-    const tickets = await SupportTicket.find({
-      $or: [
-        { reporterPhone: req.user.phone },
-        { reportedPhone: req.user.phone }
-      ]
-    })
-      .sort({ createdAt: -1 })
-      .limit(50);
-
-    res.json({ success: true, tickets, count: tickets.length });
-  } catch (err) {
-    console.error('Fetch tickets error:', err);
-    res.status(500).json({ success: false, message: 'Error fetching tickets' });
-  }
-});
-
-app.get('/support/ticket/:ticketId', authenticateToken, async (req, res) => {
-  try {
-    const ticket = await SupportTicket.findOne({ ticketId: req.params.ticketId });
-    
-    if (!ticket) {
-      return res.status(404).json({ success: false, message: 'Ticket not found' });
-    }
-
-    // Mark as read
-    if (ticket.reporterPhone === req.user.phone && !ticket.isRead) {
-      ticket.isRead = true;
-      ticket.readAt = new Date();
-      await ticket.save();
-    }
-
-    res.json({ success: true, ticket });
-  } catch (err) {
-    console.error('Fetch ticket error:', err);
-    res.status(500).json({ success: false, message: 'Error fetching ticket' });
-  }
-});
-
-// ---------- VERIFICATION DOCUMENT ENDPOINTS ----------
-// Accept both multipart/form-data uploads (preferred) and legacy base64 JSON payloads
-app.post('/verification/upload', authenticateToken, upload.single('file'), async (req, res) => {
-  try {
-    // Fields from either multipart/form-data (req.body) or JSON
-    // Safely destructure with fallback values
-    const type = req.body?.type || req.query?.type;
-    const documentNumber = req.body?.documentNumber || req.query?.documentNumber;
-    const expiryDate = req.body?.expiryDate || req.query?.expiryDate;
-
-    // If neither a file nor a type is provided, reject
-    if (!type && !req.file && !req.body?.imageData) {
-      return res.status(400).json({ success: false, message: 'Missing document type or file' });
-    }
-
-    let verification = await VerificationDocument.findOne({ phone: req.user.phone });
-    if (!verification) {
-      verification = new VerificationDocument({
-        userId: req.user._id || req.user.phone,
-        phone: req.user.phone,
-        documents: [],
-        accountStatus: 'restricted',
-      });
-    }
-
-    // Determine file storage: prefer uploaded file (multer), fallback to base64 imageData
-    let fileUrl = null;
-    let fileName = null;
-
-    if (req.file) {
-      // Serve uploaded file from /uploads
-      fileName = req.file.originalname || req.file.filename;
-      // Build an absolute URL so clients can preview if required
-      const host = req.headers.host || `localhost:${PORT}`;
-      const protocol = req.headers['x-forwarded-proto'] || req.protocol || 'http';
-      fileUrl = `${protocol}://${host}/uploads/${req.file.filename}`;
-      console.log(`📄 Stored uploaded file for ${req.user.phone}: ${fileUrl}`);
-    } else if (req.body?.imageData) {
-      // Legacy: store base64 string directly
-      fileUrl = req.body.imageData;
-      fileName = req.body.fileName || `${type || 'doc'}_${Date.now()}`;
-      console.log(`📄 Received base64 document for ${req.user.phone} (legacy path)`);
-    }
-
-    const document = {
-      type: type || 'unknown',
-      fileUrl: fileUrl,
-      fileName: fileName || '',
-      documentNumber: documentNumber || undefined,
-      uploadedAt: new Date(),
-      verificationStatus: 'pending',
-      expiryDate: expiryDate ? new Date(expiryDate) : undefined,
-    };
-
-    verification.documents.push(document);
-    await verification.save();
-
-    return res.json({ success: true, verification, message: 'Document uploaded for verification' });
-  } catch (err) {
-    console.error('Document upload error:', err);
-    return res.status(500).json({ success: false, message: 'Error uploading document' });
-  }
-});
-
-app.get('/verification/status', authenticateToken, async (req, res) => {
-  try {
-    let verification = await VerificationDocument.findOne({ phone: req.user.phone });
-
-    if (!verification) {
-      verification = new VerificationDocument({
-        userId: req.user._id || req.user.phone,
-        phone: req.user.phone,
-        overallVerificationStatus: 'pending',
-        accountStatus: 'restricted',
-      });
-      await verification.save();
-    }
-
-    res.json({ success: true, verification });
-  } catch (err) {
-    console.error('Verification status error:', err);
-    res.status(500).json({ success: false, message: 'Error fetching verification status' });
-  }
-});
-
-// ---------- CANCELLATION LOG ENDPOINTS ----------
-app.post('/jobs/cancel/:id', authenticateToken, async (req, res) => {
-  try {
-    const { reason, reasonDescription } = req.body;
-    const jobId = req.params.id;
-
-    if (!reason) {
-      return res.status(400).json({ success: false, message: 'Cancellation reason required' });
-    }
-
-    const job = await Job.findById(jobId);
-    if (!job) {
-      return res.status(404).json({ success: false, message: 'Job not found' });
-    }
-
-    // Determine who is cancelling
-    let cancelledBy = 'admin';
-    if (req.user.phone === job.contractorPhone) cancelledBy = 'contractor';
-    if (req.user.phone === job.acceptedBy) cancelledBy = 'worker';
-
-    // ✅ CORRECT REFUND LOGIC:
-    // - When contractor cancels BEFORE acceptance: refund only ₹25 platform fee (that was deducted)
-    // - When contractor cancels AFTER acceptance: no refund (worker already agreed to do job, contractor pays)
-    // - When worker cancels: no refund (worker forfeited job)
-    let refundAmount = 0;
-    let cancellationFee = 0;
-
-    if (cancelledBy === 'contractor' && !job.acceptedBy) {
-      // No worker accepted yet - refund only the ₹25 platform fee that was deducted
-      refundAmount = 25;
-    }
-    // If worker accepted and then either cancels, or contractor cancels: NO REFUND
-    // The ₹25 platform fee and job amount stay with platform/contractor
-
-    // Log cancellation
-    const cancellation = new CancellationLog({
-      jobId,
-      contractorPhone: job.contractorPhone,
-      contractorName: job.contractorName,
-      workerPhone: job.acceptedBy,
-      cancelledBy,
-      reason,
-      reasonDescription,
-      jobAmount: job.amount,
-      cancellationFee,
-      refundAmount,
-      refundToPhone: job.contractorPhone,
-      cancelledAt: new Date(),
-    });
-
-    await cancellation.save();
-
-    // Update job status
-    job.status = 'cancelled';
-    await job.save();
-
-    // ✅ Process refund ONLY when contractor cancels before acceptance
-    if (refundAmount > 0 && cancelledBy === 'contractor' && !job.acceptedBy) {
-      let wallet = await Wallet.findOne({ phone: job.contractorPhone });
-      if (!wallet) {
-        wallet = new Wallet({ phone: job.contractorPhone });
-      }
-      wallet.balance += refundAmount;
-      wallet.transactions.push({
-        type: 'refund',
-        amount: refundAmount,
-        date: new Date(),
-      });
-      await wallet.save();
-      console.log(`💰 Refunded ₹${refundAmount} to contractor ${job.contractorPhone}`);
-    }
-
-    // ✅ EMIT CANCELLATION EVENT TO ALL USERS
-    // Notify contractor and any workers viewing/considering this job
-    const cancellationPayload = {
-      ...job.toObject(),
-      _id: job._id.toString(), // ✅ Ensure _id is a string for consistent comparison
-      id: job._id.toString(), // ✅ Also include as 'id' for compatibility
-      status: 'cancelled',
-      cancelledBy,
-      cancelledAt: new Date(),
-    };
-
-    // ✅ Send to ALL connected sockets so all workers see it immediately
-    io.emit('jobCancelled', cancellationPayload);
-    console.log(`📤 Broadcasted job cancellation event for job ${jobId} to all users`);
-
-    // Clear any pending timeouts related to this job (retry/timeouts/expiry)
-    try {
-      if (pendingJobTimeouts.has(jobId)) {
-        clearTimeout(pendingJobTimeouts.get(jobId));
-        pendingJobTimeouts.delete(jobId);
-        console.log(`🧹 Cleared pending retry timeout for cancelled job ${jobId}`);
-      }
-      if (pendingJobExpirations.has(jobId)) {
-        clearTimeout(pendingJobExpirations.get(jobId));
-        pendingJobExpirations.delete(jobId);
-        console.log(`🧹 Cleared expiry timer for cancelled job ${jobId}`);
-      }
-    } catch (e) {
-      console.error('Error clearing timeouts on cancellation:', e);
-    }
-    
-    // Also specifically target workers who might have seen this job
-    if (job.declinedBy && job.declinedBy.length > 0) {
-      console.log(`📤 Job was declined by ${job.declinedBy.length} workers, they will see cancellation`);
-    }
-
-    // Log activity
-    await ActivityLog.create({
-      userId: req.user._id || req.user.phone,
-      phone: req.user.phone,
-      action: 'job_cancelled',
-      jobId,
-      description: `Job cancelled by ${cancelledBy}: ${reason}`,
-      status: 'success',
-      metadata: { reason, refundAmount, cancellationFee },
-    });
-
-    // If worker cancelled, record cancellation in worker's workHistory for milestone tracking
-    try {
-      if (cancelledBy === 'worker' && job.acceptedBy) {
-        const worker = await WorkerModel.findOne({ phone: job.acceptedBy });
-        if (worker && typeof worker.recordWork === 'function') {
-          worker.recordWork(new Date(), 0, true);
-          await worker.save();
-          console.log(`📉 Recorded cancellation for ${job.acceptedBy} due to job cancel`);
-        }
-      }
-    } catch (recErr) {
-      console.error('Error recording work cancellation on job cancel endpoint:', recErr);
-    }
-    console.log(`❌ Job ${jobId} cancelled by ${cancelledBy}. Refunded: ₹${refundAmount}`);
-    res.json({ success: true, cancellation, message: 'Job cancelled successfully' });
-  } catch (err) {
-    console.error('Job cancellation error:', err);
-    res.status(500).json({ success: false, message: 'Error cancelling job' });
-  }
-});
-
-app.get('/jobs/cancellations', authenticateToken, async (req, res) => {
-  try {
-    const cancellations = await CancellationLog.find({
-      $or: [
-        { contractorPhone: req.user.phone },
-        { workerPhone: req.user.phone }
-      ]
-    })
-      .sort({ cancelledAt: -1 })
-      .limit(50);
-
-    res.json({ success: true, cancellations, count: cancellations.length });
-  } catch (err) {
-    console.error('Fetch cancellations error:', err);
-    res.status(500).json({ success: false, message: 'Error fetching cancellations' });
-  }
-});
-
-// ---------- NOTIFICATION HISTORY ENDPOINTS ----------
-app.get('/notifications', authenticateToken, async (req, res) => {
-  try {
-    const { unreadOnly = false, limit = 50, skip = 0 } = req.query;
-
-    let query = { recipientPhone: req.user.phone };
-    if (unreadOnly === 'true') {
-      query.isRead = false;
-    }
-
-    const notifications = await NotificationHistory.find(query)
-      .sort({ createdAt: -1 })
-      .limit(parseInt(limit))
-      .skip(parseInt(skip));
-
-    const total = await NotificationHistory.countDocuments(query);
-    const unreadCount = await NotificationHistory.countDocuments({
-      recipientPhone: req.user.phone,
-      isRead: false,
-    });
-
-    res.json({ success: true, notifications, total, unreadCount });
-  } catch (err) {
-    console.error('Fetch notifications error:', err);
-    res.status(500).json({ success: false, message: 'Error fetching notifications' });
-  }
-});
-
-app.put('/notifications/:id/read', authenticateToken, async (req, res) => {
-  try {
-    const notification = await NotificationHistory.findByIdAndUpdate(
-      req.params.id,
-      { isRead: true, readAt: new Date() },
-      { new: true }
-    );
-
-    if (!notification) {
-      return res.status(404).json({ success: false, message: 'Notification not found' });
-    }
-
-    // ✅ Emit socket event to update notification count for this user
-    const unreadCount = await NotificationHistory.countDocuments({
-      recipientPhone: req.user.phone,
-      isRead: false,
-    });
-
-    io.emit('notificationCountUpdated', {
-      recipientPhone: req.user.phone,
-      unreadCount: unreadCount,
-    });
-
-    res.json({ success: true, notification });
-  } catch (err) {
-    console.error('Mark notification read error:', err);
-    res.status(500).json({ success: false, message: 'Error updating notification' });
-  }
-});
-
-app.put('/notifications/read-all', authenticateToken, async (req, res) => {
-  try {
-    await NotificationHistory.updateMany(
-      { recipientPhone: req.user.phone, isRead: false },
-      { isRead: true, readAt: new Date() }
-    );
-
-    // ✅ Emit socket event to update notification count for this user
-    io.emit('notificationCountUpdated', {
-      recipientPhone: req.user.phone,
-      unreadCount: 0,
-    });
-
-    res.json({ success: true, message: 'All notifications marked as read' });
-  } catch (err) {
-    console.error('Mark all notifications read error:', err);
-    res.status(500).json({ success: false, message: 'Error updating notifications' });
-  }
-});
-
-// ✅ VERIFY WORKER PROFILE IS COMPLETE (CHECK MAIN SKILL & WAGE)
-app.post('/workers/verify-profile', authenticateToken, async (req, res) => {
-  try {
-    const phone = req.user.phone;
-
-    console.log(`\n🔍 Profile verification request for phone: ${phone}`);
-
-    // Find user and check mainSkill and expectedWage
-    const user = await User.findOne({ phone });
-
-    if (!user) {
-      console.error(`❌ User not found for phone: ${phone}`);
-      return res.status(404).json({ success: false, message: 'User not found' });
-    }
-
-    console.log(`📋 User found: ${user.name}`);
-    console.log(`   - mainSkill: ${user.mainSkill || 'NOT SET'}`);
-    console.log(`   - expectedWage: ${user.expectedWage || 'NOT SET'}`);
-
-    // Check if both mainSkill and expectedWage are set
-    const isProfileComplete = !!(user.mainSkill && user.expectedWage);
-
-    if (isProfileComplete) {
-      console.log(`✅ Profile is COMPLETE - User can go online`);
-      return res.status(200).json({ 
-        success: true, 
-        message: 'Profile is complete',
-        isProfileComplete: true,
-        mainSkill: user.mainSkill,
-        expectedWage: user.expectedWage
-      });
-    } else {
-      console.log(`❌ Profile is INCOMPLETE`);
-      return res.status(200).json({ 
-        success: false, 
-        message: 'Profile is incomplete. Please set Main Skill and Expected Wage.',
-        isProfileComplete: false,
-        missingFields: {
-          mainSkill: !user.mainSkill,
-          expectedWage: !user.expectedWage
-        }
-      });
-    }
-  } catch (err) {
-    console.error(`❌ Profile verification error:`, err);
-    res.status(500).json({ success: false, message: 'Failed to verify profile', error: err.message });
-  }
-});
-
-// ✅ UPDATE WORKER AVAILABILITY (ONLINE/OFFLINE)
-app.put('/workers/availability', authenticateToken, async (req, res) => {
-  try {
-    const { isAvailable, latitude, longitude } = req.body;
-    const phone = req.user.phone;
-
-    console.log(`\n📱 Availability toggle request for phone: ${phone}`);
-    console.log(`🔘 Setting isAvailable to: ${isAvailable}`);
-    console.log(`📍 Location: lat=${latitude}, lon=${longitude}`);
-
-    // Validate input
-    if (typeof isAvailable !== 'boolean') {
-      console.error(`❌ Invalid isAvailable type: ${typeof isAvailable}`);
-      return res.status(400).json({ success: false, message: 'isAvailable must be a boolean' });
-    }
-
-    // ✅ If worker is going ONLINE and has fresh location, update it
-    let updateObj = { 
-      isAvailable: isAvailable,
-      updatedAt: new Date()
-    };
-
-    if (isAvailable === true && latitude !== undefined && latitude !== null && longitude !== undefined && longitude !== null) {
-      const parsedLat = parseFloat(latitude);
-      const parsedLon = parseFloat(longitude);
-
-      if (!isNaN(parsedLat) && !isNaN(parsedLon)) {
-        console.log(`✅ Updating location when going online: lat=${parsedLat}, lon=${parsedLon}`);
-        
-        // Find district for this location
-        try {
-          const District = require('./models/City');
-          const point = {
-            type: 'Point',
-            coordinates: [parsedLon, parsedLat],
-          };
-
-          let district = await District.findOne({
-            geometry: {
-              $geoIntersects: {
-                $geometry: point,
-              },
-            },
-          }).lean();
-
-          if (!district) {
-            district = await District.findOne(
-              {
-                centroid: {
-                  $nearSphere: {
-                    $geometry: point,
-                    $maxDistance: 50000,
-                  },
-                },
-              },
-              null,
-              { lean: true }
-            );
-          }
-
-          if (district) {
-            updateObj.latitude = parsedLat;
-            updateObj.longitude = parsedLon;
-            updateObj.city = district.name;
-            updateObj.state = district.state;
-            updateObj.location = {
-              type: 'Point',
-              coordinates: [parsedLon, parsedLat],
-            };
-            updateObj.locationLastUpdated = new Date();
-            updateObj.locationEnabled = true; // ✅ Mark location as enabled when updating on availability toggle
-            console.log(`✅ District found: ${district.name}, ${district.state}`);
-          }
-        } catch (distErr) {
-          console.error('⚠️ Error finding district:', distErr.message);
-          // Still update coordinates even if district lookup fails
-          updateObj.latitude = parsedLat;
-          updateObj.longitude = parsedLon;
-          updateObj.location = {
-            type: 'Point',
-            coordinates: [parsedLon, parsedLat],
-          };
-          updateObj.locationLastUpdated = new Date();
-          updateObj.locationEnabled = true; // ✅ Mark location as enabled even if district lookup fails
-        }
-      }
-    }
-
-    // ✅ Update User model (PRIMARY - where user profile lives)
-    console.log(`🔄 Updating User model for phone: ${phone}`);
-    const updatedUser = await User.findOneAndUpdate(
-      { phone: phone },
-      updateObj,
-      { new: true }
-    );
-
-    console.log(`✅ User model updated:`, updatedUser ? `${updatedUser.name} (${updatedUser.phone}) - isAvailable: ${updatedUser.isAvailable}` : 'null');
-
-    if (!updatedUser) {
-      console.error(`❌ User not found in database for phone: ${phone}`);
-      return res.status(404).json({ success: false, message: 'User not found' });
-    }
-
-    // Verify update actually persisted
-    const userAfter = await User.findOne({ phone });
-    console.log(`📊 User After update - isAvailable: ${userAfter?.isAvailable}`);
-
-    if (userAfter?.isAvailable !== isAvailable) {
-      console.error(`❌ USER UPDATE FAILED! Expected ${isAvailable}, got ${userAfter?.isAvailable}`);
-    }
-
-    // ✅ Also update Worker model for consistency
-    console.log(`🔄 Updating Worker model for phone: ${phone}`);
-    const updatedWorker = await WorkerModel.findOneAndUpdate(
-      { phone: phone },
-      updateObj,
-      { new: true }
-    );
-
-    console.log(`✅ Worker model updated:`, updatedWorker ? `${updatedWorker.name} (${updatedWorker.phone}) - isAvailable: ${updatedWorker.isAvailable}` : 'null');
-
-    // ✅ Update connectedWorkers map in real-time
-    let found = false;
-    for (const [socketId, worker] of connectedWorkers.entries()) {
-      if (worker.phone === phone) {
-        worker.isAvailable = isAvailable;
-        // Update location if provided
-        if (updateObj.latitude !== undefined) {
-          worker.latitude = updateObj.latitude;
-          worker.longitude = updateObj.longitude;
-          worker.city = updateObj.city;
-        }
-        console.log(`🔄 Updated connected worker ${worker.name} isAvailable to: ${isAvailable}`);
-        found = true;
-        break;
-      }
-    }
-    
-    if (!found) {
-      console.warn(`⚠️ Worker ${phone} not found in connectedWorkers map. Total connected: ${connectedWorkers.size}`);
-      console.warn(`📋 Connected workers:`, Array.from(connectedWorkers.values()).map(w => `${w.name} (${w.phone})`).join(', '));
-    }
-
-    // ✅ FIX: If worker just went ONLINE, check for matching jobs
-    if (isAvailable === true) {
-      console.log(`🟢 Worker ${phone} came online - checking for matching jobs...`);
-      // Use the new function that matches the worker against pending jobs
-      // This works even if the worker hasn't socket-connected yet
-      await checkJobMatchesForWorker(phone);
-    }
-
-    console.log(`✅ ${phone} availability updated to: ${isAvailable}\n`);
-
-    res.json({ 
-      success: true, 
-      message: `Worker is now ${isAvailable ? 'online' : 'offline'}`,
-      user: {
-        phone: updatedUser.phone,
-        name: updatedUser.name,
-        isAvailable: updatedUser.isAvailable,
-        role: updatedUser.role,
-        city: updatedUser.city,
-        latitude: updatedUser.latitude,
-        longitude: updatedUser.longitude,
-      }
-    });
-  } catch (err) {
-    console.error('❌ Update worker availability error:', err);
-    res.status(500).json({ success: false, message: 'Error updating worker availability', error: err.message });
-  }
-});
-
-// ✅ REFRESH FCM TOKEN - Update user's FCM token when they reopen app
-app.post("/auth/refresh-fcm-token", authenticateToken, async (req, res) => {
-  try {
-    const { fcmToken } = req.body;
-    
-    if (!fcmToken) {
-      return res.status(400).json({ success: false, message: "FCM token required" });
-    }
-
-    const user = await User.findOne({ phone: req.user.phone });
-    if (!user) {
-      return res.status(404).json({ success: false, message: "User not found" });
-    }
-
-    // Update FCM token
-    user.fcmToken = fcmToken;
-    await user.save();
-
-    console.log(`📱 FCM token refreshed for ${req.user.phone}: ${fcmToken.substring(0, 30)}...`);
-    res.json({ success: true, message: "FCM token updated" });
-  } catch (err) {
-    console.error("Error refreshing FCM token:", err);
-    res.status(500).json({ success: false, message: "Internal server error" });
-  }
-});
-
-// ✅ UPDATE USER LOCATION - Called post-login or when worker goes online
-app.post("/user/update-location", authenticateToken, async (req, res) => {
-  try {
-    const { latitude, longitude } = req.body;
-    const phone = req.user.phone;
-
-    // Validate coordinates
-    if (latitude === undefined || latitude === null || longitude === undefined || longitude === null) {
-      return res.status(400).json({ success: false, message: "Latitude and longitude required" });
-    }
-
-    const parsedLat = parseFloat(latitude);
-    const parsedLon = parseFloat(longitude);
-
-    // Check for invalid coordinates
-    if (isNaN(parsedLat) || isNaN(parsedLon)) {
-      return res.status(400).json({ success: false, message: "Invalid coordinates" });
-    }
-
-    console.log(`\n📍 Location update request for ${phone}: lat=${parsedLat}, lon=${parsedLon}`);
-
-    // Find district for this location
-    let city = 'Unknown';
-    let state = 'Unknown';
-
-    try {
-      const District = require('./models/City');
-      const point = {
-        type: 'Point',
-        coordinates: [parsedLon, parsedLat],
-      };
-
-      // Try exact polygon match first
-      let district = await District.findOne({
-        geometry: {
-          $geoIntersects: {
-            $geometry: point,
-          },
-        },
-      }).lean();
-
-      // Fallback to nearest centroid if no exact match
-      if (!district) {
-        console.warn(`⚠️ No exact polygon match, trying nearest centroid...`);
-        district = await District.findOne(
-          {
-            centroid: {
-              $nearSphere: {
-                $geometry: point,
-                $maxDistance: 50000, // 50km radius
-              },
-            },
-          },
-          null,
-          { lean: true }
-        );
-      }
-
-      if (district) {
-        city = district.name;
-        state = district.state;
-        console.log(`✅ Found district: ${city}, ${state}`);
-      } else {
-        console.warn(`⚠️ No district found for coordinates [${parsedLon}, ${parsedLat}]`);
-      }
-    } catch (distErr) {
-      console.error('❌ Error finding district:', distErr.message);
-    }
-
-    // Update user location
-    const user = await User.findOneAndUpdate(
-      { phone },
-      {
-        latitude: parsedLat,
-        longitude: parsedLon,
-        city,
-        state,
-        location: {
-          type: 'Point',
-          coordinates: [parsedLon, parsedLat],
-        },
-        locationLastUpdated: new Date(),
-        locationEnabled: true, // ✅ Mark location as enabled when coordinates are updated
-      },
-      { new: true }
-    );
-
-    if (!user) {
-      return res.status(404).json({ success: false, message: "User not found" });
-    }
-
-    // Also update Worker model if exists (for worker consistency)
-    if (user.role === 'worker') {
-      await WorkerModel.findOneAndUpdate(
-        { phone },
-        {
-          latitude: parsedLat,
-          longitude: parsedLon,
-          city,
-          state,
-          location: {
-            type: 'Point',
-            coordinates: [parsedLon, parsedLat],
-          },
-          updatedAt: new Date(),
-        }
-      );
-    }
-
-    console.log(`✅ Location updated for ${phone}: ${city}, ${state}`);
-
-    res.json({
-      success: true,
-      message: "Location updated successfully",
-      user: {
-        phone: user.phone,
-        latitude: user.latitude,
-        longitude: user.longitude,
-        city: user.city,
-        state: user.state,
-      },
-    });
-  } catch (err) {
-    console.error("❌ Error updating location:", err);
-    res.status(500).json({ success: false, message: "Error updating location", error: err.message });
-  }
-});
-
-
-// 🐛 DEBUG: List all workers with their locations (for troubleshooting)
-app.get('/debug/workers-locations', authenticateToken, async (req, res) => {
-  try {
-    const workers = await WorkerModel.find({}).select('phone name location isAvailable').lean();
-    const formattedWorkers = workers.map(w => ({
-      phone: w.phone,
-      name: w.name,
-      location: w.location?.coordinates || [0, 0],
-      isAvailable: w.isAvailable
-    }));
-    return res.json({ 
-      success: true, 
-      count: workers.length,
-      workers: formattedWorkers 
-    });
-  } catch (err) {
-    console.error('debug/workers-locations error', err);
-    return res.status(500).json({ success: false, message: 'Error fetching workers', error: err.message });
-  }
-});
-
-// 🐛 DEBUG: Check if 2dsphere index exists and test $geoNear query
-app.get('/debug/geo-test', authenticateToken, async (req, res) => {
-  try {
-    const { lat = 26.9988724, lon = 75.9130502 } = req.query;
-    
-    // Check indexes on Worker collection
-    const indexes = await WorkerModel.collection.getIndexes();
-    console.log('Worker collection indexes:', indexes);
-
-    // Try a simple $geoNear query
-    const result = await WorkerModel.aggregate([
-      {
-        $geoNear: {
-          near: { type: 'Point', coordinates: [parseFloat(lon), parseFloat(lat)] },
-          distanceField: 'distance',
-          maxDistance: 100000, // 100km for testing
-          spherical: true
-        }
-      },
-      { $limit: 10 }
-    ]);
-
-    console.log(`✅ $geoNear test: Found ${result.length} workers`);
-
-    return res.json({ 
-      success: true, 
-      message: '$geoNear query executed successfully',
-      indexes: indexes,
-      testCoordinates: [parseFloat(lon), parseFloat(lat)],
-      resultCount: result.length,
-      workers: result.slice(0, 5).map(w => ({
-        phone: w.phone,
-        distance: w.distance,
-        location: w.location?.coordinates
-      }))
-    });
-  } catch (err) {
-    console.error('❌ debug/geo-test error', err);
-    return res.status(500).json({ success: false, message: 'Geo test failed', error: err.message });
-  }
-});
-
-// ✅ BACKGROUND JOB: Cleanup expired job offers from memory
-// Prevents memory leaks from setTimeouts that live forever
 const startJobOfferCleanupScheduler = () => {
   setInterval(async () => {
     try {
@@ -4539,9 +2349,14 @@ setTimeout(() => {
   startLeaderboardScheduler();
   startJobOfferCleanupScheduler();
   startWalletReconciliationScheduler();
+  startJobReconciliationScheduler();
 }, 2000); // Wait 2 seconds for DB to stabilize
 
 // ---------------- START SERVER ----------------
 server.listen(PORT, "0.0.0.0", () => {
   console.log(`Server running with Socket.io on port ${PORT}`);
 });
+
+
+
+

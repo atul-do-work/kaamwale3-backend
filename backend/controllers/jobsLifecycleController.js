@@ -1,0 +1,83 @@
+const jobsLifecycleService = require("../services/jobsLifecycleService");
+
+function createJobsLifecycleController(deps) {
+  return {
+    markAttendance: async (req, res) => {
+      try {
+        const result = await jobsLifecycleService.markAttendance({
+          jobId: req.params.id,
+          status: req.body.status,
+          userPhone: req.user.phone,
+          deps,
+        });
+        return res.status(result.code).json(result.body);
+      } catch (err) {
+        console.error(err);
+        return res.status(500).json({ success: false, message: "Internal server error" });
+      }
+    },
+
+    payJob: async (req, res) => {
+      try {
+        const result = await jobsLifecycleService.payJob({
+          jobId: req.params.id,
+          mode: req.body.mode,
+          userPhone: req.user.phone,
+          userName: req.user.name,
+          deps,
+        });
+        return res.status(result.code).json(result.body);
+      } catch (err) {
+        console.error(err);
+        return res.status(500).json({ success: false, message: "Internal server error" });
+      }
+    },
+
+    rateJob: async (req, res) => {
+      try {
+        const result = await jobsLifecycleService.rateJob({
+          jobId: req.params.id,
+          stars: req.body.stars,
+          feedback: req.body.feedback,
+          userPhone: req.user.phone,
+          userName: req.user.name,
+          deps,
+        });
+        return res.status(result.code).json(result.body);
+      } catch (err) {
+        console.error(err);
+        return res.status(500).json({ success: false, message: "Internal server error" });
+      }
+    },
+
+    cancelJob: async (req, res) => {
+      try {
+        const result = await jobsLifecycleService.cancelJob({
+          jobId: req.params.id,
+          reason: req.body.reason,
+          reasonDescription: req.body.reasonDescription,
+          userPhone: req.user.phone,
+          deps,
+        });
+        return res.status(result.code).json(result.body);
+      } catch (err) {
+        console.error("Job cancellation error:", err);
+        return res.status(500).json({ success: false, message: "Error cancelling job" });
+      }
+    },
+
+    getCancellations: async (req, res) => {
+      try {
+        const result = await jobsLifecycleService.getCancellations({
+          userPhone: req.user.phone,
+        });
+        return res.status(result.code).json(result.body);
+      } catch (err) {
+        console.error("Fetch cancellations error:", err);
+        return res.status(500).json({ success: false, message: "Error fetching cancellations" });
+      }
+    },
+  };
+}
+
+module.exports = { createJobsLifecycleController };

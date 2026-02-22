@@ -2,7 +2,7 @@ const mongoose = require("mongoose");
 
 const cancellationLogSchema = new mongoose.Schema(
   {
-    jobId: { type: String, required: true, index: true },
+    jobId: { type: mongoose.Schema.Types.ObjectId, ref: "Job", required: true, index: true },
     contractorPhone: { type: String, required: true, index: true },
     contractorName: String,
     workerPhone: String,

@@ -12,7 +12,7 @@ import {
   Modal,
   Pressable
 } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import { WebView } from "react-native-webview";
 import { MaterialIcons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
@@ -53,6 +53,7 @@ interface Job {
 }
 
 export default function ContractorWalletAttendance() {
+  const insets = useSafeAreaInsets();
   const [activeTab, setActiveTab] = useState<"Wallet" | "Attendance">("Wallet");
   const { t } = useLanguage();
   const { accessToken, user: authUser } = useAuth();
@@ -846,7 +847,14 @@ export default function ContractorWalletAttendance() {
   }, [jobs]);
 
   return (
-    <View style={{ flex: 1, backgroundColor: "#f5f5f5", paddingTop: 40 }}>
+    <View
+      style={{
+        flex: 1,
+        backgroundColor: "#f5f5f5",
+        paddingTop: 40,
+        paddingBottom: Math.max(insets.bottom + 8, 16),
+      }}
+    >
       {/* Tabs */}
       <View style={styles.tabRow}>
         <TouchableOpacity
@@ -866,7 +874,10 @@ export default function ContractorWalletAttendance() {
 
       {/* Wallet Tab */}
       {activeTab === "Wallet" && (
-        <ScrollView style={{ flex: 1 }}>
+        <ScrollView
+          style={{ flex: 1 }}
+          contentContainerStyle={{ paddingBottom: Math.max(insets.bottom + 24, 32) }}
+        >
           <View style={styles.balanceContainer}>
             <Text style={styles.balanceTitle}>Pocket Balance</Text>
             <Text style={styles.balanceAmount}>₹{walletBalance}</Text>
@@ -992,7 +1003,7 @@ export default function ContractorWalletAttendance() {
                 data={jobs.slice(0, displayedCount)} // ✅ Show only up to displayedCount
                 keyExtractor={item => item._id.toString()}
                 renderItem={renderJob}
-                contentContainerStyle={{ paddingBottom: 20 }}
+                contentContainerStyle={{ paddingBottom: Math.max(insets.bottom + 20, 32) }}
                 initialNumToRender={5}
                 maxToRenderPerBatch={5}
                 windowSize={5}

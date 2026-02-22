@@ -15,6 +15,7 @@ import * as Notifications from 'expo-notifications'; // ✅ For foreground notif
 import { useFocusEffect } from "@react-navigation/native";
 import { MaterialIcons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import WorkerMap from "../../../components/WorkerMap";
 import FullContainer from "../../../components/FullContainer";
 import * as Location from "expo-location";
@@ -170,6 +171,7 @@ const JobItem = memo(({ item, onAccept, onDecline, timer, t }: JobItemProps) => 
 // ---------------- WORKER HOME COMPONENT ----------------
 function WorkerHome() {
   const { t } = useLanguage();
+  const insets = useSafeAreaInsets();
   const [error, setError] = useState<string | null>(null);
   const [currentJob, setCurrentJob] = useState<Job | null>(null);
   const [currentLocation, setCurrentLocation] = useState<{ lat: number; lon: number } | null>(null);
@@ -1486,7 +1488,7 @@ function WorkerHome() {
   };
 
   return (
-    <View style={styles.container}>
+    <View style={[styles.container, { paddingBottom: Math.max(insets.bottom + 12, 20) }]}>
       {error && (
         <View style={{ backgroundColor: '#ffebee', padding: 20, margin: 10, borderRadius: 8, borderLeftWidth: 4, borderLeftColor: '#e74c3c' }}>
           <Text style={{ color: '#c62828', fontWeight: 'bold', marginBottom: 8 }}>⚠️ Error Loading Worker Home</Text>

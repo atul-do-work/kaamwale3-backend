@@ -663,7 +663,13 @@ export default function ContractorHome() {
       </TouchableOpacity>
 
       {/* Scrollable Leaderboard with Premium Overlay */}
-      <View style={[styles.leaderboardWrapper, leaderboardExpanded && styles.leaderboardWrapperExpanded]}>
+      <View
+        style={[
+          styles.leaderboardWrapper,
+          leaderboardExpanded && styles.leaderboardWrapperExpanded,
+          { paddingBottom: Math.max(insets.bottom + 24, 32) },
+        ]}
+      >
         {/* Gradient Background */}
         <LinearGradient
           colors={['#ffffff', '#1f3a5f']}
@@ -712,6 +718,7 @@ export default function ContractorHome() {
               data={sortedLeaderboard}
               keyExtractor={(person) => person.id}
               style={styles.leaderboardScroll}
+              contentContainerStyle={{ paddingBottom: Math.max(insets.bottom + 24, 32) }}
               showsVerticalScrollIndicator={false}
               scrollEnabled={true}
               initialNumToRender={5}

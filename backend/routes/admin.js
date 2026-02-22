@@ -593,6 +593,44 @@ router.get('/wallets/summary', authenticateToken, checkAdmin, async (req, res) =
 });
 
 // ============================
+// WALLETS - Details by phone
+// ============================
+router.get('/wallets/:phone', authenticateToken, checkAdmin, async (req, res) => {
+    try {
+        const phone = String(req.params.phone || '').trim();
+        if (!/^\d{10}$/.test(phone)) {
+            return res.status(400).json({ success: false, message: 'Valid 10-digit phone is required' });
+        }
+        const wallet = await Wallet.findOne({ phone }).lean();
+
+        if (!wallet) {
+            return res.status(404).json({ success: false, message: 'Wallet not found' });
+        }
+
+        const transactions = Array.isArray(wallet.transactions) ? wallet.transactions : [];
+        transactions.sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
+
+        res.json({
+            success: true,
+            wallet: {
+                _id: wallet._id,
+                phone: wallet.phone,
+                balance: wallet.balance || 0,
+                totalDeposited: wallet.totalDeposited || 0,
+                totalWithdrawn: wallet.totalWithdrawn || 0,
+                totalEarned: wallet.totalEarned || 0,
+                createdAt: wallet.createdAt,
+                updatedAt: wallet.updatedAt,
+            },
+            transactions,
+        });
+    } catch (error) {
+        console.error('Wallet details error:', error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+});
+
+// ============================
 // ACTIVITY LOGS
 // ============================
 router.get('/activity-logs', authenticateToken, checkAdmin, async (req, res) => {

@@ -9,7 +9,7 @@ import {
   Modal,
   ActivityIndicator
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
 import { WebView } from 'react-native-webview';
@@ -36,6 +36,7 @@ import api from '../../../utils/api';
 
 export default function Wallet(): React.ReactElement {
   const { t } = useLanguage();
+  const insets = useSafeAreaInsets();
   const { accessToken, user: authUser } = useAuth();
   
   const [wallet, setWallet] = useState<WalletType>({ balance: 0, transactions: [] });
@@ -524,7 +525,10 @@ export default function Wallet(): React.ReactElement {
   }, [wallet.transactions.length]);
 
   return (
-    <ScrollView style={styles.container}>
+    <ScrollView
+      style={styles.container}
+      contentContainerStyle={{ paddingBottom: Math.max(insets.bottom + 24, 32) }}
+    >
       {/* Earnings Header */}
       <LinearGradient
         colors={['#223550ff', '#1a2f4d']}

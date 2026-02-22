@@ -1140,11 +1140,25 @@
         </div>
     </div>
 
+    <!-- Wallet Details Modal -->
+    <div id="walletDetailsModal" class="modal">
+        <div class="modal-content" style="max-width: 1000px; max-height: 90vh; overflow-y: auto;">
+            <div class="modal-header">
+                <h3 id="walletDetailsTitle">Wallet Details</h3>
+                <button class="close-btn" onclick="closeModal('walletDetailsModal')">&times;</button>
+            </div>
+            <div class="modal-body" id="walletDetailsContent">
+                <div class="loading"><div class="spinner"></div></div>
+            </div>
+        </div>
+    </div>
+
     <script>
         // Use the same origin the admin panel was served from so API calls go to the running backend.
         const API_BASE = window.location.origin || 'http://localhost:3000';
         let currentUser = null;
         let currentBankAccountId = null;
+        let activeWalletDetailsPhone = null;
 
         // Initialize
         document.addEventListener('DOMContentLoaded', () => {
@@ -1506,7 +1520,7 @@
                             <td>${wallet.userName || '-'}</td>
                             <td>₹${wallet.balance.toLocaleString()}</td>
                             <td>${new Date(wallet.updatedAt).toLocaleDateString()}</td>
-                            <td><button class="btn-small btn-view">Details</button></td>
+                            <td><button class="btn-small btn-view" onclick="showWalletDetails('${wallet.phone}')">Details</button></td>
                         </tr>
                     `).join('');
                 } else {
@@ -1518,6 +1532,106 @@
             }
         }
 
+
+        // Wallet details
+        async function showWalletDetails(phone) {
+            try {
+                const token = localStorage.getItem('adminToken');
+                const modal = document.getElementById('walletDetailsModal');
+                const titleEl = document.getElementById('walletDetailsTitle');
+                const contentEl = document.getElementById('walletDetailsContent');
+                const normalizedPhone = String(phone || '').trim();
+                activeWalletDetailsPhone = normalizedPhone;
+
+                titleEl.textContent = `Wallet Details - ${normalizedPhone}`;
+                contentEl.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
+                modal.classList.add('show');
+                modal.style.display = 'flex';
+
+                const res = await fetch(`${API_BASE}/admin/wallets/${encodeURIComponent(normalizedPhone)}`, {
+                    headers: { 'Authorization': `Bearer ${token}` }
+                });
+                const data = await res.json();
+                if (activeWalletDetailsPhone !== normalizedPhone) return;
+
+                if (!data.success || !data.wallet) {
+                    contentEl.innerHTML = `<p style="color:#e74c3c;">${data.message || 'Failed to load wallet details'}</p>`;
+                    return;
+                }
+
+                const wallet = data.wallet;
+                const txs = Array.isArray(data.transactions) ? data.transactions : [];
+
+                const summary = `
+                    <div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-bottom:12px;">
+                        <div style="background:#f5f7fb;padding:10px;border-radius:8px;"><strong>Balance</strong><br>&#8377;${Number(wallet.balance || 0).toLocaleString()}</div>
+                        <div style="background:#f5f7fb;padding:10px;border-radius:8px;"><strong>Total Deposited</strong><br>&#8377;${Number(wallet.totalDeposited || 0).toLocaleString()}</div>
+                        <div style="background:#f5f7fb;padding:10px;border-radius:8px;"><strong>Total Withdrawn</strong><br>&#8377;${Number(wallet.totalWithdrawn || 0).toLocaleString()}</div>
+                        <div style="background:#f5f7fb;padding:10px;border-radius:8px;"><strong>Total Earned</strong><br>&#8377;${Number(wallet.totalEarned || 0).toLocaleString()}</div>
+                    </div>
+                    <div style="margin-bottom:12px;color:#444;">
+                        <div><strong>Created:</strong> ${wallet.createdAt ? new Date(wallet.createdAt).toLocaleString() : '-'}</div>
+                        <div><strong>Updated:</strong> ${wallet.updatedAt ? new Date(wallet.updatedAt).toLocaleString() : '-'}</div>
+                    </div>
+                `;
+
+                if (!txs.length) {
+                    contentEl.innerHTML = `${summary}<p>No transactions found.</p>`;
+                    return;
+                }
+
+                const rows = txs.map((tx, i) => `
+                    <tr>
+                        <td>${i + 1}</td>
+                        <td>${tx._id || '-'}</td>
+                        <td>${tx.type || '-'}</td>
+                        <td>&#8377;${Number(tx.amount || 0).toLocaleString()}</td>
+                        <td>${tx.status || '-'}</td>
+                        <td>${tx.date ? new Date(tx.date).toLocaleString() : '-'}</td>
+                        <td>${tx.description || '-'}</td>
+                        <td>${tx.orderId || '-'}</td>
+                        <td>${tx.paymentId || '-'}</td>
+                        <td>${tx.source || '-'}</td>
+                        <td>${tx.provider || '-'}</td>
+                        <td>${tx.providerEventId || '-'}</td>
+                        <td>${tx.openingBalance !== undefined ? `&#8377;${Number(tx.openingBalance).toLocaleString()}` : '-'}</td>
+                        <td>${tx.closingBalance !== undefined ? `&#8377;${Number(tx.closingBalance).toLocaleString()}` : '-'}</td>
+                        <td style="max-width:220px;white-space:normal;word-break:break-word;">${tx.metadata ? JSON.stringify(tx.metadata) : '-'}</td>
+                    </tr>
+                `).join('');
+
+                contentEl.innerHTML = `
+                    ${summary}
+                    <div style="overflow-x:auto;">
+                        <table style="width:100%;border-collapse:collapse;">
+                            <thead>
+                                <tr>
+                                    <th>#</th>
+                                    <th>Txn ID</th>
+                                    <th>Type</th>
+                                    <th>Amount</th>
+                                    <th>Status</th>
+                                    <th>Time</th>
+                                    <th>Description</th>
+                                    <th>Order ID</th>
+                                    <th>Payment ID</th>
+                                    <th>Source</th>
+                                    <th>Provider</th>
+                                    <th>Provider Event ID</th>
+                                    <th>Opening</th>
+                                    <th>Closing</th>
+                                    <th>Metadata</th>
+                                </tr>
+                            </thead>
+                            <tbody>${rows}</tbody>
+                        </table>
+                    </div>
+                `;
+            } catch (err) {
+                console.error('Error loading wallet details:', err);
+                document.getElementById('walletDetailsContent').innerHTML = '<p style="color:#e74c3c;">Error loading wallet details</p>';
+            }
+        }
         // Approve document
         async function approveDocument(verificationId, documentId, phone) {
             if (!confirm(`Approve document for ${phone}?`)) return;
@@ -2087,7 +2201,17 @@
 
         // Close modal
         function closeModal(modalId) {
-            document.getElementById(modalId).classList.remove('show');
+            const modal = document.getElementById(modalId);
+            if (!modal) return;
+            modal.classList.remove('show');
+            modal.style.display = 'none';
+            if (modalId === 'walletDetailsModal') {
+                activeWalletDetailsPhone = null;
+                const contentEl = document.getElementById('walletDetailsContent');
+                if (contentEl) {
+                    contentEl.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
+                }
+            }
         }
 
         // Show full-size image
@@ -2141,3 +2265,4 @@
     </script>
 </body>
 </html>
+

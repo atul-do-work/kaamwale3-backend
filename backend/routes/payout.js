@@ -327,16 +327,34 @@ router.post('/admin/payouts/:batchId/complete', authenticateToken, async (req, r
 
     await batch.save();
 
-    // Update WorkerEarnings status
+    // Update WorkerEarnings status + payout trace fields per worker
     const week = batch.payoutWeek;
-    await WorkerEarnings.updateMany(
-      {
-        'payoutWeek.year': week.year,
-        'payoutWeek.week': week.week,
-        status: { $in: ['earned', 'payout_requested'] }
-      },
-      { status: 'payout_completed' }
-    );
+    for (const worker of batch.workers) {
+      await WorkerEarnings.updateMany(
+        {
+          workerPhone: worker.workerPhone,
+          'payoutWeek.year': week.year,
+          'payoutWeek.week': week.week,
+          status: { $in: ['earned', 'payout_requested'] }
+        },
+        {
+          $set: {
+            status: 'payout_completed',
+            payoutCompletedAt: new Date(),
+            source: 'admin',
+            provider: 'razorpay',
+            payoutId: worker.transactionId || null,
+            providerEventId: worker.transactionId || null,
+            payoutDetails: {
+              batchId: batch.batchId,
+              transactionId: worker.transactionId || null,
+              bankAccountId: null,
+              bankSnapshot: null
+            }
+          }
+        }
+      );
+    }
 
     // Create notifications for all workers
     for (const worker of batch.workers) {

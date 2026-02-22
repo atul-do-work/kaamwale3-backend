@@ -33,7 +33,7 @@ const notificationHistorySchema = new mongoose.Schema(
     },
     title: { type: String, required: true },
     body: { type: String, required: true },
-    jobId: { type: String, index: true },
+    jobId: { type: mongoose.Schema.Types.ObjectId, ref: "Job", index: true },
     // Metadata
     metadata: {
       amount: Number,
@@ -54,6 +54,16 @@ const notificationHistorySchema = new mongoose.Schema(
     emailSentAt: Date,
     smsSent: { type: Boolean, default: false },
     smsSentAt: Date,
+    provider: { type: String, default: null }, // fcm, sms_vendor, email_provider
+    providerMessageId: { type: String, default: null, index: true },
+    deliveryStatus: {
+      type: String,
+      enum: ["queued", "sent", "delivered", "failed"],
+      default: "queued",
+      index: true,
+    },
+    failureReason: { type: String, default: null },
+    deliveredAt: Date,
     // User action
     actionTaken: { type: Boolean, default: false },
     actionTakenAt: Date,
