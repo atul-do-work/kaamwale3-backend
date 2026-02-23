@@ -109,7 +109,7 @@ function getUpdatedValue(update, key) {
   return undefined;
 }
 
-jobSchema.pre('validate', function syncGeoLocation(next) {
+jobSchema.pre('validate', function syncGeoLocation() {
   if (
     Number.isFinite(this.lat) &&
     Number.isFinite(this.lon) &&
@@ -120,57 +120,54 @@ jobSchema.pre('validate', function syncGeoLocation(next) {
       coordinates: [this.lon, this.lat],
     };
   }
-  next();
 });
 
-jobSchema.pre('save', async function enforceTransitionsOnSave(next) {
-  if (this.isNew) return next();
+jobSchema.pre('save', async function enforceTransitionsOnSave() {
+  if (this.isNew) return;
 
   const existing = await this.constructor.findById(this._id).select('status paymentStatus').lean();
-  if (!existing) return next();
+  if (!existing) return;
 
   if (this.isModified('status') && this.status !== existing.status) {
     const allowed = ALLOWED_JOB_STATUS_TRANSITIONS[existing.status] || [];
     if (allowed.length && !allowed.includes(this.status)) {
-      return next(new Error(`Invalid job status transition: ${existing.status} -> ${this.status}`));
+      throw new Error(`Invalid job status transition: ${existing.status} -> ${this.status}`);
     }
   }
 
   if (this.isModified('paymentStatus') && this.paymentStatus !== existing.paymentStatus) {
     const allowed = ALLOWED_PAYMENT_STATUS_TRANSITIONS[existing.paymentStatus] || [];
     if (allowed.length && !allowed.includes(this.paymentStatus)) {
-      return next(new Error(`Invalid payment status transition: ${existing.paymentStatus} -> ${this.paymentStatus}`));
+      throw new Error(`Invalid payment status transition: ${existing.paymentStatus} -> ${this.paymentStatus}`);
     }
   }
-
-  return next();
 });
 
-jobSchema.pre('findOneAndUpdate', async function enforceTransitions(next) {
+jobSchema.pre('findOneAndUpdate', async function enforceTransitions() {
   const update = this.getUpdate() || {};
   const nextStatus = getUpdatedValue(update, 'status');
   const nextPaymentStatus = getUpdatedValue(update, 'paymentStatus');
 
   if (!nextStatus && !nextPaymentStatus) {
-    return next();
+    return;
   }
 
   const existing = await this.model.findOne(this.getQuery()).select('status paymentStatus').lean();
   if (!existing) {
-    return next();
+    return;
   }
 
   if (nextStatus && nextStatus !== existing.status) {
     const allowed = ALLOWED_JOB_STATUS_TRANSITIONS[existing.status] || [];
     if (allowed.length && !allowed.includes(nextStatus)) {
-      return next(new Error(`Invalid job status transition: ${existing.status} -> ${nextStatus}`));
+      throw new Error(`Invalid job status transition: ${existing.status} -> ${nextStatus}`);
     }
   }
 
   if (nextPaymentStatus && nextPaymentStatus !== existing.paymentStatus) {
     const allowed = ALLOWED_PAYMENT_STATUS_TRANSITIONS[existing.paymentStatus] || [];
     if (allowed.length && !allowed.includes(nextPaymentStatus)) {
-      return next(new Error(`Invalid payment status transition: ${existing.paymentStatus} -> ${nextPaymentStatus}`));
+      throw new Error(`Invalid payment status transition: ${existing.paymentStatus} -> ${nextPaymentStatus}`);
     }
   }
 
@@ -186,8 +183,6 @@ jobSchema.pre('findOneAndUpdate', async function enforceTransitions(next) {
     };
     this.setUpdate(update);
   }
-
-  next();
 });
 
 module.exports = mongoose.model('Job', jobSchema);
