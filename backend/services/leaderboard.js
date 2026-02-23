@@ -155,11 +155,8 @@ async function getContractorStats(userId) {
 
     const completionRate = totalJobsPosted > 0 ? (completedJobs / totalJobsPosted) * 100 : 0;
 
-    // Calculate average rating from completed jobs with reviews
-    const jobsWithRatings = jobs.filter((j) => j.rating && j.rating.stars && j.rating.stars > 0);
-    const avgRating = jobsWithRatings.length > 0
-      ? jobsWithRatings.reduce((sum, j) => sum + j.rating.stars, 0) / jobsWithRatings.length
-      : 0;
+    // Contractor rating is maintained on User.avgRating from worker->contractor reviews.
+    const avgRating = Number(user.avgRating) || 0;
 
     // Estimate average response time (default to 24 hours if not tracked)
     const avgResponseTime = 24;
@@ -245,16 +242,34 @@ async function calculateCityLeaderboard(city, state) {
 
           return {
             contractorId: contractor._id,
+            phone: contractor.phone,
             name: contractor.name,
+            score: Math.round(score * 10) / 10,
             points: Math.round(score),
+            avgRating: stats?.avgRating || 0,
+            totalJobsPosted: stats?.totalJobsPosted || 0,
+            completedJobs: stats?.completedJobs || 0,
+            daysActive: stats?.daysActive || 0,
+            completionRate: stats?.completionRate || 0,
+            avgResponseTime: stats?.avgResponseTime || 0,
+            profilePhoto: contractor.profilePhoto || "",
             tier: getTierByScore(score),
           };
         } catch (contractorErr) {
           console.warn(`⚠️ [Leaderboard] Error calculating score for ${contractor.name}:`, contractorErr.message);
           return {
             contractorId: contractor._id,
+            phone: contractor.phone,
             name: contractor.name,
+            score: 0,
             points: 0,
+            avgRating: 0,
+            totalJobsPosted: 0,
+            completedJobs: 0,
+            daysActive: 0,
+            completionRate: 0,
+            avgResponseTime: 0,
+            profilePhoto: contractor.profilePhoto || "",
             tier: 'new',
           };
         }

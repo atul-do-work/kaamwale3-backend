@@ -21,10 +21,6 @@ function attachSocketAuthMiddleware(io, { jwt, jwtSecret, WorkerModel, User, con
             const existing = await WorkerModel.findOne({ phone: user.phone });
             if (existing) {
               existing.socketId = socket.id;
-              if (!existing.isAvailable) {
-                existing.isAvailable = true;
-                console.log(`Worker ${user.phone} marked as AVAILABLE (reconnected)`);
-              }
               await existing.save();
 
               let mainSkill = null;
@@ -49,9 +45,6 @@ function attachSocketAuthMiddleware(io, { jwt, jwtSecret, WorkerModel, User, con
                 expectedWage,
                 socketId: socket.id,
                 isAvailable: existing.isAvailable,
-                consecutiveDays: existing.gigsData?.consecutiveDays || 0,
-                eligibleFor5Days: existing.gigsData?.eligibleFor5Days || false,
-                eligibleFor10Days: existing.gigsData?.eligibleFor10Days || false,
               });
               console.log(`Re-associated existing worker session for ${user.phone}`);
             }
@@ -83,4 +76,3 @@ function attachSocketAuthMiddleware(io, { jwt, jwtSecret, WorkerModel, User, con
 module.exports = {
   attachSocketAuthMiddleware,
 };
-

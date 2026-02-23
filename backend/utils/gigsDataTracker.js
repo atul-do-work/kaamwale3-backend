@@ -1,6 +1,7 @@
 /**
  * Gigs Data Tracker Utility
- * Manages all worker gig statistics, streak tracking, and incentive eligibility
+ * Manages worker gig operational stats (recent gigs, totals, performance).
+ * Incentive eligibility is computed from GigHistory elsewhere.
  */
 
 const Worker = require("../models/Worker");
@@ -62,9 +63,6 @@ exports.updateGigDataOnCompletion = async (workerPhone, jobData) => {
       worker.recentGigs.pop();
     }
 
-    // Check eligibility for incentives
-    await updateIncentiveEligibility(worker);
-
     // Update performance metrics
     await updatePerformanceMetrics(worker);
 
@@ -106,9 +104,6 @@ exports.updateGigDataOnCancellation = async (workerPhone, jobData) => {
     if (worker.recentGigs.length > 10) {
       worker.recentGigs.pop();
     }
-
-    // Check eligibility for incentives (will likely fail now)
-    await updateIncentiveEligibility(worker);
 
     // Update performance metrics
     await updatePerformanceMetrics(worker);
@@ -276,9 +271,6 @@ exports.getWorkerGigsSummary = async (workerPhone) => {
       completionRate: worker.performanceMetrics.completionRate,
       averageRating: worker.performanceMetrics.averageRating,
       milestonesUnlocked: worker.gigsData.milestonesUnlocked,
-      eligibleFor5Days: worker.gigsData.eligibleFor5Days,
-      eligibleFor10Days: worker.gigsData.eligibleFor10Days,
-      eligibleFor20Days: worker.gigsData.eligibleFor20Days,
       recentGigs: worker.recentGigs || [],
     };
   } catch (err) {

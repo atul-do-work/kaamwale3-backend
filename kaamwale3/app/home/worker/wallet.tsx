@@ -21,13 +21,15 @@ import { connectSocket } from '../../../utils/socket';
 import { useLanguage } from '../../../context/LanguageContext';
 // Define types for wallet and transactions
 type Transaction = {
-  type: 'deposit' | 'withdraw' | 'payment'; // ✅ Added 'payment' type for contractor payments
+  type: 'deposit' | 'pocket_deposit' | 'withdraw' | 'payment'; // ✅ Added 'payment' type for contractor payments
   amount: number;
   date: string;
 };
 
 type WalletType = {
   balance: number;
+  availableBalance: number;
+  pocketBalance: number;
   transactions: Transaction[];
 };
 
@@ -39,7 +41,7 @@ export default function Wallet(): React.ReactElement {
   const insets = useSafeAreaInsets();
   const { accessToken, user: authUser } = useAuth();
   
-  const [wallet, setWallet] = useState<WalletType>({ balance: 0, transactions: [] });
+  const [wallet, setWallet] = useState<WalletType>({ balance: 0, availableBalance: 0, pocketBalance: 0, transactions: [] });
   const [showDeposit, setShowDeposit] = useState(false);
   const [showWithdraw, setShowWithdraw] = useState(false);
   const [depositAmount, setDepositAmount] = useState('');
@@ -79,14 +81,14 @@ export default function Wallet(): React.ReactElement {
         console.log(`👤 Wallet: User changed from ${previousUserPhoneRef.current} to ${userPhone}, resetting wallet`);
         previousUserPhoneRef.current = userPhone;
         setCurrentUserPhone(userPhone);
-        setWallet({ balance: 0, transactions: [] });
+        setWallet({ balance: 0, availableBalance: 0, pocketBalance: 0, transactions: [] });
         setDepositLoading(false); // Reset loading state on user change
       } else if (!userPhone && previousUserPhoneRef.current !== null) {
         // User logged out
         console.log(`👤 Wallet: User logged out, resetting wallet`);
         previousUserPhoneRef.current = null;
         setCurrentUserPhone(null);
-        setWallet({ balance: 0, transactions: [] });
+        setWallet({ balance: 0, availableBalance: 0, pocketBalance: 0, transactions: [] });
         setDepositLoading(false); // Reset loading state on logout
       }
     }, [authUser])
@@ -112,7 +114,7 @@ export default function Wallet(): React.ReactElement {
     if (userPhone && userPhone !== currentUserPhone) {
       console.log(`👤 User changed from ${currentUserPhone} to ${userPhone}, resetting wallet`);
       setCurrentUserPhone(userPhone);
-      setWallet({ balance: 0, transactions: [] });
+      setWallet({ balance: 0, availableBalance: 0, pocketBalance: 0, transactions: [] });
     }
   }, [authUser?.phone]);
 
@@ -140,12 +142,16 @@ export default function Wallet(): React.ReactElement {
             return;
           }
           
-          if (data && data.phone === currentUserPhone && data.balance !== undefined) {
+          if (data && data.phone === currentUserPhone) {
+            const nextAvailable = Number(data.availableBalance ?? data.balance ?? 0);
+            const nextPocket = Number(data.pocketBalance ?? 0);
             setWallet(prev => {
               // ✅ FIX: Ensure prev and transactions are defined before spreading
               if (!prev || !prev.transactions) {
                 return {
-                  balance: data.balance,
+                  balance: nextAvailable,
+                  availableBalance: nextAvailable,
+                  pocketBalance: nextPocket,
                   transactions: [{
                     type: data.type || 'deposit',
                     amount: data.amount || 0,
@@ -155,7 +161,9 @@ export default function Wallet(): React.ReactElement {
               }
               
               return {
-                balance: data.balance,
+                balance: nextAvailable,
+                availableBalance: nextAvailable,
+                pocketBalance: nextPocket,
                 transactions: [
                   {
                     type: data.type || 'deposit',
@@ -166,7 +174,7 @@ export default function Wallet(): React.ReactElement {
                 ]
               };
             });
-            console.log(`✅ Wallet updated: ₹${data.balance}`);
+            console.log(`✅ Wallet updated: available ₹${nextAvailable}, pocket ₹${nextPocket}`);
           } else {
             console.warn(`⚠️ Invalid wallet update data:`, data);
           }
@@ -202,9 +210,11 @@ export default function Wallet(): React.ReactElement {
       const res = await api.get('/wallet');
 
       if (res.data.success && res.data.wallet) {
-        console.log(`💰 Wallet fetched: ₹${res.data.wallet.balance}`);
+        console.log(`💰 Wallet fetched: available ₹${res.data.wallet.availableBalance ?? res.data.wallet.balance ?? 0}, pocket ₹${res.data.wallet.pocketBalance || 0}`);
         setWallet({
-          balance: res.data.wallet.balance || 0,
+          balance: Number(res.data.wallet.availableBalance ?? res.data.wallet.balance ?? 0),
+          availableBalance: Number(res.data.wallet.availableBalance ?? res.data.wallet.balance ?? 0),
+          pocketBalance: Number(res.data.wallet.pocketBalance || 0),
           transactions: res.data.wallet.transactions || []
         });
         return Promise.resolve();
@@ -369,7 +379,7 @@ export default function Wallet(): React.ReactElement {
       // setDepositModalVisible(false);
 
       if (res.data.success) {
-        Alert.alert('Success', `₹${currentDepositAmount} deposited to your wallet!`);
+        Alert.alert('Success', `₹${currentDepositAmount} deposited to your pocket balance!`);
         setDepositAmount('');
         setShowDeposit(false);
         // ✅ Fallback: Fetch wallet if socket fails
@@ -415,7 +425,7 @@ export default function Wallet(): React.ReactElement {
       return;
     }
 
-    if (Number(withdrawAmount) > wallet.balance) {
+    if (Number(withdrawAmount) > wallet.availableBalance) {
       Alert.alert('Error', 'Insufficient balance');
       return;
     }
@@ -517,7 +527,7 @@ export default function Wallet(): React.ReactElement {
     title: t.type.charAt(0).toUpperCase() + t.type.slice(1),
     amount: t.amount,
     date: new Date(t.date).toLocaleDateString(),
-    icon: t.type === 'deposit' ? 'attach-money' : (t.type === 'payment' ? 'paid' : 'money-off')
+    icon: (t.type === 'deposit' || t.type === 'pocket_deposit') ? 'attach-money' : (t.type === 'payment' ? 'paid' : 'money-off')
   }));
 
   useEffect(() => {
@@ -537,19 +547,19 @@ export default function Wallet(): React.ReactElement {
         style={styles.headerContainer}
       >
         <Text style={styles.headerText}>Earnings</Text>
-        <Text style={styles.amountText}>₹{wallet.balance}</Text>
+        <Text style={styles.amountText}>₹{wallet.availableBalance}</Text>
       </LinearGradient>
 
       {/* Pocket Balance */}
       <View style={styles.balanceContainer}>
         <Text style={styles.balanceTitle}>Pocket Balance</Text>
-        <Text style={styles.balanceAmount}>₹{wallet.balance}</Text>
+        <Text style={styles.balanceAmount}>₹{wallet.pocketBalance}</Text>
       </View>
 
       {/* Available Balance */}
       <View style={styles.balanceContainer}>
         <Text style={styles.balanceTitle}>Available Balance</Text>
-        <Text style={styles.balanceAmount}>₹{wallet.balance}</Text>
+        <Text style={styles.balanceAmount}>₹{wallet.availableBalance}</Text>
       </View>
 
       {/* Deposit & Withdraw Buttons */}
@@ -825,3 +835,5 @@ export default function Wallet(): React.ReactElement {
     </ScrollView>
   );
 }
+
+

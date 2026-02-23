@@ -4,12 +4,14 @@ const walletSchema = new mongoose.Schema(
   {
     phone: { type: String, required: true, unique: true, index: true },
     balance: { type: Number, default: 0 },
+    availableBalance: { type: Number, default: 0 },
+    pocketBalance: { type: Number, default: 0 },
     bankAccountId: { type: mongoose.Schema.Types.ObjectId, ref: 'BankAccount' },
     transactions: [
       {
         type: {
           type: String,
-          enum: ['deposit', 'withdraw', 'payment', 'job_post_fee', 'refund', 'premium_subscription'],
+          enum: ['deposit', 'withdraw', 'payment', 'job_post_fee', 'refund', 'premium_subscription', 'pocket_deposit'],
         },
         amount: Number,
         date: { type: Date, default: Date.now },
@@ -40,6 +42,14 @@ const walletSchema = new mongoose.Schema(
 walletSchema.index({ 'transactions.paymentId': 1 }, { unique: true, sparse: true });
 walletSchema.index({ 'transactions.payoutId': 1 }, { sparse: true });
 walletSchema.index({ 'transactions.idempotencyKey': 1 }, { sparse: true });
+
+walletSchema.pre('save', function syncLegacyBalance(next) {
+  // Keep legacy balance aligned with withdrawable balance for older API consumers.
+  if (!Number.isFinite(this.availableBalance)) this.availableBalance = Number(this.balance || 0);
+  if (!Number.isFinite(this.pocketBalance)) this.pocketBalance = 0;
+  this.balance = Number(this.availableBalance || 0);
+  next();
+});
 
 walletSchema.methods.updateTotals = function updateTotals() {
   this.totalDeposited = this.transactions

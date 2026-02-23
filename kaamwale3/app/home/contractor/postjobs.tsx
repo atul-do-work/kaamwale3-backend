@@ -63,8 +63,6 @@ export default function PostJobScreen() {
   const [numberOfDays, setNumberOfDays] = useState(1); // ✅ Job duration in days (1-30)
   const [showDaysDropdown, setShowDaysDropdown] = useState(false); // ✅ Days dropdown toggle
   const [gettingLocation, setGettingLocation] = useState(false); // ✅ Loading state for current location
-  const [locationQuery, setLocationQuery] = useState('');
-  const [resolvingAddress, setResolvingAddress] = useState(false);
   const [showMapPicker, setShowMapPicker] = useState(false);
   const [mapLoading, setMapLoading] = useState(false);
   const [mapCenter, setMapCenter] = useState<{ lat: number; lon: number }>({ lat: 26.9124, lon: 75.7873 });
@@ -250,48 +248,6 @@ export default function PostJobScreen() {
     }
   };
 
-  const setLocationFromAddress = async () => {
-    const query = locationQuery.trim();
-    if (!query) {
-      return Alert.alert('Missing', 'Please enter a location or address');
-    }
-
-    try {
-      setResolvingAddress(true);
-      const geoResults = await Location.geocodeAsync(query);
-      if (!geoResults || geoResults.length === 0) {
-        return Alert.alert('Not Found', 'Could not find this address. Try a clearer landmark/city.');
-      }
-
-      const first = geoResults[0];
-      let placeName = query;
-      try {
-        const reverse = await Location.reverseGeocodeAsync({
-          latitude: first.latitude,
-          longitude: first.longitude,
-        });
-        if (reverse && reverse.length > 0) {
-          const g = reverse[0];
-          const parts = [g.name, g.street, g.subregion || g.region || g.city, g.postalCode, g.country].filter(Boolean);
-          if (parts.length > 0) placeName = parts.join(', ');
-        }
-      } catch {
-        // keep typed query as place name
-      }
-
-      setSelectedLocation({
-        lat: first.latitude,
-        lon: first.longitude,
-        placeName,
-      });
-      Alert.alert('Success', 'Job location set from entered address');
-    } catch (err) {
-      Alert.alert('Error', (err as Error).message || 'Failed to find address location');
-    } finally {
-      setResolvingAddress(false);
-    }
-  };
-
   const openMapPicker = async () => {
     try {
       setMapLoading(true);
@@ -324,6 +280,18 @@ export default function PostJobScreen() {
     const coordinates =
       event?.geometry?.coordinates ||
       event?.features?.[0]?.geometry?.coordinates ||
+      event?.coordinates;
+
+    if (!coordinates || coordinates.length < 2) return;
+    const [lon, lat] = coordinates;
+    if (typeof lat !== 'number' || typeof lon !== 'number') return;
+    setMapPin({ lat, lon });
+  };
+
+  const onPinDragEnd = (event: any) => {
+    const coordinates =
+      event?.geometry?.coordinates ||
+      event?.nativeEvent?.coordinates ||
       event?.coordinates;
 
     if (!coordinates || coordinates.length < 2) return;
@@ -676,30 +644,6 @@ export default function PostJobScreen() {
             )}
           </TouchableOpacity>
 
-          <View style={[styles.inputCard, { marginTop: 10, marginBottom: 10 }]}>
-            <Ionicons name="search-outline" size={22} color="#bcbec7ff" />
-            <TextInput
-              style={styles.input}
-              placeholder="Enter address, area, or landmark"
-              placeholderTextColor="#aaa"
-              value={locationQuery}
-              onChangeText={setLocationQuery}
-            />
-          </View>
-          <TouchableOpacity
-            style={[styles.addressButton, resolvingAddress && { opacity: 0.8 }]}
-            onPress={setLocationFromAddress}
-            disabled={resolvingAddress}
-          >
-            {resolvingAddress ? (
-              <ActivityIndicator size="small" color="#fff" />
-            ) : (
-              <>
-                <Ionicons name="location-outline" size={18} color="#fff" />
-                <Text style={[styles.addressButtonText, { marginLeft: 8 }]}>Use Entered Address</Text>
-              </>
-            )}
-          </TouchableOpacity>
         </View>
 
         {/* Image Upload */}
@@ -905,6 +849,8 @@ export default function PostJobScreen() {
               <PointAnnotation
                 id="job-pin"
                 coordinate={[mapPin.lon, mapPin.lat]}
+                draggable
+                onDragEnd={onPinDragEnd}
               >
                 <View style={styles.mapPin}>
                   <Ionicons name="location" size={22} color="#fff" />

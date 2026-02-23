@@ -1,4 +1,4 @@
-import React, { useEffect, useState, memo, useRef, ErrorInfo } from "react";
+import React, { useEffect, useState, memo, useRef, ErrorInfo, useCallback } from "react";
 import {
   View,
   ScrollView,
@@ -15,7 +15,6 @@ import * as Notifications from 'expo-notifications'; // ✅ For foreground notif
 import { useFocusEffect } from "@react-navigation/native";
 import { MaterialIcons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
-import { useSafeAreaInsets } from "react-native-safe-area-context";
 import WorkerMap from "../../../components/WorkerMap";
 import FullContainer from "../../../components/FullContainer";
 import * as Location from "expo-location";
@@ -171,7 +170,6 @@ const JobItem = memo(({ item, onAccept, onDecline, timer, t }: JobItemProps) => 
 // ---------------- WORKER HOME COMPONENT ----------------
 function WorkerHome() {
   const { t } = useLanguage();
-  const insets = useSafeAreaInsets();
   const [error, setError] = useState<string | null>(null);
   const [currentJob, setCurrentJob] = useState<Job | null>(null);
   const [currentLocation, setCurrentLocation] = useState<{ lat: number; lon: number } | null>(null);
@@ -188,6 +186,9 @@ function WorkerHome() {
   const [todayJobs, setTodayJobs] = useState<number>(0);
   const [historyCount, setHistoryCount] = useState<number>(0);
   const [totalEarnings, setTotalEarnings] = useState<number>(0);
+  const [jobsCompleted, setJobsCompleted] = useState<number>(0);
+  const [avgCompletedRating, setAvgCompletedRating] = useState<number>(0);
+  const [todayIncentiveEarnings, setTodayIncentiveEarnings] = useState<number>(0);
   const [notificationCount, setNotificationCount] = useState<number>(0);
   const [workerProfilePhoto, setWorkerProfilePhoto] = useState<string | null>(null); // ✅ Worker profile photo
   const [showHelpModal, setShowHelpModal] = useState<boolean>(false); // ✅ Help modal state
@@ -310,6 +311,12 @@ function WorkerHome() {
           setCurrentUserPhone(userPhone);
           setTodayEarnings(0);
           setTodayJobs(0);
+          setTimeOnOrder(0);
+          setHistoryCount(0);
+          setTotalEarnings(0);
+          setJobsCompleted(0);
+          setAvgCompletedRating(0);
+          setTodayIncentiveEarnings(0);
           setCurrentJob(null);
           displayedJobIds.current.clear(); // 🔄 Clear dedup set for new user
           setHandledJobs(new Set());
@@ -327,6 +334,12 @@ function WorkerHome() {
           setCurrentUserPhone(null);
           setTodayEarnings(0);
           setTodayJobs(0);
+          setTimeOnOrder(0);
+          setHistoryCount(0);
+          setTotalEarnings(0);
+          setJobsCompleted(0);
+          setAvgCompletedRating(0);
+          setTodayIncentiveEarnings(0);
           setCurrentJob(null);
           displayedJobIds.current.clear(); // 🔄 Clear dedup set on logout
           setHandledJobs(new Set());
@@ -976,67 +989,31 @@ function WorkerHome() {
   };
 
   // ---------------- CALCULATE DASHBOARD METRICS ----------------
-  const calculateMetrics = async () => {
+  const calculateMetrics = useCallback(async () => {
     if (!token) return;
 
     try {
-      const res = await fetch(`${API_BASE}/jobs/my-accepted`, {
+      const res = await fetch(`${API_BASE}/worker/overview-stats`, {
         headers: { Authorization: `Bearer ${token}` },
       });
 
       if (!res.ok) return;
 
       const payload = await res.json();
-      const jobs: any[] = Array.isArray(payload) ? payload : (payload?.gigs || []);
-      if (!Array.isArray(jobs)) return;
+      const stats = payload?.stats || {};
 
-      // Get today's date at midnight
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
-
-      // Filter today's jobs that are accepted and either paid or being worked on
-      const todayAcceptedJobs = jobs.filter(job => {
-        if (job.status === "cancelled" || job.status === "expired") return false;
-        if (!job.acceptedBy) return false;
-        const jobDate = new Date(job.date || job.createdAt);
-        jobDate.setHours(0, 0, 0, 0);
-        return jobDate.getTime() === today.getTime();
-      });
-
-      // Today's earnings: sum of amount for jobs that are paid today
-      const todayEarningsSum = todayAcceptedJobs
-        .filter(j => j.paymentStatus === "Paid")
-        .reduce((sum, j) => sum + (Number(j.amount) || 0), 0);
-
-      // Time on order: sum of timeSpentMinutes for today's paid jobs
-      const totalTimeSpent = todayAcceptedJobs
-        .filter(j => j.paymentStatus === "Paid")
-        .reduce((sum, j) => sum + (Number(j.timeSpentMinutes) || 0), 0);
-
-      // Today's jobs: count of accepted jobs today
-      const todayJobsCount = todayAcceptedJobs.length;
-
-      // Total earnings: sum of all paid jobs (all time)
-      const totalEarningsSum = jobs
-        .filter(j => j.status !== "cancelled" && j.status !== "expired")
-        .filter(j => j.paymentStatus === "Paid")
-        .reduce((sum, j) => sum + (Number(j.amount) || 0), 0);
-
-      // History count: total count of accepted jobs (all time)
-      const totalHistory = jobs
-        .filter(j => j.status !== "cancelled" && j.status !== "expired")
-        .filter(j => j.acceptedBy).length;
-
-      // Update state
-      setTodayEarnings(todayEarningsSum);
-      setTimeOnOrder(totalTimeSpent);
-      setTodayJobs(todayJobsCount);
-      setTotalEarnings(totalEarningsSum);
-      setHistoryCount(totalHistory);
+      setTodayEarnings(Number(stats.todayEarnings) || 0);
+      setTimeOnOrder(Number(stats.timeOnOrder) || 0);
+      setTodayJobs(Number(stats.todayJobs) || 0);
+      setTotalEarnings(Number(stats.totalEarnings) || 0);
+      setHistoryCount(Number(stats.historyCount) || 0);
+      setJobsCompleted(Number(stats.jobsCompleted) || 0);
+      setAvgCompletedRating(Number(stats.avgCompletedRating) || 0);
+      setTodayIncentiveEarnings(Number(stats.activeBonuses) || 0);
     } catch (err) {
       console.error("Failed to calculate metrics:", err);
     }
-  };
+  }, [token]);
 
   // Set up metrics calculation on component mount
   useEffect(() => {
@@ -1044,7 +1021,39 @@ function WorkerHome() {
       calculateMetrics();
       fetchNotificationCount();
     }
-  }, [token]);
+  }, [token, calculateMetrics]);
+
+  // Refresh daily metrics exactly at local midnight so Today's Overview resets without app restart.
+  useEffect(() => {
+    if (!token) return;
+
+    let midnightTimeout: ReturnType<typeof setTimeout> | null = null;
+    let midnightInterval: ReturnType<typeof setInterval> | null = null;
+
+    const runRefresh = () => {
+      calculateMetrics();
+      fetchNotificationCount();
+    };
+
+    const scheduleMidnightRefresh = () => {
+      const now = new Date();
+      const nextMidnight = new Date(now);
+      nextMidnight.setHours(24, 0, 0, 0);
+      const msUntilMidnight = Math.max(1000, nextMidnight.getTime() - now.getTime());
+
+      midnightTimeout = setTimeout(() => {
+        runRefresh();
+        midnightInterval = setInterval(runRefresh, 24 * 60 * 60 * 1000);
+      }, msUntilMidnight);
+    };
+
+    scheduleMidnightRefresh();
+
+    return () => {
+      if (midnightTimeout) clearTimeout(midnightTimeout);
+      if (midnightInterval) clearInterval(midnightInterval);
+    };
+  }, [token, calculateMetrics]);
 
   // ✅ SAVE ONE-TIME PROFILE SETUP (Skill & Wage)
   const handleSaveProfileSetup = async () => {
@@ -1192,11 +1201,17 @@ function WorkerHome() {
         body: JSON.stringify(body),
       });
 
-      if (!res.ok) {
-        throw new Error("Failed to update availability");
+      let data: any = null;
+      try {
+        data = await res.json();
+      } catch {
+        data = null;
       }
 
-      const data = await res.json();
+      if (!res.ok) {
+        const backendMessage = data?.message || "Failed to update availability";
+        throw new Error(backendMessage);
+      }
       console.log(`✅ Availability updated to: ${newStatus}`);
       
       // STEP 4: UPDATE LOCAL STATE & STORAGE
@@ -1247,7 +1262,8 @@ function WorkerHome() {
       );
     } catch (err) {
       console.error("❌ Failed to toggle status:", err);
-      Alert.alert("Error", "Failed to update availability status");
+      const errMsg = err instanceof Error ? err.message : "Failed to update availability status";
+      Alert.alert("Error", errMsg);
     } finally {
       setTogglingStatus(false);
     }
@@ -1488,7 +1504,7 @@ function WorkerHome() {
   };
 
   return (
-    <View style={[styles.container, { paddingBottom: Math.max(insets.bottom + 12, 20) }]}>
+    <View style={styles.container}>
       {error && (
         <View style={{ backgroundColor: '#ffebee', padding: 20, margin: 10, borderRadius: 8, borderLeftWidth: 4, borderLeftColor: '#e74c3c' }}>
           <Text style={{ color: '#c62828', fontWeight: 'bold', marginBottom: 8 }}>⚠️ Error Loading Worker Home</Text>
@@ -2075,9 +2091,9 @@ function WorkerHome() {
         todayJobs={todayJobs}
         historyCount={historyCount}
         totalEarnings={totalEarnings}
-        offersClaimed={0}
-        pendingOffers={0}
-        activeBonuses={0}
+        offersClaimed={jobsCompleted}
+        averageRating={avgCompletedRating}
+        activeBonuses={todayIncentiveEarnings}
       />
         </>
       )}
@@ -2105,8 +2121,7 @@ const styles = StyleSheet.create({
     paddingVertical: 15,
     paddingTop: 25, // ✅ Added top padding to move content down
     backgroundColor: "#fff",
-    borderBottomWidth: 1,
-    borderBottomColor: "#e0e0e0",
+    borderBottomWidth: 0,
   },
   // ✅ Profile Photo Styles
   headerProfileContainer: {
@@ -2177,7 +2192,7 @@ const styles = StyleSheet.create({
     fontSize: 10,
     fontWeight: "700",
   },
-  topSection: { zIndex: 1 },
+  topSection: { zIndex: 0, marginBottom: -1, overflow: "hidden", backgroundColor: "#f5f5f5" },
   map: { width: "100%", height: 350 },
   horizontalScrollContainer: { marginTop: -2, paddingLeft: 12, paddingBottom: 8 },
   jobCard: {

@@ -1,4 +1,5 @@
 const express = require("express");
+const { createGigHistoryEvent } = require("../services/gigHistoryService");
 
 function createJobsLifecycleCoreRouter({
   authenticateToken,
@@ -106,6 +107,18 @@ function createJobsLifecycleCoreRouter({
             amount: bulkJob.amount,
             workerType: bulkJob.workerType,
           });
+          await createGigHistoryEvent({
+            workerPhone,
+            workerName: workerName || workerPhone,
+            jobId: bulkJob._id,
+            jobTitle: bulkJob.title,
+            contractorPhone: bulkJob.contractorPhone,
+            contractorName: bulkJob.contractorName,
+            eventType: "job_accepted",
+            status: bulkJob.status,
+            paymentStatus: bulkJob.paymentStatus,
+            eventTime: new Date(),
+          });
         } catch (e) {
           console.error("Error updating gigs data on acceptance:", e);
         }
@@ -199,6 +212,18 @@ function createJobsLifecycleCoreRouter({
           title: updated.title,
           amount: updated.amount,
           workerType: updated.workerType,
+        });
+        await createGigHistoryEvent({
+          workerPhone,
+          workerName: workerName || workerPhone,
+          jobId: updated._id,
+          jobTitle: updated.title,
+          contractorPhone: updated.contractorPhone,
+          contractorName: updated.contractorName,
+          eventType: "job_accepted",
+          status: updated.status,
+          paymentStatus: updated.paymentStatus,
+          eventTime: new Date(),
         });
       } catch (e) {
         console.error("Error updating gigs data on acceptance:", e);
@@ -305,17 +330,20 @@ function createJobsLifecycleCoreRouter({
               amount: job.amount,
               workerType: job.workerType,
             });
+            await createGigHistoryEvent({
+              workerPhone,
+              workerName: workerName || workerPhone,
+              jobId: job._id,
+              jobTitle: job.title,
+              contractorPhone: job.contractorPhone,
+              contractorName: job.contractorName,
+              eventType: "job_declined_offer",
+              status: job.status,
+              paymentStatus: job.paymentStatus,
+              eventTime: new Date(),
+            });
           } catch (e) {
             console.error("Error updating gigs data on cancellation:", e);
-          }
-          try {
-            const worker = await WorkerModel.findOne({ phone: workerPhone });
-            if (worker && typeof worker.recordWork === "function") {
-              worker.recordWork(new Date(), 0, true);
-              await worker.save();
-            }
-          } catch (recErr) {
-            console.error("Error recording work cancellation on decline:", recErr);
           }
         }
       } else if (job.acceptedBy === workerPhone && job.status === "accepted") {
@@ -334,17 +362,20 @@ function createJobsLifecycleCoreRouter({
             amount: job.amount,
             workerType: job.workerType,
           });
+          await createGigHistoryEvent({
+            workerPhone,
+            workerName: workerName || workerPhone,
+            jobId: job._id,
+            jobTitle: job.title,
+            contractorPhone: job.contractorPhone,
+            contractorName: job.contractorName,
+            eventType: "job_declined_offer",
+            status: job.status,
+            paymentStatus: job.paymentStatus,
+            eventTime: new Date(),
+          });
         } catch (e) {
           console.error("Error updating gigs data on cancellation:", e);
-        }
-        try {
-          const worker = await WorkerModel.findOne({ phone: workerPhone });
-          if (worker && typeof worker.recordWork === "function") {
-            worker.recordWork(new Date(), 0, true);
-            await worker.save();
-          }
-        } catch (recErr) {
-          console.error("Error recording work cancellation on decline (single):", recErr);
         }
       }
 
@@ -385,4 +416,3 @@ function createJobsLifecycleCoreRouter({
 module.exports = {
   createJobsLifecycleCoreRouter,
 };
-

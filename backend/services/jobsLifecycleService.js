@@ -1,10 +1,12 @@
 const Job = require("../models/Jobs");
 const WorkerModel = require("../models/Worker");
+const User = require("../models/User");
 const Wallet = require("../models/Wallet");
 const NotificationHistory = require("../models/NotificationHistory");
 const CancellationLog = require("../models/CancellationLog");
 const ActivityLog = require("../models/ActivityLog");
 const { updateGigDataOnCompletion } = require("../utils/gigsDataTracker");
+const { createGigHistoryEvent } = require("./gigHistoryService");
 
 async function markAttendance({ jobId, status, userPhone, deps }) {
   const { trackingJobs, emitJobUpdatedToUsers, logJobEvent } = deps;
@@ -54,8 +56,31 @@ async function payJob({ jobId, mode, userPhone, userName, deps }) {
   if (job.acceptedAt) {
     const timeSpentMs = job.paymentTime - job.acceptedAt;
     job.timeSpentMinutes = Math.round(timeSpentMs / 60000);
+    job.hoursWorked = Math.round(((job.timeSpentMinutes || 0) / 60) * 10) / 10;
   }
   await job.save();
+
+  // Record completion for incentive eligibility only after payment is finalized.
+  try {
+    if (job.acceptedBy) {
+      await createGigHistoryEvent({
+        workerPhone: job.acceptedBy,
+        workerName: job.acceptedWorker?.name || job.acceptedBy,
+        jobId: job._id,
+        jobTitle: job.title,
+        contractorPhone: job.contractorPhone,
+        contractorName: job.contractorName,
+        eventType: "job_completed",
+        status: job.status,
+        paymentStatus: job.paymentStatus,
+        hoursWorked: job.hoursWorked || 0,
+        timeSpentMinutes: job.timeSpentMinutes || 0,
+        eventTime: job.paymentTime || new Date(),
+      });
+    }
+  } catch (e) {
+    console.error("Error writing gig history completion event:", e);
+  }
 
   await logJobEvent({
     jobId: job._id,
@@ -72,19 +97,6 @@ async function payJob({ jobId, mode, userPhone, userName, deps }) {
     },
     metadata: { amount: job.amount },
   });
-
-  try {
-    if (job.acceptedBy) {
-      const worker = await WorkerModel.findOne({ phone: job.acceptedBy });
-      if (worker && typeof worker.recordWork === "function") {
-        const hoursWorked = (job.timeSpentMinutes || 0) / 60;
-        worker.recordWork(job.paymentTime || new Date(), hoursWorked, false);
-        await worker.save();
-      }
-    }
-  } catch (recErr) {
-    console.error("Error recording worker work on payment:", recErr);
-  }
 
   try {
     if (job.acceptedWorker && job.acceptedWorker.phone) {
@@ -111,20 +123,53 @@ async function payJob({ jobId, mode, userPhone, userName, deps }) {
 
   try {
     let workerWallet = await Wallet.findOne({ phone: job.acceptedBy });
-    if (!workerWallet) workerWallet = new Wallet({ phone: job.acceptedBy, balance: 0 });
-    workerWallet.balance += Number(job.amount);
+    if (!workerWallet) workerWallet = new Wallet({ phone: job.acceptedBy, balance: 0, availableBalance: 0, pocketBalance: 0 });
+    const creditAmount = Number(job.amount) || 0;
+    workerWallet.availableBalance = Number(workerWallet.availableBalance ?? workerWallet.balance ?? 0) + creditAmount;
+    workerWallet.balance = Number(workerWallet.availableBalance || 0);
     workerWallet.transactions.push({
       type: "payment",
-      amount: Number(job.amount),
+      amount: creditAmount,
       date: new Date(),
       jobId: job._id,
       source: "app",
       provider: "internal",
       status: "completed",
+      description: `Job payment credited to available balance (${job.title})`,
+      metadata: { balanceType: "available" },
     });
     await workerWallet.save();
   } catch (walletErr) {
     console.error("Error updating worker wallet after payment:", walletErr);
+  }
+
+  // First completed cash-paid job activates mandatory pocket balance rule for worker availability.
+  try {
+    const normalizedMode = String(mode || "").trim().toLowerCase();
+    if (normalizedMode === "cash" && job.acceptedBy) {
+      const totalPaidCompletedJobs = await Job.countDocuments({
+        $or: [{ acceptedBy: job.acceptedBy }, { "acceptedWorkers.phone": job.acceptedBy }],
+        paymentStatus: "Paid",
+        status: "completed",
+      });
+
+      if (totalPaidCompletedJobs === 1) {
+        await WorkerModel.findOneAndUpdate(
+          { phone: job.acceptedBy },
+          {
+            $set: {
+              "compliance.requiresPocketMinimumForOnline": true,
+              "compliance.pocketMinimumAmount": 100,
+              "compliance.firstCashPaidJobId": job._id,
+              "compliance.ruleActivatedAt": new Date(),
+            },
+          },
+          { new: true }
+        );
+      }
+    }
+  } catch (complianceErr) {
+    console.error("Error applying first-cash pocket-balance compliance rule:", complianceErr);
   }
 
   await updateContractorStats(userPhone);
@@ -222,6 +267,93 @@ async function rateJob({ jobId, stars, feedback, userPhone, userName, deps }) {
   return { code: 200, body: { success: true, message: "Rating submitted successfully", job } };
 }
 
+async function rateContractor({ jobId, stars, feedback, userPhone, userName, deps }) {
+  const { emitJobUpdatedToUsers } = deps;
+
+  if (!stars || stars < 1 || stars > 5) {
+    return { code: 400, body: { success: false, message: "Rating must be between 1 and 5 stars" } };
+  }
+
+  const job = await Job.findById(jobId);
+  if (!job) return { code: 404, body: { success: false, message: "Job not found" } };
+
+  // Only assigned worker can rate this contractor.
+  if (job.acceptedBy !== userPhone) {
+    return { code: 403, body: { success: false, message: "Only assigned worker can rate this contractor" } };
+  }
+
+  if (job.paymentStatus !== "Paid" || job.status !== "completed") {
+    return { code: 400, body: { success: false, message: "Contractor can be rated only after paid and completed job" } };
+  }
+
+  if (job.contractorRating && job.contractorRating.stars) {
+    return { code: 400, body: { success: false, message: "Contractor already rated for this job" } };
+  }
+
+  job.contractorRating = {
+    stars: parseInt(stars, 10),
+    feedback: feedback || "",
+    ratedAt: new Date(),
+    ratedBy: userPhone || userName || "worker",
+  };
+  await job.save();
+
+  // Recalculate contractor average rating from contractorRating on paid jobs.
+  try {
+    const contractorPhone = job.contractorPhone;
+    if (contractorPhone) {
+      const ratedJobs = await Job.find({
+        contractorPhone,
+        paymentStatus: "Paid",
+        "contractorRating.stars": { $exists: true, $ne: null },
+      }).select("contractorRating");
+
+      if (ratedJobs.length > 0) {
+        const totalStars = ratedJobs.reduce((sum, j) => sum + (j.contractorRating?.stars || 0), 0);
+        const averageRating = Math.round((totalStars / ratedJobs.length) * 10) / 10;
+
+        await User.findOneAndUpdate(
+          { phone: contractorPhone },
+          { $set: { avgRating: averageRating } },
+          { new: true }
+        );
+      } else {
+        await User.findOneAndUpdate(
+          { phone: contractorPhone },
+          { $set: { avgRating: 0 } },
+          { new: true }
+        );
+      }
+    }
+  } catch (err) {
+    console.error("Error updating contractor average rating:", err);
+  }
+
+  // Notify contractor that worker rated them.
+  try {
+    if (job.contractorPhone) {
+      const ratingText = `${stars} star${stars > 1 ? "s" : ""}`;
+      await NotificationHistory.create({
+        recipientPhone: job.contractorPhone,
+        senderPhone: userPhone,
+        senderName: userName || job.acceptedBy || "Worker",
+        type: "rating_received",
+        title: `New Contractor Rating: ${ratingText}`,
+        body: feedback || `You received a ${ratingText} rating from worker`,
+        jobId: job._id,
+        metadata: { rating: stars, jobTitle: job.title, actionRequired: false },
+        deepLink: "contractor/profile",
+        pushNotificationSent: false,
+      });
+    }
+  } catch (e) {
+    console.error("Error creating contractor rating notification:", e);
+  }
+
+  await emitJobUpdatedToUsers(job, [job.contractorName, job.acceptedBy || job.contractorName]);
+  return { code: 200, body: { success: true, message: "Contractor rated successfully", job } };
+}
+
 async function cancelJob({ jobId, reason, reasonDescription, userPhone, deps }) {
   const {
     io,
@@ -266,6 +398,28 @@ async function cancelJob({ jobId, reason, reasonDescription, userPhone, deps }) 
   const oldState = { status: job.status, paymentStatus: job.paymentStatus };
   job.status = "cancelled";
   await job.save();
+
+  try {
+    if (job.acceptedBy) {
+      await createGigHistoryEvent({
+        workerPhone: job.acceptedBy,
+        workerName: job.acceptedWorker?.name || job.acceptedBy,
+        jobId: job._id,
+        jobTitle: job.title,
+        contractorPhone: job.contractorPhone,
+        contractorName: job.contractorName,
+        eventType: cancelledBy === "worker" ? "job_cancelled_by_worker" : "job_cancelled_by_contractor",
+        status: job.status,
+        paymentStatus: job.paymentStatus,
+        hoursWorked: 0,
+        timeSpentMinutes: 0,
+        eventTime: new Date(),
+        metadata: { reason, reasonDescription: reasonDescription || "", cancelledBy },
+      });
+    }
+  } catch (e) {
+    console.error("Error writing gig history cancel event:", e);
+  }
 
   await logJobEvent({
     jobId: job._id,
@@ -334,6 +488,7 @@ module.exports = {
   markAttendance,
   payJob,
   rateJob,
+  rateContractor,
   cancelJob,
   getCancellations,
 };

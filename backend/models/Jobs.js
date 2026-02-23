@@ -89,6 +89,12 @@ const jobSchema = new mongoose.Schema(
       ratedAt: Date,
       ratedBy: String,
     },
+    contractorRating: {
+      stars: { type: Number, min: 1, max: 5 },
+      feedback: String,
+      ratedAt: Date,
+      ratedBy: String,
+    },
   },
   { timestamps: true }
 );

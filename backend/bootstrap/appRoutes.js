@@ -13,7 +13,6 @@ const { createJobsLifecycleCoreRouter } = require("../routes/jobsLifecycleCore")
 const {
   updateGigDataOnCancellation,
   updateGigDataOnAcceptance,
-  getWorkerGigsSummary,
 } = require("../utils/gigsDataTracker");
 
 function mountAppRoutes({
@@ -65,7 +64,6 @@ function mountAppRoutes({
       io,
       connectedWorkers,
       checkJobMatchesForWorker,
-      getWorkerGigsSummary,
       sendNotificationToUserPhone,
     })
   );
@@ -126,4 +124,3 @@ function mountAppRoutes({
 module.exports = {
   mountAppRoutes,
 };
-

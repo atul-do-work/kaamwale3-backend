@@ -1,11 +1,47 @@
 const express = require("express");
 const { authenticateToken } = require("../utils/auth");
+const rateLimit = require("express-rate-limit");
+const crypto = require("crypto");
 const ActivityLog = require("../models/ActivityLog");
 const SupportTicket = require("../models/SupportTicket");
 const VerificationDocument = require("../models/VerificationDocument");
 
 function createOpsSupportRouter({ upload, PORT }) {
   const router = express.Router();
+  const SUPPORT_TYPES = new Set([
+    "payment_issue",
+    "quality_issue",
+    "safety_concern",
+    "fraud",
+    "behavioral_issue",
+    "technical_issue",
+    "other",
+  ]);
+
+  const supportCreateLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 5,
+    standardHeaders: true,
+    legacyHeaders: false,
+    keyGenerator: (req) => req.user?.phone || req.ip,
+    message: { success: false, message: "Too many support tickets created. Please try again later." },
+  });
+
+  const sanitizeText = (value, maxLen) => {
+    if (typeof value !== "string") return "";
+    return value
+      .replace(/[\u0000-\u001F\u007F]/g, " ")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, maxLen);
+  };
+
+  const generateTicketId = () => {
+    if (typeof crypto.randomUUID === "function") {
+      return `TKT-${crypto.randomUUID()}`;
+    }
+    return `TKT-${crypto.randomBytes(16).toString("hex")}`;
+  };
 
   router.post("/activity/log", authenticateToken, async (req, res) => {
     try {
@@ -54,14 +90,43 @@ function createOpsSupportRouter({ upload, PORT }) {
     }
   });
 
-  router.post("/support/create", authenticateToken, async (req, res) => {
+  router.post("/support/create", authenticateToken, supportCreateLimiter, async (req, res) => {
     try {
-      const { type, subject, description, jobId, reportedPhone, screenshots } = req.body;
+      // Reject abnormally large request payloads for this endpoint.
+      if (JSON.stringify(req.body || {}).length > 15000) {
+        return res.status(413).json({ success: false, message: "Support request payload too large" });
+      }
+
+      const type = sanitizeText(req.body?.type, 40);
+      const subject = sanitizeText(req.body?.subject, 140);
+      const description = sanitizeText(req.body?.description, 2500);
+      const jobId = sanitizeText(req.body?.jobId, 64) || undefined;
+      const reportedPhone = sanitizeText(req.body?.reportedPhone, 16) || undefined;
+      const screenshots = Array.isArray(req.body?.screenshots) ? req.body.screenshots : [];
+
       if (!type || !subject || !description) {
         return res.status(400).json({ success: false, message: "Missing required fields" });
       }
+      if (!SUPPORT_TYPES.has(type)) {
+        return res.status(400).json({ success: false, message: "Invalid support ticket type" });
+      }
+      if (subject.length < 5 || subject.length > 120) {
+        return res.status(400).json({ success: false, message: "Subject must be 5-120 characters" });
+      }
+      if (description.length < 15 || description.length > 2000) {
+        return res.status(400).json({ success: false, message: "Description must be 15-2000 characters" });
+      }
+      if (reportedPhone && !/^\d{10}$/.test(reportedPhone)) {
+        return res.status(400).json({ success: false, message: "reportedPhone must be a valid 10-digit phone" });
+      }
+      if (screenshots.length > 5) {
+        return res.status(400).json({ success: false, message: "Maximum 5 screenshots allowed" });
+      }
+      if (screenshots.some((s) => typeof s !== "string" || s.length > 2048)) {
+        return res.status(400).json({ success: false, message: "Invalid screenshot data" });
+      }
 
-      const ticketId = `TICKET-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+      const ticketId = generateTicketId();
       const ticket = new SupportTicket({
         ticketId,
         reporterPhone: req.user.phone,
@@ -70,7 +135,7 @@ function createOpsSupportRouter({ upload, PORT }) {
         type,
         subject,
         description,
-        screenshots: screenshots || [],
+        screenshots,
         status: "open",
         createdAt: new Date(),
       });
@@ -112,6 +177,17 @@ function createOpsSupportRouter({ upload, PORT }) {
       const ticket = await SupportTicket.findOne({ ticketId: req.params.ticketId });
       if (!ticket) {
         return res.status(404).json({ success: false, message: "Ticket not found" });
+      }
+
+      const requesterPhone = req.user?.phone;
+      const requesterRole = req.user?.role;
+      const isOwner =
+        requesterPhone &&
+        (ticket.reporterPhone === requesterPhone || ticket.reportedPhone === requesterPhone);
+      const isAdmin = requesterRole === "admin";
+
+      if (!isOwner && !isAdmin) {
+        return res.status(403).json({ success: false, message: "Not authorized to view this ticket" });
       }
 
       if (ticket.reporterPhone === req.user.phone && !ticket.isRead) {

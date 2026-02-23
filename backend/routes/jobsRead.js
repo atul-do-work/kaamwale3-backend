@@ -86,9 +86,13 @@ function createJobsReadRouter({ authenticateToken, Job, getDistanceFromLatLonInK
       const pageSize = Math.min(limit, 100);
       const skip = (page - 1) * pageSize;
 
+      // Include both single and bulk jobs for this worker.
+      // Keep cancelled/expired too so history screens can show full lifecycle.
       const myAcceptedFilter = {
-        acceptedBy: workerPhone,
-        status: { $nin: ["cancelled", "expired"] },
+        $or: [
+          { acceptedBy: workerPhone },
+          { "acceptedWorkers.phone": workerPhone },
+        ],
       };
       const totalCount = await Job.countDocuments(myAcceptedFilter);
 

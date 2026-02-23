@@ -5,6 +5,7 @@ const crypto = require("crypto");
 const rateLimit = require("express-rate-limit");
 const { authenticateToken } = require("../utils/auth");
 const Wallet = require("../models/Wallet");
+const User = require("../models/User");
 const BankAccount = require("../models/BankAccount");
 const Withdrawal = require("../models/Withdrawal");
 const { sendOpsAlert } = require("../utils/opsAlert");
@@ -73,6 +74,11 @@ router.get("/", authenticateToken, async (req, res) => {
     if (!wallet) {
       wallet = new Wallet({ phone: req.user.phone, balance: 0 });
       await wallet.save();
+    } else if (wallet.availableBalance === undefined || wallet.availableBalance === null || wallet.pocketBalance === undefined || wallet.pocketBalance === null) {
+      wallet.availableBalance = Number(wallet.availableBalance ?? wallet.balance ?? 0);
+      wallet.pocketBalance = Number(wallet.pocketBalance ?? 0);
+      wallet.balance = Number(wallet.availableBalance || 0);
+      await wallet.save();
     }
     res.json({ success: true, wallet });
   } catch (err) {
@@ -91,7 +97,12 @@ router.get("/transactions", authenticateToken, async (req, res) => {
     
     const formattedTransactions = wallet.transactions.map((t) => ({
       id: t._id,
-      type: t.type === "deposit" || t.type === "credit" ? "credit" : t.type === "refund" ? "refund" : "debit",
+      type:
+        t.type === "deposit" || t.type === "pocket_deposit" || t.type === "credit"
+          ? "credit"
+          : t.type === "refund"
+            ? "refund"
+            : "debit",
       description: t.description || `${t.type.charAt(0).toUpperCase() + t.type.slice(1)}`,
       amount: t.amount,
       date: new Date(t.date).toLocaleDateString("en-IN"),
@@ -178,6 +189,7 @@ router.post("/deposit/create-order", authenticateToken, depositOrderLimiter, asy
       receipt: `deposit_${req.user.phone}_${Date.now()}`,
       notes: {
         phone: req.user.phone,
+        role: req.user.role || "worker",
         type: 'wallet_deposit',
         amount: depositAmount // Store amount in notes for server-side verification
       }
@@ -288,7 +300,7 @@ router.post("/deposit/verify", authenticateToken, depositVerifyLimiter, async (r
         phone: req.user.phone,
         'transactions.paymentId': paymentId
       },
-      { 'transactions.$': 1 }
+      { 'transactions.$': 1, balance: 1, availableBalance: 1, pocketBalance: 1 }
     );
 
     if (existingTransaction) {
@@ -297,7 +309,9 @@ router.post("/deposit/verify", authenticateToken, depositVerifyLimiter, async (r
       return res.json({
         success: true,
         message: "Payment already processed",
-        walletBalance: existingTransaction.balance,
+        walletBalance: Number(existingTransaction.balance || 0),
+        availableBalance: Number(existingTransaction.availableBalance ?? existingTransaction.balance ?? 0),
+        pocketBalance: Number(existingTransaction.pocketBalance || 0),
         isDuplicate: true,
         transactionId: paymentId
       });
@@ -310,29 +324,38 @@ router.post("/deposit/verify", authenticateToken, depositVerifyLimiter, async (r
     if (!existingWalletBeforeUpdate) {
       return res.status(404).json({ success: false, message: "Wallet not found. Please login again." });
     }
-    const openingBalance = Number(existingWalletBeforeUpdate.balance || 0);
+    const isWorker = String(req.user?.role || "").toLowerCase() === "worker";
+    const targetBalanceField = isWorker ? "pocketBalance" : "availableBalance";
+    const openingBalance = Number(existingWalletBeforeUpdate[targetBalanceField] || 0);
     const closingBalance = openingBalance + depositAmount;
+    const balanceInc = { [targetBalanceField]: depositAmount };
+    // Keep legacy `balance` aligned with withdrawable funds only.
+    if (!isWorker) {
+      balanceInc.balance = depositAmount;
+    }
 
     const wallet = await Wallet.findOneAndUpdate(
       {
         phone: req.user.phone
       },
       {
-        $inc: { balance: depositAmount }, // Atomically increment balance
+        $inc: balanceInc, // Atomically increment target bucket
         $push: {
           transactions: appendAuditFields({
-            type: 'deposit',
+            type: isWorker ? 'pocket_deposit' : 'deposit',
             amount: depositAmount,
             openingBalance,
             closingBalance,
             paymentId,
             orderId,
             status: 'completed',
-            description: `Wallet deposit via Razorpay (${paymentId})`,
+            description: isWorker
+              ? `Pocket balance deposit via Razorpay (${paymentId})`
+              : `Wallet deposit via Razorpay (${paymentId})`,
             source: 'app',
             provider: 'razorpay',
             providerEventId: paymentId,
-            metadata: { verifiedBy: 'deposit/verify' },
+            metadata: { verifiedBy: 'deposit/verify', balanceType: isWorker ? 'pocket' : 'available' },
           })
         }
       },
@@ -367,6 +390,8 @@ router.post("/deposit/verify", authenticateToken, depositVerifyLimiter, async (r
       io.to(req.user.phone).emit('walletUpdated', {
         phone: req.user.phone,
         balance: wallet.balance,
+        availableBalance: Number(wallet.availableBalance || wallet.balance || 0),
+        pocketBalance: Number(wallet.pocketBalance || 0),
         type: 'deposit',
         amount: depositAmount,
         message: `Deposit successful: ₹${depositAmount}`
@@ -378,6 +403,8 @@ router.post("/deposit/verify", authenticateToken, depositVerifyLimiter, async (r
       success: true,
       message: 'Deposit successful',
       walletBalance: wallet.balance,
+      availableBalance: Number(wallet.availableBalance || wallet.balance || 0),
+      pocketBalance: Number(wallet.pocketBalance || 0),
       transactionId: paymentId
     });
   } catch (err) {
@@ -521,16 +548,21 @@ router.post("/withdraw", authenticateToken, withdrawLimiter, async (req, res) =>
     if (!existingWalletBeforeWithdraw) {
       return res.status(404).json({ success: false, message: "Wallet not found. Please login again." });
     }
-    const openingBalance = Number(existingWalletBeforeWithdraw.balance || 0);
+    const openingBalance = Number(
+      existingWalletBeforeWithdraw.availableBalance ?? existingWalletBeforeWithdraw.balance ?? 0
+    );
     const closingBalance = openingBalance - withdrawAmount;
 
     const wallet = await Wallet.findOneAndUpdate(
       {
         phone: req.user.phone,
-        balance: { $gte: withdrawAmount } // Only proceed if balance is sufficient
+        $or: [
+          { availableBalance: { $gte: withdrawAmount } },
+          { availableBalance: { $exists: false }, balance: { $gte: withdrawAmount } },
+        ], // Only proceed if available balance is sufficient
       },
       {
-        $inc: { balance: -withdrawAmount }, // Atomically decrement balance
+        $inc: { balance: -withdrawAmount, availableBalance: -withdrawAmount }, // Atomically decrement withdrawable balance
         $push: {
           transactions: appendAuditFields({
             type: "withdraw",
@@ -577,6 +609,8 @@ router.post("/withdraw", authenticateToken, withdrawLimiter, async (req, res) =>
       io.to(req.user.phone).emit('walletUpdated', {
         phone: req.user.phone,
         balance: wallet.balance,
+        availableBalance: Number(wallet.availableBalance || wallet.balance || 0),
+        pocketBalance: Number(wallet.pocketBalance || 0),
         type: 'withdraw',
         amount: withdrawAmount,
         message: `Withdrawal initiated: ₹${withdrawAmount} to ${bankAccount.bankName}`
@@ -591,6 +625,8 @@ router.post("/withdraw", authenticateToken, withdrawLimiter, async (req, res) =>
       success: true, 
       message: "Withdrawal initiated and queued for payout processing.",
       walletBalance: wallet.balance,
+      availableBalance: Number(wallet.availableBalance || wallet.balance || 0),
+      pocketBalance: Number(wallet.pocketBalance || 0),
       withdrawalAmount: withdrawAmount,
       bankAccount: bankAccount.maskedAccount,
       accountName: bankAccount.accountHolderName,
@@ -649,27 +685,33 @@ router.post("/deposit/webhook", async (req, res) => {
     if (!walletDoc) {
       return res.status(404).json({ success: false, message: "Wallet not found for webhook user" });
     }
-    const openingBalance = Number(walletDoc.balance || 0);
-    const closingBalance = openingBalance + amount;
-
+    let role = String(payment?.notes?.role || "").toLowerCase();
+    if (!role) {
+      const userDoc = await User.findOne({ phone }).select("role").lean();
+      role = String(userDoc?.role || "worker").toLowerCase();
+    }
+    const isWorker = role === "worker";
+    const targetBalanceField = isWorker ? "pocketBalance" : "availableBalance";
     const updatedWallet = await Wallet.findOneAndUpdate(
       { phone, "transactions.paymentId": { $ne: paymentId } },
       {
-        $inc: { balance: amount },
+        $inc: isWorker ? { pocketBalance: amount } : { availableBalance: amount, balance: amount },
         $push: {
           transactions: appendAuditFields({
-            type: "deposit",
+            type: isWorker ? "pocket_deposit" : "deposit",
             amount,
-            openingBalance,
-            closingBalance,
+            openingBalance: Number(walletDoc[targetBalanceField] || 0),
+            closingBalance: Number(walletDoc[targetBalanceField] || 0) + amount,
             orderId,
             paymentId,
             status: "completed",
-            description: `Wallet deposit via webhook (${paymentId})`,
+            description: isWorker
+              ? `Pocket balance deposit via webhook (${paymentId})`
+              : `Wallet deposit via webhook (${paymentId})`,
             source: "webhook",
             provider: "razorpay",
             providerEventId: paymentId,
-            metadata: { webhookEvent: event },
+            metadata: { webhookEvent: event, balanceType: isWorker ? "pocket" : "available" },
           }),
         },
       },
@@ -680,7 +722,12 @@ router.post("/deposit/webhook", async (req, res) => {
       return res.status(200).json({ success: true, duplicate: true });
     }
 
-    return res.status(200).json({ success: true, walletBalance: updatedWallet.balance });
+    return res.status(200).json({
+      success: true,
+      walletBalance: updatedWallet.balance,
+      availableBalance: Number(updatedWallet.availableBalance || updatedWallet.balance || 0),
+      pocketBalance: Number(updatedWallet.pocketBalance || 0),
+    });
   } catch (err) {
     console.error("Deposit webhook error:", err);
     await sendOpsAlert("Deposit webhook processing failed", { error: err && err.message });
@@ -748,8 +795,9 @@ router.post("/payout/webhook", async (req, res) => {
           (tx) => tx.providerEventId === rollbackEventId
         );
         if (!alreadyRolledBack) {
-          const openingBalance = Number(wallet.balance || 0);
+          const openingBalance = Number(wallet.availableBalance ?? wallet.balance ?? 0);
           const closingBalance = openingBalance + Number(withdrawal.amount || 0);
+          wallet.availableBalance = closingBalance;
           wallet.balance = closingBalance;
           wallet.transactions.push(
             appendAuditFields({

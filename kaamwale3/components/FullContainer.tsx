@@ -25,7 +25,7 @@ interface FullContainerProps {
   historyCount?: number;
   totalEarnings?: number;
   offersClaimed?: number;
-  pendingOffers?: number;
+  averageRating?: number;
   activeBonuses?: number;
   onRefresh?: () => void;
 }
@@ -62,7 +62,7 @@ export default function FullContainer({
   historyCount = 0,
   totalEarnings = 0,
   offersClaimed = 0,
-  pendingOffers = 0,
+  averageRating = 0,
   activeBonuses = 0,
   onRefresh,
 }: FullContainerProps) {
@@ -198,8 +198,8 @@ export default function FullContainer({
 
           <View style={[styles.summaryRow, { marginTop: 16 }]}>
             <View style={styles.summaryItem}>
-              <Text style={styles.summaryLabel}>Pending Offers</Text>
-              <Text style={styles.summaryValue}>{pendingOffers}</Text>
+              <Text style={styles.summaryLabel}>Avg Rating (Completed)</Text>
+              <Text style={styles.summaryValue}>{(averageRating || 0).toFixed(2)} ⭐</Text>
             </View>
             <View style={styles.summaryDivider} />
             <View style={styles.summaryItem}>

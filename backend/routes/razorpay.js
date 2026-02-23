@@ -210,7 +210,7 @@ router.post('/verify-payment', authenticateToken, async (req, res) => {
         'transactions.paymentId': { $ne: paymentId }  // Only update if paymentId NOT present
       },
       {
-        $inc: { balance: actualAmount },
+        $inc: { balance: actualAmount, availableBalance: actualAmount },
         $push: {
           transactions: {
             type: 'payment',
@@ -219,7 +219,8 @@ router.post('/verify-payment', authenticateToken, async (req, res) => {
             orderId,    // 🔐 Audit trail
             jobId,
             date: new Date(),
-            description: `Payment for: ${job.title}`
+            description: `Payment for: ${job.title}`,
+            metadata: { balanceType: "available" }
           }
         }
       },
@@ -235,6 +236,8 @@ router.post('/verify-payment', authenticateToken, async (req, res) => {
         success: true,
         message: 'Payment already processed',
         walletBalance: existingWallet?.balance || 0,
+        availableBalance: Number(existingWallet?.availableBalance ?? existingWallet?.balance ?? 0),
+        pocketBalance: Number(existingWallet?.pocketBalance || 0),
         isDuplicate: true
       });
     }
@@ -336,6 +339,8 @@ router.post('/verify-payment', authenticateToken, async (req, res) => {
       io.to(workerPhone).emit('walletUpdated', {
         phone: workerPhone,
         balance: updatedWallet.balance,
+        availableBalance: Number(updatedWallet.availableBalance || updatedWallet.balance || 0),
+        pocketBalance: Number(updatedWallet.pocketBalance || 0),
         message: `Payment received: ₹${actualAmount}`
       });
       io.to(workerPhone).emit('notificationReceived', {
@@ -353,6 +358,8 @@ router.post('/verify-payment', authenticateToken, async (req, res) => {
       success: true,
       message: 'Payment verified and wallet updated',
       walletBalance: updatedWallet.balance,
+      availableBalance: Number(updatedWallet.availableBalance || updatedWallet.balance || 0),
+      pocketBalance: Number(updatedWallet.pocketBalance || 0),
       notificationId: notification[0]._id
     });
 
@@ -465,7 +472,7 @@ router.post('/webhook', async (req, res) => {
         'transactions.paymentId': { $ne: paymentId }  // Only update if paymentId NOT already present
       },
       {
-        $inc: { balance: actualAmount },
+        $inc: { balance: actualAmount, availableBalance: actualAmount },
         $push: {
           transactions: {
             type: 'payment',
@@ -474,7 +481,8 @@ router.post('/webhook', async (req, res) => {
             orderId,
             jobId,
             date: new Date(),
-            description: `Payment for: ${job.title} (via webhook)`
+            description: `Payment for: ${job.title} (via webhook)`,
+            metadata: { balanceType: "available" }
           }
         }
       },
@@ -591,6 +599,8 @@ router.post('/webhook', async (req, res) => {
       io.to(workerPhone).emit('walletUpdated', {
         phone: workerPhone,
         balance: updatedWallet.balance,
+        availableBalance: Number(updatedWallet.availableBalance || updatedWallet.balance || 0),
+        pocketBalance: Number(updatedWallet.pocketBalance || 0),
         message: `Payment received via webhook: ₹${actualAmount}`
       });
       io.to(workerPhone).emit('notificationReceived', {

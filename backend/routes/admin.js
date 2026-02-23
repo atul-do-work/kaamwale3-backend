@@ -18,6 +18,7 @@ const SupportTicket = require('../models/SupportTicket');
 const PremiumSubscription = require('../models/PremiumSubscription');
 const ReconciliationRun = require('../models/ReconciliationRun');
 const District = require('../models/City'); // File is City.js, exports as "District" model for GeoJSON import
+const GigHistory = require('../models/GigHistory');
 
 // Middleware to check admin role
 const checkAdmin = (req, res, next) => {
@@ -55,6 +56,45 @@ const buildWorkerGigSummary = (jobs, phone) => {
         pendingJobs: pending,
         totalEarnings: earnings
     };
+};
+
+const computeCurrentConsecutiveDays = (records = []) => {
+    const completedByDay = new Map();
+    const cancellations = [];
+    for (const r of records) {
+        const d = new Date(r.eventTime || r.createdAt || Date.now());
+        const day = d.toISOString().slice(0, 10);
+        if (r.eventType === 'job_completed') {
+            completedByDay.set(day, (completedByDay.get(day) || 0) + (Number(r.hoursWorked) || 0));
+        }
+        if (r.eventType === 'job_declined_offer' || r.eventType === 'job_cancelled_by_worker') {
+            cancellations.push(day);
+        }
+    }
+
+    const workDays = Array.from(completedByDay.entries())
+        .filter(([, hours]) => hours >= 8)
+        .map(([day]) => new Date(`${day}T00:00:00.000Z`))
+        .sort((a, b) => b - a);
+
+    if (!workDays.length) return { consecutiveDays: 0, cancellationsInStreak: 0 };
+
+    let consecutive = 1;
+    for (let i = 1; i < workDays.length; i++) {
+        const diff = Math.floor((workDays[i - 1] - workDays[i]) / 86400000);
+        if (diff === 1) consecutive += 1;
+        else break;
+    }
+
+    const latest = workDays[0];
+    const start = new Date(latest);
+    start.setUTCDate(start.getUTCDate() - (consecutive - 1));
+    const cancelsInStreak = cancellations.filter((day) => {
+        const d = new Date(`${day}T00:00:00.000Z`);
+        return d >= start && d <= latest;
+    }).length;
+
+    return { consecutiveDays: consecutive, cancellationsInStreak: cancelsInStreak };
 };
 
 // ============================
@@ -684,6 +724,110 @@ router.get('/activity-logs', authenticateToken, checkAdmin, async (req, res) => 
     } catch (error) {
         console.error('Activity logs error:', error);
         res.status(500).json({ success: false, message: error.message });
+    }
+});
+
+// ============================
+// GIG HISTORY - Worker timeline + streak summary
+// ============================
+router.get('/gig-history', authenticateToken, checkAdmin, async (req, res) => {
+    try {
+        const { limit, page, skip } = parsePagination(req, 200, 1000);
+        const phone = String(req.query.phone || '').trim();
+
+        const query = {};
+        if (phone) {
+            query.workerPhone = { $regex: phone, $options: 'i' };
+        }
+
+        const total = await GigHistory.countDocuments(query);
+        const events = await GigHistory.find(query)
+            .sort({ eventTime: -1 })
+            .skip(skip)
+            .limit(limit)
+            .lean();
+
+        const workerStats = new Map();
+        for (const event of events) {
+            const workerPhone = String(event.workerPhone || '').trim();
+            if (!workerPhone) continue;
+
+            if (!workerStats.has(workerPhone)) {
+                workerStats.set(workerPhone, {
+                    workerPhone,
+                    workerName: event.workerName || '-',
+                    totalCompletedJobs: 0,
+                    totalHoursWorked: 0,
+                    totalCancellations: 0,
+                    latestEventTime: event.eventTime || event.createdAt || null,
+                    records: [],
+                });
+            }
+
+            const bucket = workerStats.get(workerPhone);
+            bucket.records.push(event);
+
+            if (event.eventType === 'job_completed') {
+                bucket.totalCompletedJobs += 1;
+                bucket.totalHoursWorked += Number(event.hoursWorked || 0);
+            }
+            if (event.eventType === 'job_declined_offer' || event.eventType === 'job_cancelled_by_worker') {
+                bucket.totalCancellations += 1;
+            }
+        }
+
+        const workerSummaries = Array.from(workerStats.values()).map((w) => {
+            const streak = computeCurrentConsecutiveDays(w.records);
+            return {
+                workerPhone: w.workerPhone,
+                workerName: w.workerName,
+                totalCompletedJobs: w.totalCompletedJobs,
+                totalHoursWorked: Number(w.totalHoursWorked.toFixed(2)),
+                totalCancellations: w.totalCancellations,
+                consecutiveDays: streak.consecutiveDays,
+                cancellationsInStreak: streak.cancellationsInStreak,
+                latestEventTime: w.latestEventTime,
+            };
+        }).sort((a, b) => (b.consecutiveDays || 0) - (a.consecutiveDays || 0));
+
+        const summaryMap = new Map(workerSummaries.map((s) => [s.workerPhone, s]));
+        const rows = events.map((event) => {
+            const summary = summaryMap.get(String(event.workerPhone || '').trim()) || {};
+            return {
+                _id: event._id,
+                workerPhone: event.workerPhone || '-',
+                workerName: event.workerName || '-',
+                jobId: event.jobId || null,
+                jobTitle: event.jobTitle || '-',
+                contractorPhone: event.contractorPhone || '-',
+                contractorName: event.contractorName || '-',
+                eventType: event.eventType || '-',
+                status: event.status || '-',
+                paymentStatus: event.paymentStatus || '-',
+                hoursWorked: Number(event.hoursWorked || 0),
+                timeSpentMinutes: Number(event.timeSpentMinutes || 0),
+                eventTime: event.eventTime || event.createdAt || null,
+                workDate: event.workDate || null,
+                totalCompletedJobs: summary.totalCompletedJobs || 0,
+                totalHoursWorked: summary.totalHoursWorked || 0,
+                consecutiveDays: summary.consecutiveDays || 0,
+                cancellationsInStreak: summary.cancellationsInStreak || 0,
+                totalCancellations: summary.totalCancellations || 0,
+            };
+        });
+
+        return res.json({
+            success: true,
+            count: rows.length,
+            total,
+            page,
+            limit,
+            rows,
+            workers: workerSummaries,
+        });
+    } catch (error) {
+        console.error('Gig history error:', error);
+        return res.status(500).json({ success: false, message: error.message });
     }
 });
 

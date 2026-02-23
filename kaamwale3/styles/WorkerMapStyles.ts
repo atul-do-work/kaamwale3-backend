@@ -5,6 +5,8 @@ export default StyleSheet.create({
     width: '100%',
     height: 350, // Adjust depending on your layout
     position: 'relative',
+    backgroundColor: '#f5f5f5',
+    overflow: 'hidden',
   },
   map: {
     width: '100%',

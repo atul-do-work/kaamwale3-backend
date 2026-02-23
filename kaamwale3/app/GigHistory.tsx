@@ -25,7 +25,7 @@ const { width } = Dimensions.get('window');
 // ✅ Utility: Log user activity
 const logActivity = async (token: string | null, action: string, details: string) => {
   try {
-    await fetch(`${API_BASE}/activity`, {
+    await fetch(`${API_BASE}/activity/log`, {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${token}`,
@@ -62,6 +62,7 @@ interface GigHistory {
   skills?: string[];
   workDuration?: string;
   hoursWorked?: number;
+  timeSpentMinutes?: number;
 }
 
 interface IncentiveProgress {
@@ -99,6 +100,7 @@ export default function GigHistory() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [incentiveData, setIncentiveData] = useState<IncentiveProgress | null>(null);
+  const [gigError, setGigError] = useState<string | null>(null);
   const [incentiveLoading, setIncentiveLoading] = useState(false);
   const [incentiveError, setIncentiveError] = useState<string | null>(null);
   const [page, setPage] = useState(1);
@@ -142,9 +144,10 @@ export default function GigHistory() {
     try {
       if (isFresh) setLoading(true);
       else setLoadingMore(true);
+      setGigError(null);
 
       if (!accessToken) {
-        setIncentiveError('Not authenticated');
+        setGigError('Not authenticated');
         return;
       }
 
@@ -159,7 +162,7 @@ export default function GigHistory() {
       // ✅ Handle authentication errors
       if (res.status === 401) {
         if (isMountedRef.current) {
-          setIncentiveError('Session expired. Please log in again.');
+          setGigError('Session expired. Please log in again.');
           Alert.alert('Session Expired', 'Your session has expired. Please log in again.', [
             { text: 'OK', onPress: () => router.push('/') }
           ]);
@@ -195,7 +198,7 @@ export default function GigHistory() {
       
       if (isMountedRef.current) {
         console.error('Error fetching gig history:', err);
-        setIncentiveError('Failed to load gigs. Pull to refresh.');
+        setGigError('Failed to load gigs. Pull to refresh.');
       }
     } finally {
       if (isMountedRef.current) {
@@ -444,26 +447,30 @@ export default function GigHistory() {
   };
 
   const getStatusColor = (status: string) => {
-    switch (status) {
-      case 'Paid':
+    switch ((status || '').toLowerCase()) {
+      case 'paid':
         return '#27AE60';
-      case 'Pending':
+      case 'pending':
         return '#F39C12';
       case 'cancelled':
         return '#E74C3C';
+      case 'completed':
+        return '#27AE60';
       default:
         return '#95A5A6';
     }
   };
 
   const getStatusIcon = (status: string) => {
-    switch (status) {
-      case 'Paid':
+    switch ((status || '').toLowerCase()) {
+      case 'paid':
         return 'check-circle';
-      case 'Pending':
+      case 'pending':
         return 'schedule';
       case 'cancelled':
         return 'cancel';
+      case 'completed':
+        return 'check-circle';
       default:
         return 'info';
     }
@@ -549,10 +556,13 @@ export default function GigHistory() {
   // ✅ Render single gig card
   const renderGigCard = ({ item: gig }: { item: GigHistory }) => {
     const paymentStatus = gig.paymentStatus || 'Pending';
-    const displayStatus = paymentStatus === 'Paid' ? t('completed') : t('pending');
-    const workHours = gig.hoursWorked || 0;
+    const displayStatus = String(paymentStatus).toLowerCase() === 'paid' ? t('completed') : t('pending');
+    const workHours =
+      Number(gig.hoursWorked || 0) > 0
+        ? Number(gig.hoursWorked || 0)
+        : Math.round(((Number(gig.timeSpentMinutes || 0) / 60) || 0) * 10) / 10;
     const has8Hours = workHours >= 8;
-    const isCancelled = gig.status === 'cancelled';
+    const isCancelled = String(gig.status || '').toLowerCase() === 'cancelled';
 
     return (
       <View style={styles.gigCard}>
@@ -613,7 +623,7 @@ export default function GigHistory() {
             </View>
           )}
           
-          {paymentStatus === 'Paid' && !isCancelled && (
+          {String(paymentStatus).toLowerCase() === 'paid' && !isCancelled && (
             <View style={[styles.requirementBadge, { borderColor: '#27AE60', backgroundColor: '#E8F5E9' }]}>
               <MaterialIcons name="check-circle" size={18} color="#27AE60" />
               <Text style={[styles.requirementText, { color: '#27AE60' }]}>{t('completed')} ✔</Text>
@@ -638,9 +648,9 @@ export default function GigHistory() {
     let cancelled = 0;
 
     gigs.forEach(g => {
-      if (g.status === 'cancelled') {
+      if (String(g.status || '').toLowerCase() === 'cancelled') {
         cancelled++;
-      } else if (g.paymentStatus === 'Paid') {
+      } else if (String(g.paymentStatus || '').toLowerCase() === 'paid') {
         completed++;
       } else {
         pending++;
@@ -694,10 +704,6 @@ export default function GigHistory() {
           </View>
         </View>
 
-        {/* Gigs List Title */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>📋 {t('allGigs')}</Text>
-        </View>
       </>
     ),
     [incentiveData, milestones, completedCount, pendingCount, cancelledCount, t, renderIncentiveHeader, renderConditionsCard, renderMilestoneCard]
@@ -735,23 +741,30 @@ export default function GigHistory() {
           <ActivityIndicator size="large" color="#667EEA" />
         </View>
       ) : (
-        <FlatList
-          data={gigs}
-          renderItem={renderGigCard}
-          keyExtractor={(item) => item._id}
-          ListHeaderComponent={ListHeader}
-          ListEmptyComponent={ListEmpty}
-          ListFooterComponent={ListFooter}
-          onEndReached={handleLoadMore}
-          onEndReachedThreshold={0.5}
-          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
-          showsVerticalScrollIndicator={false}
-          scrollIndicatorInsets={{ right: 1 }}
-          contentContainerStyle={{ flexGrow: 1 }}
-          removeClippedSubviews={true}
-          initialNumToRender={10}
-          maxToRenderPerBatch={20}
-        />
+        <>
+          {gigError ? (
+            <View style={{ marginHorizontal: 16, marginVertical: 8, backgroundColor: '#FEE2E2', borderRadius: 8, padding: 10 }}>
+              <Text style={{ color: '#991B1B', fontWeight: '600' }}>{gigError}</Text>
+            </View>
+          ) : null}
+          <FlatList
+            data={[]}
+            renderItem={renderGigCard}
+            keyExtractor={(item) => item._id}
+            ListHeaderComponent={ListHeader}
+            ListEmptyComponent={null}
+            ListFooterComponent={ListFooter}
+            onEndReached={handleLoadMore}
+            onEndReachedThreshold={0.5}
+            refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+            showsVerticalScrollIndicator={false}
+            scrollIndicatorInsets={{ right: 1 }}
+            contentContainerStyle={{ flexGrow: 1 }}
+            removeClippedSubviews={true}
+            initialNumToRender={10}
+            maxToRenderPerBatch={20}
+          />
+        </>
       )}
     </View>
   );

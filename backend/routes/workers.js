@@ -3,14 +3,16 @@ const { authenticateToken } = require("../utils/auth");
 const User = require("../models/User");
 const WorkerModel = require("../models/Worker");
 const Job = require("../models/Jobs");
+const Wallet = require("../models/Wallet");
 const NotificationHistory = require("../models/NotificationHistory");
 const District = require("../models/City");
+const GigHistory = require("../models/GigHistory");
+const { calculateEligibility } = require("../services/incentiveEligibilityService");
 
 function createWorkersRouter({
   io,
   connectedWorkers,
   checkJobMatchesForWorker,
-  getWorkerGigsSummary,
   sendNotificationToUserPhone,
 }) {
   const router = express.Router();
@@ -227,14 +229,114 @@ function createWorkersRouter({
   router.get("/worker/incentive-data", authenticateToken, async (req, res) => {
     try {
       const workerPhone = req.user.phone;
-      const gigsData = await getWorkerGigsSummary(workerPhone);
-      if (!gigsData) {
-        return res.status(404).json({ success: false, message: "Worker not found or no gigs data available" });
+      const worker = await WorkerModel.findOne({ phone: workerPhone });
+      if (!worker) {
+        return res.status(404).json({ success: false, message: "Worker not found" });
       }
-      return res.json({ success: true, data: gigsData });
+
+      const events = await GigHistory.find({ workerPhone })
+        .sort({ eventTime: -1 })
+        .limit(365)
+        .lean();
+
+      const eligibility = calculateEligibility(events);
+
+      return res.json({
+        success: true,
+        data: {
+          consecutiveDays: eligibility.consecutiveDays,
+          totalHours: eligibility.totalHours,
+          totalCancellations: eligibility.cancellationsInWindow,
+          totalEarnings: worker.gigsData?.totalEarnings || 0,
+          completionRate: worker.performanceMetrics?.completionRate || 0,
+          averageRating: worker.performanceMetrics?.averageRating || worker.rating || 0,
+          milestonesUnlocked: worker.gigsData?.milestonesUnlocked || {},
+          eligibleFor5Days: eligibility.eligibleFor5Days,
+          eligibleFor10Days: eligibility.eligibleFor10Days,
+          eligibleFor20Days: eligibility.eligibleFor20Days,
+          lastWorkDate: eligibility.lastWorkDate,
+          recentGigs: worker.recentGigs || [],
+        },
+      });
     } catch (err) {
       console.error("Error fetching incentive data:", err);
       return res.status(500).json({ success: false, message: "Error fetching incentive data" });
+    }
+  });
+
+  router.get("/worker/overview-stats", authenticateToken, async (req, res) => {
+    try {
+      const workerPhone = req.user?.phone;
+      if (!workerPhone) {
+        return res.status(401).json({ success: false, message: "Not authenticated" });
+      }
+
+      const todayStart = new Date();
+      todayStart.setHours(0, 0, 0, 0);
+      const todayEnd = new Date(todayStart);
+      todayEnd.setDate(todayEnd.getDate() + 1);
+
+      const workerJobQuery = {
+        $or: [
+          { acceptedBy: workerPhone },
+          { "acceptedWorkers.phone": workerPhone },
+        ],
+      };
+
+      const completedJobs = await Job.find({
+        ...workerJobQuery,
+        status: "completed",
+        paymentStatus: "Paid",
+      })
+        .select("amount paymentTime timeSpentMinutes rating")
+        .lean();
+
+      const historyCount = await Job.countDocuments(workerJobQuery);
+
+      const todayCompletedJobs = completedJobs.filter((j) => {
+        const d = j.paymentTime ? new Date(j.paymentTime) : null;
+        return d && d >= todayStart && d < todayEnd;
+      });
+
+      const todayEarnings = todayCompletedJobs.reduce((sum, j) => sum + (Number(j.amount) || 0), 0);
+      const timeOnOrder = todayCompletedJobs.reduce((sum, j) => sum + (Number(j.timeSpentMinutes) || 0), 0);
+      const todayJobs = todayCompletedJobs.length;
+      const totalEarnings = completedJobs.reduce((sum, j) => sum + (Number(j.amount) || 0), 0);
+      const jobsCompleted = completedJobs.length;
+
+      const ratings = completedJobs
+        .map((j) => Number(j.rating?.stars || 0))
+        .filter((v) => Number.isFinite(v) && v > 0);
+      const avgCompletedRating = ratings.length
+        ? Number((ratings.reduce((s, v) => s + v, 0) / ratings.length).toFixed(2))
+        : 0;
+
+      const wallet = await Wallet.findOne({ phone: workerPhone }).select("transactions").lean();
+      const transactions = Array.isArray(wallet?.transactions) ? wallet.transactions : [];
+      const activeBonuses = transactions
+        .filter((t) => String(t?.type || "").toLowerCase() === "incentive_reward")
+        .filter((t) => {
+          const d = new Date(t?.date || 0);
+          return !Number.isNaN(d.getTime()) && d >= todayStart && d < todayEnd;
+        })
+        .reduce((sum, t) => sum + (Number(t?.amount) || 0), 0);
+
+      return res.json({
+        success: true,
+        stats: {
+          todayEarnings,
+          timeOnOrder,
+          todayJobs,
+          historyCount,
+          totalEarnings,
+          jobsCompleted,
+          avgCompletedRating,
+          activeBonuses,
+        },
+      });
+    } catch (err) {
+      console.error("worker/overview-stats error:", err);
+      return res.status(500).json({ success: false, message: "Failed to fetch overview stats" });
     }
   });
 
@@ -279,6 +381,26 @@ function createWorkersRouter({
 
       if (typeof isAvailable !== "boolean") {
         return res.status(400).json({ success: false, message: "isAvailable must be a boolean" });
+      }
+
+      if (isAvailable === true) {
+        const workerRecord = await WorkerModel.findOne({ phone }).select("compliance").lean();
+        const requiresPocketMinimum = !!workerRecord?.compliance?.requiresPocketMinimumForOnline;
+        const minPocketAmount = Number(workerRecord?.compliance?.pocketMinimumAmount || 100);
+
+        if (requiresPocketMinimum) {
+          const wallet = await Wallet.findOne({ phone }).select("pocketBalance").lean();
+          const pocketBalance = Number(wallet?.pocketBalance || 0);
+          if (pocketBalance < minPocketAmount) {
+            return res.status(403).json({
+              success: false,
+              code: "POCKET_BALANCE_REQUIRED",
+              message: `Pocket balance must be at least ₹${minPocketAmount} to go online.`,
+              requiredPocketBalance: minPocketAmount,
+              currentPocketBalance: pocketBalance,
+            });
+          }
+        }
       }
 
       const updateObj = { isAvailable, updatedAt: new Date() };

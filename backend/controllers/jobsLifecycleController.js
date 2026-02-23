@@ -50,6 +50,23 @@ function createJobsLifecycleController(deps) {
       }
     },
 
+    rateContractor: async (req, res) => {
+      try {
+        const result = await jobsLifecycleService.rateContractor({
+          jobId: req.params.id,
+          stars: req.body.stars,
+          feedback: req.body.feedback,
+          userPhone: req.user.phone,
+          userName: req.user.name,
+          deps,
+        });
+        return res.status(result.code).json(result.body);
+      } catch (err) {
+        console.error(err);
+        return res.status(500).json({ success: false, message: "Internal server error" });
+      }
+    },
+
     cancelJob: async (req, res) => {
       try {
         const result = await jobsLifecycleService.cancelJob({

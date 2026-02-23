@@ -98,9 +98,6 @@ exports.findNearbyWorkers = (jobLocation, connectedWorkers) => {
         lat: worker.lat,
         lon: worker.lon,
         distance: Math.round(distKm * 10) / 10, // Round to 1 decimal
-        consecutiveDays: worker.consecutiveDays || 0,
-        eligibleFor5Days: worker.eligibleFor5Days || false,
-        eligibleFor10Days: worker.eligibleFor10Days || false,
       });
     } else {
       console.log(`❌ TOO FAR: ${worker.name} (${distKm.toFixed(2)}km away) - exceeds 10km radius`);
@@ -112,22 +109,8 @@ exports.findNearbyWorkers = (jobLocation, connectedWorkers) => {
     console.log(`🔴 Skipped workers: ${skippedWorkers.join(', ')}`);
   }
 
-  // Sort by milestone eligibility then distance.
-  // - Workers eligible for 10-day milestone first, then 5-day, then by distance.
+  // Sort by distance only (incentive eligibility is handled in incentive service/UI).
   return nearbyWorkers.sort((a, b) => {
-    // Eligible for 10-day wins
-    if ((b.eligibleFor10Days ? 1 : 0) !== (a.eligibleFor10Days ? 1 : 0)) {
-      return (b.eligibleFor10Days ? 1 : 0) - (a.eligibleFor10Days ? 1 : 0);
-    }
-    // Then eligible for 5-day
-    if ((b.eligibleFor5Days ? 1 : 0) !== (a.eligibleFor5Days ? 1 : 0)) {
-      return (b.eligibleFor5Days ? 1 : 0) - (a.eligibleFor5Days ? 1 : 0);
-    }
-    // Then prefer higher consecutiveDays
-    if ((b.consecutiveDays || 0) !== (a.consecutiveDays || 0)) {
-      return (b.consecutiveDays || 0) - (a.consecutiveDays || 0);
-    }
-    // Fallback to closest distance
     return a.distance - b.distance;
   });
 };

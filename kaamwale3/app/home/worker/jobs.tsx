@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useRef } from "react";
-import { View, Text, FlatList, Alert, Image, TouchableOpacity, Modal, RefreshControl } from "react-native";
+import { View, Text, FlatList, Alert, Image, TouchableOpacity, Modal, RefreshControl, TextInput, ActivityIndicator } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useFocusEffect } from "@react-navigation/native";
 import { MaterialIcons } from "@expo/vector-icons";
@@ -39,11 +39,18 @@ interface Job {
     ratedAt?: string;
     ratedBy?: string;
   };
+  contractorRating?: {
+    stars: number;
+    feedback?: string;
+    ratedAt?: string;
+    ratedBy?: string;
+  };
 }
 
 export default function Jobs(): React.ReactElement {
   const [workerName, setWorkerName] = useState<string>("Test Worker");
   const [acceptedJobs, setAcceptedJobs] = useState<Job[]>([]);
+  const [seeAllModalVisible, setSeeAllModalVisible] = useState<boolean>(false);
   const [loading, setLoading] = useState<boolean>(true);
   const [refreshing, setRefreshing] = useState<boolean>(false); // ✅ Pull-to-refresh state
   const [token, setToken] = useState<string>("");
@@ -53,6 +60,11 @@ export default function Jobs(): React.ReactElement {
   const [paymentModalVisible, setPaymentModalVisible] = useState<boolean>(false);
   const [paymentJobData, setPaymentJobData] = useState<{ title: string; amount: string; contractor: string } | null>(null);
   const [paymentSupportModalVisible, setPaymentSupportModalVisible] = useState<boolean>(false);
+  const [contractorRatingModalVisible, setContractorRatingModalVisible] = useState<boolean>(false);
+  const [selectedJobForContractorRating, setSelectedJobForContractorRating] = useState<Job | null>(null);
+  const [contractorRatingStars, setContractorRatingStars] = useState<number>(5);
+  const [contractorRatingFeedback, setContractorRatingFeedback] = useState<string>("");
+  const [submittingContractorRating, setSubmittingContractorRating] = useState<boolean>(false);
   const previousPaymentState = useRef<Record<string, string | null>>({});
   const previousUserPhoneRef = useRef<string | null>(null); // ✅ Track previous user to detect changes
   const paymentNotifiedJobs = useRef<Set<string>>(new Set()); // ✅ Track jobs already notified
@@ -403,6 +415,94 @@ export default function Jobs(): React.ReactElement {
   }, [workerName, token, currentUserPhone]); // ✅ Added currentUserPhone to deps
 
   // ✅ Render individual job card (optimized for FlatList virtualization)
+  const openRateContractorModal = (job: Job) => {
+    setSelectedJobForContractorRating(job);
+    setContractorRatingStars(5);
+    setContractorRatingFeedback("");
+    setContractorRatingModalVisible(true);
+  };
+
+  // Reset jobs screen data at local midnight, then refetch.
+  useEffect(() => {
+    if (!token || !workerName) return;
+
+    let midnightTimeout: ReturnType<typeof setTimeout> | null = null;
+    let midnightInterval: ReturnType<typeof setInterval> | null = null;
+
+    const resetAndReload = async () => {
+      setAcceptedJobs([]);
+      previousPaymentState.current = {};
+      paymentNotifiedJobs.current.clear();
+      await fetchAcceptedJobs(workerName, token, true);
+    };
+
+    const scheduleMidnightReset = () => {
+      const now = new Date();
+      const nextMidnight = new Date(now);
+      nextMidnight.setHours(24, 0, 0, 0);
+      const msUntilMidnight = Math.max(1000, nextMidnight.getTime() - now.getTime());
+
+      midnightTimeout = setTimeout(() => {
+        resetAndReload();
+        midnightInterval = setInterval(resetAndReload, 24 * 60 * 60 * 1000);
+      }, msUntilMidnight);
+    };
+
+    scheduleMidnightReset();
+
+    return () => {
+      if (midnightTimeout) clearTimeout(midnightTimeout);
+      if (midnightInterval) clearInterval(midnightInterval);
+    };
+  }, [token, workerName]);
+
+  const submitContractorRating = async () => {
+    if (!selectedJobForContractorRating || !token || submittingContractorRating) return;
+
+    try {
+      setSubmittingContractorRating(true);
+      const res = await fetch(`${API_BASE}/jobs/rate-contractor/${selectedJobForContractorRating._id}`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          stars: contractorRatingStars,
+          feedback: contractorRatingFeedback,
+        }),
+      });
+
+      const payload = await res.json();
+      if (!res.ok || !payload?.success) {
+        return Alert.alert("Error", payload?.message || "Failed to submit contractor rating");
+      }
+
+      setAcceptedJobs((prev) =>
+        prev.map((j) =>
+          j._id === selectedJobForContractorRating._id
+            ? {
+                ...j,
+                contractorRating: payload?.job?.contractorRating || {
+                  stars: contractorRatingStars,
+                  feedback: contractorRatingFeedback,
+                },
+              }
+            : j
+        )
+      );
+
+      setContractorRatingModalVisible(false);
+      setSelectedJobForContractorRating(null);
+      Alert.alert("Success", "Contractor rated successfully");
+    } catch (err) {
+      console.error("Failed to submit contractor rating:", err);
+      Alert.alert("Error", "Could not submit contractor rating");
+    } finally {
+      setSubmittingContractorRating(false);
+    }
+  };
+
   const renderJobCard = ({ item: job }: { item: Job }) => {
     const jobImageUri = normalizeMediaUrl(job.imageUrl);
     return (
@@ -563,16 +663,71 @@ export default function Jobs(): React.ReactElement {
                 </Text>
               </View>
             )}
+
+            {job.paymentStatus === "Paid" && (
+              <View style={{ marginTop: 12 }}>
+                {job.contractorRating?.stars ? (
+                  <View style={{ backgroundColor: "#EEF6FF", borderRadius: 8, padding: 10 }}>
+                    <Text style={{ color: "#1e3a8a", fontWeight: "700", fontSize: 12, marginBottom: 4 }}>
+                      Your rating for contractor
+                    </Text>
+                    <Text style={{ color: "#1e3a8a", fontSize: 13, fontWeight: "700" }}>
+                      {"⭐".repeat(job.contractorRating.stars)} ({job.contractorRating.stars}/5)
+                    </Text>
+                    {!!job.contractorRating.feedback && (
+                      <Text style={{ color: "#334155", fontSize: 12, marginTop: 4 }}>
+                        "{job.contractorRating.feedback}"
+                      </Text>
+                    )}
+                  </View>
+                ) : (
+                  <TouchableOpacity
+                    style={{
+                      backgroundColor: "#1d4ed8",
+                      height: 38,
+                      borderRadius: 8,
+                      justifyContent: "center",
+                      alignItems: "center",
+                    }}
+                    onPress={() => openRateContractorModal(job)}
+                  >
+                    <Text style={{ color: "#fff", fontSize: 13, fontWeight: "700" }}>
+                      Rate Contractor
+                    </Text>
+                  </TouchableOpacity>
+                )}
+              </View>
+            )}
           </View>
         </View>
       </View>
     );
   };
 
+  const previewJobs = acceptedJobs.slice(0, 3);
+
   return (
     <SafeAreaView edges={['top', 'left', 'right', 'bottom']} style={{ flex: 1 }}>
+      <View style={{ paddingHorizontal: 14, paddingTop: 4, paddingBottom: 8 }}>
+        <TouchableOpacity
+          style={{
+            height: 42,
+            borderRadius: 10,
+            backgroundColor: "#1d4ed8",
+            justifyContent: "center",
+            alignItems: "center",
+            opacity: acceptedJobs.length ? 1 : 0.5,
+          }}
+          disabled={!acceptedJobs.length}
+          onPress={() => setSeeAllModalVisible(true)}
+        >
+          <Text style={{ color: "#fff", fontSize: 14, fontWeight: "700" }}>
+            See All Jobs
+          </Text>
+        </TouchableOpacity>
+      </View>
       <FlatList
-        data={acceptedJobs}
+        data={previewJobs}
         keyExtractor={(item) => item._id}
         style={styles.container}
         contentContainerStyle={{ paddingVertical: 12 }}
@@ -590,6 +745,59 @@ export default function Jobs(): React.ReactElement {
         }
         renderItem={renderJobCard}
       />
+
+      <Modal
+        visible={seeAllModalVisible}
+        animationType="slide"
+        onRequestClose={() => setSeeAllModalVisible(false)}
+      >
+        <SafeAreaView edges={['top', 'left', 'right', 'bottom']} style={{ flex: 1, backgroundColor: "#f7f9fc" }}>
+          <View
+            style={{
+              paddingHorizontal: 14,
+              paddingVertical: 12,
+              borderBottomWidth: 1,
+              borderBottomColor: "#e5e7eb",
+              flexDirection: "row",
+              justifyContent: "space-between",
+              alignItems: "center",
+            }}
+          >
+            <Text style={{ fontSize: 18, fontWeight: "800", color: "#111827" }}>All Jobs</Text>
+            <TouchableOpacity
+              onPress={() => setSeeAllModalVisible(false)}
+              style={{
+                backgroundColor: "#e5e7eb",
+                paddingHorizontal: 12,
+                paddingVertical: 8,
+                borderRadius: 8,
+              }}
+            >
+              <Text style={{ fontWeight: "700", color: "#111827" }}>Close</Text>
+            </TouchableOpacity>
+          </View>
+
+          <FlatList
+            data={acceptedJobs}
+            keyExtractor={(item) => item._id}
+            style={styles.container}
+            contentContainerStyle={{ paddingVertical: 12 }}
+            refreshControl={
+              <RefreshControl refreshing={refreshing} onRefresh={handleRefresh} tintColor="#667eea" />
+            }
+            ListEmptyComponent={
+              <View style={{ flex: 1, justifyContent: "center", alignItems: "center", paddingVertical: 40 }}>
+                {loading ? (
+                  <Text style={styles.loadingText}>Loading jobs...</Text>
+                ) : (
+                  <Text style={styles.noJobsText}>No jobs available.</Text>
+                )}
+              </View>
+            }
+            renderItem={renderJobCard}
+          />
+        </SafeAreaView>
+      </Modal>
 
       {/* Payment Received Modal */}
       <Modal
@@ -770,6 +978,88 @@ export default function Jobs(): React.ReactElement {
           contractorName={selectedJobForMap.contractorName}
         />
       )}
+
+      {/* Contractor Rating Modal */}
+      <Modal
+        visible={contractorRatingModalVisible}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setContractorRatingModalVisible(false)}
+      >
+        <View style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.6)", justifyContent: "center", alignItems: "center" }}>
+          <View style={{ width: "88%", backgroundColor: "#fff", borderRadius: 14, padding: 16 }}>
+            <Text style={{ fontSize: 18, fontWeight: "800", color: "#111827", marginBottom: 6 }}>
+              Rate Contractor
+            </Text>
+            <Text style={{ fontSize: 13, color: "#6b7280", marginBottom: 12 }}>
+              {selectedJobForContractorRating?.contractorName || "Contractor"} • {selectedJobForContractorRating?.title || ""}
+            </Text>
+
+            <View style={{ flexDirection: "row", justifyContent: "center", marginBottom: 14 }}>
+              {[1, 2, 3, 4, 5].map((star) => (
+                <TouchableOpacity key={star} onPress={() => setContractorRatingStars(star)}>
+                  <Text style={{ fontSize: 30, marginHorizontal: 3 }}>
+                    {star <= contractorRatingStars ? "⭐" : "☆"}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+
+            <TextInput
+              style={{
+                borderWidth: 1,
+                borderColor: "#d1d5db",
+                borderRadius: 10,
+                paddingHorizontal: 12,
+                paddingVertical: 10,
+                minHeight: 72,
+                textAlignVertical: "top",
+                marginBottom: 14,
+              }}
+              placeholder="Feedback (optional)"
+              value={contractorRatingFeedback}
+              onChangeText={setContractorRatingFeedback}
+              multiline
+            />
+
+            <View style={{ flexDirection: "row", gap: 10 }}>
+              <TouchableOpacity
+                style={{
+                  flex: 1,
+                  height: 42,
+                  borderRadius: 10,
+                  backgroundColor: "#e5e7eb",
+                  justifyContent: "center",
+                  alignItems: "center",
+                }}
+                onPress={() => setContractorRatingModalVisible(false)}
+                disabled={submittingContractorRating}
+              >
+                <Text style={{ color: "#111827", fontWeight: "700" }}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={{
+                  flex: 1,
+                  height: 42,
+                  borderRadius: 10,
+                  backgroundColor: "#1d4ed8",
+                  justifyContent: "center",
+                  alignItems: "center",
+                  opacity: submittingContractorRating ? 0.8 : 1,
+                }}
+                onPress={submitContractorRating}
+                disabled={submittingContractorRating}
+              >
+                {submittingContractorRating ? (
+                  <ActivityIndicator color="#fff" size="small" />
+                ) : (
+                  <Text style={{ color: "#fff", fontWeight: "700" }}>Submit</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }

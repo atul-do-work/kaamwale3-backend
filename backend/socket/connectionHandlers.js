@@ -103,9 +103,6 @@ io.on("connection", (socket) => {
           expectedWage: expectedWage, // ✅ Fetch from User model
           socketId: socket.id,
           isAvailable: isAvailable, // ✅ Now fetches from USER model (source of truth)
-          consecutiveDays: updated.gigsData?.consecutiveDays || 0,
-          eligibleFor5Days: updated.gigsData?.eligibleFor5Days || false,
-          eligibleFor10Days: updated.gigsData?.eligibleFor10Days || false,
         });
 
         socket.workerName = name;

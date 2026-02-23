@@ -9,6 +9,7 @@ function createJobsLifecycleRouter(deps) {
   router.post("/jobs/attendance/:id", authenticateToken, controller.markAttendance);
   router.post("/jobs/pay/:id", authenticateToken, controller.payJob);
   router.post("/jobs/rate/:id", authenticateToken, controller.rateJob);
+  router.post("/jobs/rate-contractor/:id", authenticateToken, controller.rateContractor);
   router.post("/jobs/cancel/:id", authenticateToken, controller.cancelJob);
   router.get("/jobs/cancellations", authenticateToken, controller.getCancellations);
 

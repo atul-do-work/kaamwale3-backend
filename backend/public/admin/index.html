@@ -666,6 +666,10 @@
                     <i class="fas fa-history"></i>
                     <span>Activity Logs</span>
                 </a>
+                <a href="#" class="nav-item" data-section="gig-history">
+                    <i class="fas fa-list-check"></i>
+                    <span>Gig History</span>
+                </a>
                 <a href="#" class="nav-item" data-section="leaderboard">
                     <i class="fas fa-trophy"></i>
                     <span>City Leaderboard</span>
@@ -881,13 +885,14 @@
                                 <th>Name</th>
                                 <th>Email</th>
                                 <th>Role</th>
+                                <th>Contractor Rating</th>
                                 <th>Created At</th>
                                 <th>Actions</th>
                             </tr>
                         </thead>
                         <tbody id="usersTable">
                             <tr>
-                                <td colspan="6" class="loading"><div class="spinner"></div></td>
+                                <td colspan="7" class="loading"><div class="spinner"></div></td>
                             </tr>
                         </tbody>
                     </table>
@@ -940,12 +945,13 @@
                                 <th>Amount</th>
                                 <th>Status</th>
                                 <th>Payment</th>
+                                <th>Contractor Rating</th>
                                 <th>Actions</th>
                             </tr>
                         </thead>
                         <tbody id="jobsTable">
                             <tr>
-                                <td colspan="7" class="loading"><div class="spinner"></div></td>
+                                <td colspan="8" class="loading"><div class="spinner"></div></td>
                             </tr>
                         </tbody>
                     </table>
@@ -1053,6 +1059,36 @@
                         <tbody id="activityTable">
                             <tr>
                                 <td colspan="4" class="loading"><div class="spinner"></div></td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Gig History Section -->
+            <div id="gig-history" class="data-section">
+                <div class="section-header">
+                    <h2>Worker Gig History</h2>
+                    <input type="text" class="search-box" id="gigHistorySearch" placeholder="Search by worker phone...">
+                </div>
+                <div class="table-wrapper">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Worker</th>
+                                <th>Job</th>
+                                <th>Event</th>
+                                <th>When</th>
+                                <th>Hours</th>
+                                <th>Total Works</th>
+                                <th>Total Hours</th>
+                                <th>Consecutive Days</th>
+                                <th>Cancellations</th>
+                            </tr>
+                        </thead>
+                        <tbody id="gigHistoryTable">
+                            <tr>
+                                <td colspan="9" class="loading"><div class="spinner"></div></td>
                             </tr>
                         </tbody>
                     </table>
@@ -1310,6 +1346,7 @@
                 else if (sectionId === 'verifications') loadVerifications();
                 else if (sectionId === 'wallets') loadWallets();
                 else if (sectionId === 'activity') loadActivityLogs();
+                else if (sectionId === 'gig-history') loadGigHistory();
                 else if (sectionId === 'leaderboard') loadLeaderboard();
                 else if (sectionId === 'support') loadSupportTickets();
                 else if (sectionId === 'premium-subscriptions') loadPremiumSubscriptions();
@@ -1420,16 +1457,17 @@
                             <td>${user.name || '-'}</td>
                             <td>${user.email || '-'}</td>
                             <td>${user.role || 'user'}</td>
+                            <td>⭐ ${(Number(user.avgRating || 0)).toFixed(1)}</td>
                             <td>${new Date(user.createdAt).toLocaleDateString()}</td>
                             <td><button class="btn-small btn-view" onclick="viewProfileByPhone('${user.phone}', 'contractor')">View</button></td>
                         </tr>
                     `).join('');
                 } else {
-                    tbody.innerHTML = '<tr><td colspan="6">No users found</td></tr>';
+                    tbody.innerHTML = '<tr><td colspan="7">No users found</td></tr>';
                 }
             } catch (err) {
                 console.error('Error loading users:', err);
-                document.getElementById('usersTable').innerHTML = '<tr><td colspan="6">Error loading data</td></tr>';
+                document.getElementById('usersTable').innerHTML = '<tr><td colspan="7">Error loading data</td></tr>';
             }
         }
 
@@ -1503,7 +1541,9 @@
                         <div style="background:#f9fafb;padding:12px;border-radius:8px;">
                             <h4 style="margin-bottom:8px;">Basic</h4>
                             <p><strong>Name:</strong> ${user.name || '-'}</p>
+                            <p><strong>ID:</strong> ${user._id || '-'}</p>
                             <p><strong>Phone:</strong> ${user.phone || phone}</p>
+                            <p><strong>Contractor Rating:</strong> ${(Number(user.avgRating || 0)).toFixed(1)} ⭐</p>
                             <p><strong>Role:</strong> ${user.role || roleHint || '-'}</p>
                             <p><strong>Email:</strong> ${user.email || '-'}</p>
                             <p><strong>City:</strong> ${user.city || '-'}</p>
@@ -1573,15 +1613,16 @@
                             <td>₹${job.amount}</td>
                             <td><span class="badge pending">${job.status || 'open'}</span></td>
                             <td><span class="badge ${job.paymentStatus === 'Paid' ? 'approved' : 'pending'}">${job.paymentStatus || 'pending'}</span></td>
+                            <td>${job.contractorRating?.stars ? `${job.contractorRating.stars} ⭐` : '-'}</td>
                             <td><button class="btn-small btn-view" onclick="showJobDetails('${job._id}')">View</button></td>
                         </tr>
                     `).join('');
                 } else {
-                    tbody.innerHTML = '<tr><td colspan="7">No jobs found</td></tr>';
+                    tbody.innerHTML = '<tr><td colspan="8">No jobs found</td></tr>';
                 }
             } catch (err) {
                 console.error('Error loading jobs:', err);
-                document.getElementById('jobsTable').innerHTML = '<tr><td colspan="7">Error loading data</td></tr>';
+                document.getElementById('jobsTable').innerHTML = '<tr><td colspan="8">Error loading data</td></tr>';
             }
         }
 
@@ -1958,6 +1999,55 @@
             }
         }
 
+        // Load worker gig history
+        async function loadGigHistory() {
+            try {
+                const token = localStorage.getItem('adminToken');
+                const phone = (document.getElementById('gigHistorySearch')?.value || '').trim();
+                const queryString = phone ? `?phone=${encodeURIComponent(phone)}&limit=300` : '?limit=300';
+
+                const res = await fetch(`${API_BASE}/admin/gig-history${queryString}`, {
+                    headers: { 'Authorization': `Bearer ${token}` }
+                });
+
+                const data = await res.json();
+                const tbody = document.getElementById('gigHistoryTable');
+
+                if (data.success && Array.isArray(data.rows) && data.rows.length > 0) {
+                    tbody.innerHTML = data.rows.map((row) => {
+                        const eventClass =
+                            row.eventType === 'job_completed' ? 'verified' :
+                            row.eventType === 'job_accepted' ? 'approved' :
+                            row.eventType === 'job_declined_offer' ? 'warning' :
+                            row.eventType === 'job_cancelled_by_worker' || row.eventType === 'job_cancelled_by_contractor' ? 'rejected' : 'pending';
+
+                        const jobText = row.jobTitle && row.jobTitle !== '-'
+                            ? row.jobTitle
+                            : (row.jobId ? String(row.jobId) : '-');
+
+                        return `
+                            <tr>
+                                <td>${row.workerName || '-'}<br><small>${row.workerPhone || '-'}</small></td>
+                                <td>${jobText}<br><small>${row.contractorPhone || '-'}</small></td>
+                                <td><span class="badge ${eventClass}">${row.eventType || '-'}</span></td>
+                                <td>${row.eventTime ? new Date(row.eventTime).toLocaleString() : '-'}</td>
+                                <td>${Number(row.hoursWorked || 0).toFixed(2)}</td>
+                                <td>${row.totalCompletedJobs || 0}</td>
+                                <td>${Number(row.totalHoursWorked || 0).toFixed(2)}</td>
+                                <td>${row.consecutiveDays || 0}</td>
+                                <td>${row.totalCancellations || 0} (streak: ${row.cancellationsInStreak || 0})</td>
+                            </tr>
+                        `;
+                    }).join('');
+                } else {
+                    tbody.innerHTML = '<tr><td colspan="9">No gig history found</td></tr>';
+                }
+            } catch (err) {
+                console.error('Error loading gig history:', err);
+                document.getElementById('gigHistoryTable').innerHTML = '<tr><td colspan="9">Error loading data</td></tr>';
+            }
+        }
+
         // Load city leaderboard
         async function loadLeaderboard() {
             try {
@@ -2255,10 +2345,10 @@
                                 </div>
                             </div>
 
-                            <!-- Rating & Feedback -->
+                            <!-- Worker Rating & Feedback -->
                             ${job.rating && (job.rating.stars || job.rating.feedback) ? `
                             <div style="border: 1px solid #ddd; padding: 15px; border-radius: 5px; margin-bottom: 20px; background: #f0f8ff;">
-                                <h5 style="margin-top: 0; margin-bottom: 10px;">Rating & Feedback</h5>
+                                <h5 style="margin-top: 0; margin-bottom: 10px;">Worker Rating & Feedback (By Contractor)</h5>
                                 <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
                                     <div>
                                         <p style="margin: 5px 0;"><strong>Rating:</strong> <span style="font-size: 18px; font-weight: bold;">${job.rating.stars || '-'}</span> ⭐</p>
@@ -2267,6 +2357,23 @@
                                     <div>
                                         <p style="margin: 5px 0;"><strong>Feedback:</strong> ${job.rating.feedback || '-'}</p>
                                         <p style="margin: 5px 0;"><strong>Rated At:</strong> ${formatDate(job.rating.ratedAt)}</p>
+                                    </div>
+                                </div>
+                            </div>
+                            ` : ''}
+
+                            <!-- Contractor Rating & Feedback -->
+                            ${job.contractorRating && (job.contractorRating.stars || job.contractorRating.feedback) ? `
+                            <div style="border: 1px solid #ddd; padding: 15px; border-radius: 5px; margin-bottom: 20px; background: #fff7ed;">
+                                <h5 style="margin-top: 0; margin-bottom: 10px;">Contractor Rating & Feedback (By Worker)</h5>
+                                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
+                                    <div>
+                                        <p style="margin: 5px 0;"><strong>Rating:</strong> <span style="font-size: 18px; font-weight: bold;">${job.contractorRating.stars || '-'}</span> ⭐</p>
+                                        <p style="margin: 5px 0;"><strong>Rated By:</strong> ${job.contractorRating.ratedBy || '-'}</p>
+                                    </div>
+                                    <div>
+                                        <p style="margin: 5px 0;"><strong>Feedback:</strong> ${job.contractorRating.feedback || '-'}</p>
+                                        <p style="margin: 5px 0;"><strong>Rated At:</strong> ${formatDate(job.contractorRating.ratedAt)}</p>
                                     </div>
                                 </div>
                             </div>
@@ -2541,6 +2648,13 @@
         document.getElementById('premiumPhoneSearch')?.addEventListener('input', () => {
             if (document.getElementById('premium-subscriptions')?.classList.contains('active')) {
                 loadPremiumSubscriptions();
+            }
+        });
+
+        // Gig history search listener
+        document.getElementById('gigHistorySearch')?.addEventListener('input', () => {
+            if (document.getElementById('gig-history')?.classList.contains('active')) {
+                loadGigHistory();
             }
         });
     </script>

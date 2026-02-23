@@ -4,6 +4,8 @@ const { authenticateToken } = require('../utils/auth');
 const Worker = require('../models/Worker');
 const IncentiveLedger = require('../models/IncentiveLedger');
 const Wallet = require('../models/Wallet');
+const GigHistory = require('../models/GigHistory');
+const { calculateEligibility } = require('../services/incentiveEligibilityService');
 
 /**
  * GET /incentives/progress
@@ -37,14 +39,11 @@ router.get('/progress', authenticateToken, async (req, res) => {
       return res.status(404).json({ success: false, message: 'Worker not found' });
     }
 
-    // ✅ Get gigsData or initialize
-    const gigsData = worker.gigsData || {};
-    const workHistory = gigsData.workHistory || [];
-
-    // ✅ CRITICAL: All calculations happen ONLY on backend
-    // Frontend CANNOT manipulate this
-    
-    const eligibilityData = calculateEligibility(workHistory);
+    const events = await GigHistory.find({ workerPhone: phone })
+      .sort({ eventTime: -1 })
+      .limit(365)
+      .lean();
+    const eligibilityData = calculateEligibility(events);
 
     // ✅ Fetch claimed milestones (to hide claim button if already claimed)
     const claimedMilestones = await IncentiveLedger.find({
@@ -138,9 +137,11 @@ router.post('/claim/:milestoneId', authenticateToken, async (req, res) => {
     }
 
     // ✅ Recalculate eligibility on backend (can't trust client)
-    const gigsData = worker.gigsData || {};
-    const workHistory = gigsData.workHistory || [];
-    const eligibilityData = calculateEligibility(workHistory);
+    const events = await GigHistory.find({ workerPhone: phone })
+      .sort({ eventTime: -1 })
+      .limit(365)
+      .lean();
+    const eligibilityData = calculateEligibility(events);
 
     // ✅ Verify user is eligible for this milestone
     let isEligible = false;
@@ -302,125 +303,5 @@ router.post('/claim/:milestoneId', authenticateToken, async (req, res) => {
     });
   }
 });
-
-/**
- * HELPER: calculateEligibility (O(n) - Current Streak Only)
- * 
- * Production-grade eligibility calculation:
- * - ✅ O(n) time complexity (single pass, not nested loops)
- * - ✅ Current streak only (if stopped, streak resets)
- * - ✅ Minimum 8 hours per day enforcement
- * - ✅ Only paid jobs count
- * - ✅ Any cancellation in window disqualifies
- * 
- * Logic:
- * 1. Filter valid work days (date, hours >= 8, paymentStatus = 'Paid')
- * 2. Sort descending (latest first)
- * 3. Single pass: count consecutive days backwards from today
- * 4. Track cancellations in current streak
- * 
- * Returns:
- * {
- *   consecutiveDays: number,
- *   totalHours: number,
- *   cancellationsInWindow: number,
- *   lastWorkDate: string (YYYY-MM-DD),
- *   eligibleFor5Days: boolean,
- *   eligibleFor10Days: boolean,
- *   eligibleFor20Days: boolean
- * }
- */
-function calculateEligibility(workHistory) {
-  if (!Array.isArray(workHistory) || workHistory.length === 0) {
-    return emptyEligibility();
-  }
-
-  try {
-    // ✅ Step 1: Filter only valid completed work days
-    const validHistory = workHistory
-      .filter(h =>
-        h.date &&
-        h.hours >= 8 &&                      // Minimum 8 hours per day
-        h.paymentStatus === 'Paid'           // Only completed/paid gigs
-      )
-      .map(h => ({
-        dateObj: new Date(h.date),
-        dateStr: new Date(h.date).toISOString().split('T')[0],
-        hours: h.hours,
-        cancelled: !!h.cancelled
-      }))
-      .sort((a, b) => b.dateObj - a.dateObj); // Descending (latest first)
-
-    if (validHistory.length === 0) {
-      return emptyEligibility();
-    }
-
-    // ✅ Step 2: Count consecutive days backwards from most recent
-    let consecutiveDays = 0;
-    let cancellationsInWindow = 0;
-
-    for (let i = 0; i < validHistory.length; i++) {
-      if (i === 0) {
-        // First (most recent) day always counts
-        consecutiveDays = 1;
-        if (validHistory[i].cancelled) {
-          cancellationsInWindow++;
-        }
-        continue;
-      }
-
-      // ✅ Check if previous day (i-1) is exactly 1 day before current day (i)
-      const prevDay = validHistory[i - 1].dateObj;
-      const currDay = validHistory[i].dateObj;
-      const dayDiff = Math.floor((prevDay - currDay) / (1000 * 60 * 60 * 24));
-
-      if (dayDiff === 1) {
-        // Consecutive day found
-        consecutiveDays++;
-        if (validHistory[i].cancelled) {
-          cancellationsInWindow++;
-        }
-      } else {
-        // Streak broken (gap > 1 day)
-        break;
-      }
-    }
-
-    // ✅ Step 3: Determine eligibility
-    const eligibleFor5Days = consecutiveDays >= 5 && cancellationsInWindow === 0;
-    const eligibleFor10Days = consecutiveDays >= 10 && cancellationsInWindow === 0;
-    const eligibleFor20Days = consecutiveDays >= 20 && cancellationsInWindow === 0;
-
-    console.log(`✅ Eligibility: ${consecutiveDays} days, ${cancellationsInWindow} cancellations, eligible: [5D:${eligibleFor5Days}, 10D:${eligibleFor10Days}, 20D:${eligibleFor20Days}]`);
-
-    return {
-      consecutiveDays,
-      totalHours: validHistory.reduce((sum, h) => sum + h.hours, 0),
-      cancellationsInWindow,
-      lastWorkDate: validHistory[0]?.dateStr || null, // Most recent work date
-      eligibleFor5Days,
-      eligibleFor10Days,
-      eligibleFor20Days
-    };
-  } catch (err) {
-    console.error('❌ Error calculating eligibility:', err);
-    return emptyEligibility();
-  }
-}
-
-/**
- * Empty eligibility for error states
- */
-function emptyEligibility() {
-  return {
-    consecutiveDays: 0,
-    totalHours: 0,
-    cancellationsInWindow: 0,
-    lastWorkDate: null,
-    eligibleFor5Days: false,
-    eligibleFor10Days: false,
-    eligibleFor20Days: false
-  };
-}
 
 module.exports = router;
