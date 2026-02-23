@@ -1221,6 +1221,19 @@
         </div>
     </div>
 
+    <!-- Profile Details Modal -->
+    <div id="profileModal" class="modal">
+        <div class="modal-content" style="max-width: 900px; max-height: 90vh; overflow-y: auto;">
+            <div class="modal-header">
+                <h3 id="profileModalTitle">Profile Details</h3>
+                <button class="close-btn" onclick="closeModal('profileModal')">&times;</button>
+            </div>
+            <div class="modal-body" id="profileDetailsContent">
+                <div class="loading"><div class="spinner"></div></div>
+            </div>
+        </div>
+    </div>
+
     <script>
         // Use the same origin the admin panel was served from so API calls go to the running backend.
         const API_BASE = window.location.origin || 'http://localhost:3000';
@@ -1408,7 +1421,7 @@
                             <td>${user.email || '-'}</td>
                             <td>${user.role || 'user'}</td>
                             <td>${new Date(user.createdAt).toLocaleDateString()}</td>
-                            <td><button class="btn-small btn-view">View</button></td>
+                            <td><button class="btn-small btn-view" onclick="viewProfileByPhone('${user.phone}', 'contractor')">View</button></td>
                         </tr>
                     `).join('');
                 } else {
@@ -1442,7 +1455,7 @@
                             <td>${worker.city || '-'}</td>
                             <td><span class="badge ${worker.isVerified ? 'verified' : 'pending'}">${worker.isVerified ? '✓ Yes' : 'Pending'}</span></td>
                             <td><span class="badge ${worker.isAvailable ? 'verified' : 'rejected'}">${worker.isAvailable ? 'Available' : 'Busy'}</span></td>
-                            <td><button class="btn-small btn-view">View Profile</button></td>
+                            <td><button class="btn-small btn-view" onclick="viewProfileByPhone('${worker.phone}', 'worker')">View Profile</button></td>
                         </tr>
                     `).join('');
                 } else {
@@ -1451,6 +1464,92 @@
             } catch (err) {
                 console.error('Error loading workers:', err);
                 document.getElementById('workersTable').innerHTML = '<tr><td colspan="9">Error loading data</td></tr>';
+            }
+        }
+
+        // View contractor/worker profile by phone
+        async function viewProfileByPhone(phone, roleHint) {
+            const modal = document.getElementById('profileModal');
+            const titleEl = document.getElementById('profileModalTitle');
+            const bodyEl = document.getElementById('profileDetailsContent');
+
+            titleEl.textContent = `${roleHint === 'worker' ? 'Worker' : 'Contractor'} Profile`;
+            bodyEl.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
+            modal.classList.add('show');
+
+            try {
+                const token = localStorage.getItem('adminToken');
+                const res = await fetch(`${API_BASE}/admin/lookup/${encodeURIComponent(phone)}`, {
+                    headers: { 'Authorization': `Bearer ${token}` }
+                });
+                const result = await res.json();
+
+                if (!res.ok || !result.success || !result.data) {
+                    bodyEl.innerHTML = `<p style="color:#e74c3c;">${result.message || 'Failed to load profile details'}</p>`;
+                    return;
+                }
+
+                const d = result.data;
+                const user = d.user || {};
+                const worker = d.worker || {};
+                const wallet = d.wallet || {};
+                const verification = d.verification || {};
+                const bank = d.bankAccount || {};
+                const workerSummary = (d.summaries && d.summaries.worker) || {};
+                const contractorSummary = (d.summaries && d.summaries.contractor) || {};
+
+                bodyEl.innerHTML = `
+                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;">
+                        <div style="background:#f9fafb;padding:12px;border-radius:8px;">
+                            <h4 style="margin-bottom:8px;">Basic</h4>
+                            <p><strong>Name:</strong> ${user.name || '-'}</p>
+                            <p><strong>Phone:</strong> ${user.phone || phone}</p>
+                            <p><strong>Role:</strong> ${user.role || roleHint || '-'}</p>
+                            <p><strong>Email:</strong> ${user.email || '-'}</p>
+                            <p><strong>City:</strong> ${user.city || '-'}</p>
+                            <p><strong>State:</strong> ${user.state || '-'}</p>
+                        </div>
+                        <div style="background:#f9fafb;padding:12px;border-radius:8px;">
+                            <h4 style="margin-bottom:8px;">Account</h4>
+                            <p><strong>Wallet:</strong> â‚¹${Number(wallet.balance || 0).toLocaleString()}</p>
+                            <p><strong>KYC:</strong> ${verification.overallVerificationStatus || 'pending'}</p>
+                            <p><strong>Bank:</strong> ${bank.verificationStatus || 'not added'}</p>
+                            <p><strong>Main Skill:</strong> ${user.mainSkill || '-'}</p>
+                            <p><strong>Expected Wage:</strong> ${user.expectedWage || '-'}</p>
+                        </div>
+                    </div>
+
+                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:14px;">
+                        <div style="background:#f0f8ff;padding:12px;border-radius:8px;">
+                            <h4 style="margin-bottom:8px;">Worker Summary</h4>
+                            <p><strong>Rating:</strong> ${worker.rating || 0}</p>
+                            <p><strong>Available:</strong> ${worker.isAvailable ? 'Yes' : 'No'}</p>
+                            <p><strong>Total Jobs:</strong> ${workerSummary.totalJobs || 0}</p>
+                            <p><strong>Completed:</strong> ${workerSummary.completedJobs || 0}</p>
+                            <p><strong>Pending:</strong> ${workerSummary.pendingJobs || 0}</p>
+                            <p><strong>Earnings:</strong> â‚¹${Number(workerSummary.totalEarnings || 0).toLocaleString()}</p>
+                        </div>
+                        <div style="background:#fff7ed;padding:12px;border-radius:8px;">
+                            <h4 style="margin-bottom:8px;">Contractor Summary</h4>
+                            <p><strong>Jobs Posted:</strong> ${contractorSummary.totalJobsPosted || 0}</p>
+                            <p><strong>Paid Jobs:</strong> ${contractorSummary.totalPaidJobs || 0}</p>
+                            <p><strong>Cancelled Jobs:</strong> ${contractorSummary.totalCancelledJobs || 0}</p>
+                            <p><strong>Total Spending:</strong> â‚¹${Number(contractorSummary.totalSpending || 0).toLocaleString()}</p>
+                        </div>
+                    </div>
+
+                    <div style="margin-top:14px;background:#f9fafb;padding:12px;border-radius:8px;">
+                        <h4 style="margin-bottom:8px;">Records Count</h4>
+                        <p><strong>Jobs as Worker:</strong> ${(d.jobs && d.jobs.asWorker && d.jobs.asWorker.length) || 0}</p>
+                        <p><strong>Jobs as Contractor:</strong> ${(d.jobs && d.jobs.asContractor && d.jobs.asContractor.length) || 0}</p>
+                        <p><strong>Support Tickets:</strong> ${(d.supportTickets && d.supportTickets.length) || 0}</p>
+                        <p><strong>Activity Logs:</strong> ${(d.activityLogs && d.activityLogs.length) || 0}</p>
+                        <p><strong>Cancellation Logs:</strong> ${(d.cancellationLogs && d.cancellationLogs.length) || 0}</p>
+                    </div>
+                `;
+            } catch (err) {
+                console.error('Error loading profile details:', err);
+                bodyEl.innerHTML = '<p style="color:#e74c3c;">Failed to load profile details</p>';
             }
         }
 
@@ -2447,4 +2546,5 @@
     </script>
 </body>
 </html>
+
 

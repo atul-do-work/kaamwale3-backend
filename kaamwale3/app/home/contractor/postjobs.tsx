@@ -1,10 +1,11 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { View, Text, TextInput, TouchableOpacity, ScrollView, StyleSheet, Alert, Image, ActivityIndicator } from 'react-native';
+import { View, Text, TextInput, TouchableOpacity, ScrollView, StyleSheet, Alert, Image, ActivityIndicator, Modal } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import * as Location from 'expo-location';
 import * as ImagePicker from 'expo-image-picker';
+import { MapView, Camera, PointAnnotation } from '@maplibre/maplibre-react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { socket } from "../../../utils/socket";
 import { SERVER_URL } from "../../../utils/config";
@@ -30,6 +31,8 @@ const JOB_TITLES = ['Construction', 'Renovation', 'Other'];
 const MAIN_SKILLS = ['Labour', 'Mason', 'Engineer', 'ITI/Technician'];
 const MASON_TYPES = ['Tile Mason', 'Stone Mason', 'Cement Mason', 'Composite Mason', 'Bar Bender'];
 const BULK_HIRING_OPTIONS = [1, 2, 3, 5, 10];
+const MAPTILER_API_KEY = "rmEy5CtIKMlSfVx4fckr";
+const MAP_STYLE_URL = `https://api.maptiler.com/maps/streets-v2/style.json?key=${MAPTILER_API_KEY}`;
 
 export default function PostJobScreen() {
   const { t } = useLanguage();
@@ -60,6 +63,12 @@ export default function PostJobScreen() {
   const [numberOfDays, setNumberOfDays] = useState(1); // ✅ Job duration in days (1-30)
   const [showDaysDropdown, setShowDaysDropdown] = useState(false); // ✅ Days dropdown toggle
   const [gettingLocation, setGettingLocation] = useState(false); // ✅ Loading state for current location
+  const [locationQuery, setLocationQuery] = useState('');
+  const [resolvingAddress, setResolvingAddress] = useState(false);
+  const [showMapPicker, setShowMapPicker] = useState(false);
+  const [mapLoading, setMapLoading] = useState(false);
+  const [mapCenter, setMapCenter] = useState<{ lat: number; lon: number }>({ lat: 26.9124, lon: 75.7873 });
+  const [mapPin, setMapPin] = useState<{ lat: number; lon: number } | null>(null);
   const [isPostingJob, setIsPostingJob] = useState(false); // ✅ Loading state for posting job
 
   // SERVER_URL is loaded from central config
@@ -241,6 +250,121 @@ export default function PostJobScreen() {
     }
   };
 
+  const setLocationFromAddress = async () => {
+    const query = locationQuery.trim();
+    if (!query) {
+      return Alert.alert('Missing', 'Please enter a location or address');
+    }
+
+    try {
+      setResolvingAddress(true);
+      const geoResults = await Location.geocodeAsync(query);
+      if (!geoResults || geoResults.length === 0) {
+        return Alert.alert('Not Found', 'Could not find this address. Try a clearer landmark/city.');
+      }
+
+      const first = geoResults[0];
+      let placeName = query;
+      try {
+        const reverse = await Location.reverseGeocodeAsync({
+          latitude: first.latitude,
+          longitude: first.longitude,
+        });
+        if (reverse && reverse.length > 0) {
+          const g = reverse[0];
+          const parts = [g.name, g.street, g.subregion || g.region || g.city, g.postalCode, g.country].filter(Boolean);
+          if (parts.length > 0) placeName = parts.join(', ');
+        }
+      } catch {
+        // keep typed query as place name
+      }
+
+      setSelectedLocation({
+        lat: first.latitude,
+        lon: first.longitude,
+        placeName,
+      });
+      Alert.alert('Success', 'Job location set from entered address');
+    } catch (err) {
+      Alert.alert('Error', (err as Error).message || 'Failed to find address location');
+    } finally {
+      setResolvingAddress(false);
+    }
+  };
+
+  const openMapPicker = async () => {
+    try {
+      setMapLoading(true);
+      if (selectedLocation) {
+        setMapCenter({ lat: selectedLocation.lat, lon: selectedLocation.lon });
+        setMapPin({ lat: selectedLocation.lat, lon: selectedLocation.lon });
+        setShowMapPicker(true);
+        return;
+      }
+
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status === 'granted') {
+        const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+        setMapCenter({ lat: loc.coords.latitude, lon: loc.coords.longitude });
+        setMapPin({ lat: loc.coords.latitude, lon: loc.coords.longitude });
+      } else {
+        // fallback stays Jaipur
+        setMapPin({ lat: mapCenter.lat, lon: mapCenter.lon });
+      }
+      setShowMapPicker(true);
+    } catch {
+      setMapPin({ lat: mapCenter.lat, lon: mapCenter.lon });
+      setShowMapPicker(true);
+    } finally {
+      setMapLoading(false);
+    }
+  };
+
+  const onMapPress = (event: any) => {
+    const coordinates =
+      event?.geometry?.coordinates ||
+      event?.features?.[0]?.geometry?.coordinates ||
+      event?.coordinates;
+
+    if (!coordinates || coordinates.length < 2) return;
+    const [lon, lat] = coordinates;
+    if (typeof lat !== 'number' || typeof lon !== 'number') return;
+    setMapPin({ lat, lon });
+  };
+
+  const confirmMapLocation = async () => {
+    if (!mapPin) {
+      return Alert.alert('Missing', 'Tap on map to select location first');
+    }
+
+    try {
+      let placeName = `${mapPin.lat.toFixed(4)}, ${mapPin.lon.toFixed(4)}`;
+      try {
+        const reverse = await Location.reverseGeocodeAsync({
+          latitude: mapPin.lat,
+          longitude: mapPin.lon,
+        });
+        if (reverse && reverse.length > 0) {
+          const g = reverse[0];
+          const parts = [g.name, g.street, g.subregion || g.region || g.city, g.postalCode, g.country].filter(Boolean);
+          if (parts.length > 0) placeName = parts.join(', ');
+        }
+      } catch {
+        // keep fallback text
+      }
+
+      setSelectedLocation({
+        lat: mapPin.lat,
+        lon: mapPin.lon,
+        placeName,
+      });
+      setShowMapPicker(false);
+      Alert.alert('Success', 'Location selected from map');
+    } catch (err) {
+      Alert.alert('Error', (err as Error).message || 'Failed to set location from map');
+    }
+  };
+
   // Setup socket connection - use global socket
   useEffect(() => {
     if (!token) return;
@@ -266,32 +390,6 @@ export default function PostJobScreen() {
   const handlePostJob = async () => {
     // ✅ Guard: Prevent double-click during posting
     if (isPostingJob) return;
-    
-    // ✅ CHECK: Contractor must have location enabled
-    try {
-      const userStr = await AsyncStorage.getItem('user');
-      if (userStr) {
-        const user = JSON.parse(userStr);
-        const hasDefaultLocation = (user.latitude === 0 && user.longitude === 0) || 
-                                   !(user.latitude && user.longitude);
-        
-        if (hasDefaultLocation) {
-          return Alert.alert(
-            "Location Required",
-            "You must enable location to post a job. This helps us match you with workers in your area.",
-            [
-              {
-                text: "Enable Location",
-                onPress: () => router.push("/(tabs)/home/contractor") // Navigate back to contractor home to enable location
-              },
-              { text: "Cancel", style: "cancel" }
-            ]
-          );
-        }
-      }
-    } catch (err) {
-      console.error('Error checking contractor location:', err);
-    }
     
     if (!title) return Alert.alert("Missing", "Please select a job title");
     if (!mainSkill) return Alert.alert("Missing", "Please select main skill");
@@ -563,6 +661,45 @@ export default function PostJobScreen() {
               )}
             </View>
           </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.addressButton, { marginBottom: 10 }]}
+            onPress={openMapPicker}
+            disabled={mapLoading}
+          >
+            {mapLoading ? (
+              <ActivityIndicator size="small" color="#fff" />
+            ) : (
+              <>
+                <Ionicons name="map-outline" size={18} color="#fff" />
+                <Text style={[styles.addressButtonText, { marginLeft: 8 }]}>Choose From Map</Text>
+              </>
+            )}
+          </TouchableOpacity>
+
+          <View style={[styles.inputCard, { marginTop: 10, marginBottom: 10 }]}>
+            <Ionicons name="search-outline" size={22} color="#bcbec7ff" />
+            <TextInput
+              style={styles.input}
+              placeholder="Enter address, area, or landmark"
+              placeholderTextColor="#aaa"
+              value={locationQuery}
+              onChangeText={setLocationQuery}
+            />
+          </View>
+          <TouchableOpacity
+            style={[styles.addressButton, resolvingAddress && { opacity: 0.8 }]}
+            onPress={setLocationFromAddress}
+            disabled={resolvingAddress}
+          >
+            {resolvingAddress ? (
+              <ActivityIndicator size="small" color="#fff" />
+            ) : (
+              <>
+                <Ionicons name="location-outline" size={18} color="#fff" />
+                <Text style={[styles.addressButtonText, { marginLeft: 8 }]}>Use Entered Address</Text>
+              </>
+            )}
+          </TouchableOpacity>
         </View>
 
         {/* Image Upload */}
@@ -736,6 +873,56 @@ export default function PostJobScreen() {
         </TouchableOpacity>
       </View>
     </ScrollView>
+
+    <Modal
+      visible={showMapPicker}
+      animationType="slide"
+      transparent={false}
+      onRequestClose={() => setShowMapPicker(false)}
+    >
+      <SafeAreaView style={{ flex: 1, backgroundColor: '#0b1d33' }}>
+        <View style={styles.mapHeader}>
+          <Text style={styles.mapHeaderTitle}>Select Job Location</Text>
+          <TouchableOpacity onPress={() => setShowMapPicker(false)}>
+            <Ionicons name="close" size={24} color="#fff" />
+          </TouchableOpacity>
+        </View>
+
+        <View style={styles.mapContainer}>
+          <MapView
+            style={StyleSheet.absoluteFillObject}
+            mapStyle={MAP_STYLE_URL}
+            logoEnabled={false}
+            attributionEnabled={false}
+            onPress={onMapPress}
+          >
+            <Camera
+              centerCoordinate={[mapCenter.lon, mapCenter.lat]}
+              zoomLevel={14}
+              animationDuration={400}
+            />
+            {mapPin && (
+              <PointAnnotation
+                id="job-pin"
+                coordinate={[mapPin.lon, mapPin.lat]}
+              >
+                <View style={styles.mapPin}>
+                  <Ionicons name="location" size={22} color="#fff" />
+                </View>
+              </PointAnnotation>
+            )}
+          </MapView>
+        </View>
+
+        <View style={styles.mapFooter}>
+          <Text style={styles.mapHint}>Tap anywhere on map to set exact job point</Text>
+          <TouchableOpacity style={styles.confirmMapBtn} onPress={confirmMapLocation}>
+            <Text style={styles.confirmMapBtnText}>Confirm Location</Text>
+          </TouchableOpacity>
+        </View>
+      </SafeAreaView>
+    </Modal>
+
     </SafeAreaView>
   );
 }
@@ -907,5 +1094,66 @@ const styles = StyleSheet.create({
     color: '#667eea',
     fontSize: 12,
     fontStyle: 'italic',
+  },
+  addressButton: {
+    backgroundColor: '#26486e',
+    borderRadius: 12,
+    height: 42,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  addressButtonText: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  mapHeader: {
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    backgroundColor: '#102a46',
+  },
+  mapHeaderTitle: {
+    color: '#fff',
+    fontSize: 17,
+    fontWeight: '700',
+  },
+  mapContainer: {
+    flex: 1,
+    backgroundColor: '#0b1d33',
+  },
+  mapPin: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: '#1a5c3a',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 2,
+    borderColor: '#fff',
+  },
+  mapFooter: {
+    padding: 14,
+    backgroundColor: '#102a46',
+  },
+  mapHint: {
+    color: '#c9d8e8',
+    fontSize: 12,
+    marginBottom: 10,
+  },
+  confirmMapBtn: {
+    height: 44,
+    borderRadius: 12,
+    backgroundColor: '#1a5c3a',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  confirmMapBtnText: {
+    color: '#fff',
+    fontWeight: '700',
+    fontSize: 15,
   },
 });

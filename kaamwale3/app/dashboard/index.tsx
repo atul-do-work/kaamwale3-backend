@@ -82,6 +82,29 @@ interface AdminLookupData {
   };
 }
 
+interface AdminContractorUser {
+  _id?: string;
+  phone: string;
+  name?: string;
+  email?: string;
+  role?: string;
+  createdAt?: string;
+}
+
+interface AdminWorkerUser {
+  _id?: string;
+  phone: string;
+  name?: string;
+  workerType?: string;
+  avgRating?: number;
+  jobsCompleted?: number;
+  skills?: string[];
+  isVerified?: boolean;
+  isAvailable?: boolean;
+  city?: string;
+  createdAt?: string;
+}
+
 export default function DashboardScreen() {
   const router = useRouter();
   const { t } = useLanguage();
@@ -111,6 +134,10 @@ export default function DashboardScreen() {
   const [pendingBankAccounts, setPendingBankAccounts] = useState<any[]>([]);
   const [supportTickets, setSupportTickets] = useState<any[]>([]);
   const [premiumSubscriptions, setPremiumSubscriptions] = useState<any[]>([]);
+  const [adminUsers, setAdminUsers] = useState<AdminContractorUser[]>([]);
+  const [adminWorkers, setAdminWorkers] = useState<AdminWorkerUser[]>([]);
+  const [adminJobs, setAdminJobs] = useState<any[]>([]);
+  const [adminOverview, setAdminOverview] = useState<any | null>(null);
   const [premiumRecon, setPremiumRecon] = useState<{ latestRun: any | null; mismatches: any[]; mismatchCount: number }>({
     latestRun: null,
     mismatches: [],
@@ -118,6 +145,12 @@ export default function DashboardScreen() {
   });
   const [lookupPhone, setLookupPhone] = useState('');
   const [lookupData, setLookupData] = useState<AdminLookupData | null>(null);
+  const [selectedContractorDetails, setSelectedContractorDetails] = useState<AdminLookupData | null>(null);
+  const [selectedContractorPhone, setSelectedContractorPhone] = useState<string>('');
+  const [contractorDetailModalVisible, setContractorDetailModalVisible] = useState(false);
+  const [selectedWorkerDetails, setSelectedWorkerDetails] = useState<AdminLookupData | null>(null);
+  const [selectedWorkerPhone, setSelectedWorkerPhone] = useState<string>('');
+  const [workerDetailModalVisible, setWorkerDetailModalVisible] = useState(false);
   const [adminLoading, setAdminLoading] = useState(false);
   const [adminActionLoading, setAdminActionLoading] = useState(false);
   
@@ -200,23 +233,48 @@ export default function DashboardScreen() {
         'Content-Type': 'application/json',
       };
 
-      const [dashboardRes, verificationsRes, bankRes, ticketsRes, premiumSubsRes, premiumReconRes] = await Promise.all([
+      const fetchAllPages = async (path: string, listKey: string, pageSize = 500) => {
+        let page = 1;
+        const allItems: any[] = [];
+
+        while (true) {
+          const separator = path.includes('?') ? '&' : '?';
+          const response = await fetch(`${API_BASE}${path}${separator}page=${page}&limit=${pageSize}`, { headers });
+          const data = await response.json().catch(() => ({}));
+          if (!response.ok || data?.success === false) {
+            throw new Error(data?.message || `Failed loading ${path}`);
+          }
+
+          const chunk = Array.isArray(data?.[listKey]) ? data[listKey] : [];
+          allItems.push(...chunk);
+
+          const total = Number(data?.total ?? allItems.length);
+          if (chunk.length === 0 || chunk.length < pageSize || allItems.length >= total) {
+            break;
+          }
+          page += 1;
+        }
+
+        return allItems;
+      };
+
+      const [dashboardRes, users, workers, jobs, verifications, bankAccounts, tickets, premiumSubs, premiumReconRes] = await Promise.all([
         fetch(`${API_BASE}/admin/dashboard`, { headers }),
-        fetch(`${API_BASE}/admin/verifications`, { headers }),
-        fetch(`${API_BASE}/admin/bank-accounts`, { headers }),
-        fetch(`${API_BASE}/admin/support-tickets?status=open`, { headers }),
-        fetch(`${API_BASE}/admin/premium/subscriptions?limit=20`, { headers }),
+        fetchAllPages('/admin/users', 'users'),
+        fetchAllPages('/admin/workers', 'workers'),
+        fetchAllPages('/admin/jobs', 'jobs'),
+        fetchAllPages('/admin/verifications', 'verifications'),
+        fetchAllPages('/admin/bank-accounts', 'bankAccounts'),
+        fetchAllPages('/admin/support-tickets', 'tickets'),
+        fetchAllPages('/admin/premium/subscriptions', 'subscriptions', 200),
         fetch(`${API_BASE}/admin/premium/reconciliation/latest`, { headers }),
       ]);
 
       const dashboardData = await dashboardRes.json().catch(() => ({}));
-      const verificationsData = await verificationsRes.json().catch(() => ({}));
-      const bankData = await bankRes.json().catch(() => ({}));
-      const ticketsData = await ticketsRes.json().catch(() => ({}));
-      const premiumSubsData = await premiumSubsRes.json().catch(() => ({}));
       const premiumReconData = await premiumReconRes.json().catch(() => ({}));
 
       if (dashboardData?.success) {
+        setAdminOverview(dashboardData.stats || null);
         setAdminStats({
           totalUsers: dashboardData.stats?.totalUsers || 0,
           totalWorkers: dashboardData.stats?.totalWorkers || 0,
@@ -226,32 +284,24 @@ export default function DashboardScreen() {
         });
       }
 
-      if (verificationsData?.success && Array.isArray(verificationsData.verifications)) {
-        const pending = verificationsData.verifications.filter((v: any) =>
-          Array.isArray(v.documents) && v.documents.some((d: any) => d.verificationStatus === 'pending')
-        );
-        setPendingVerifications(pending);
-      } else {
-        setPendingVerifications([]);
-      }
+      setAdminUsers(Array.isArray(users) ? users : []);
 
-      if (bankData?.success && Array.isArray(bankData.bankAccounts)) {
-        setPendingBankAccounts(bankData.bankAccounts.filter((b: any) => b.verificationStatus === 'pending'));
-      } else {
-        setPendingBankAccounts([]);
-      }
+      setAdminWorkers(Array.isArray(workers) ? workers : []);
 
-      if (ticketsData?.success && Array.isArray(ticketsData.tickets)) {
-        setSupportTickets(ticketsData.tickets);
-      } else {
-        setSupportTickets([]);
-      }
+      setAdminJobs(Array.isArray(jobs) ? jobs : []);
 
-      if (premiumSubsData?.success && Array.isArray(premiumSubsData.subscriptions)) {
-        setPremiumSubscriptions(premiumSubsData.subscriptions);
-      } else {
-        setPremiumSubscriptions([]);
-      }
+      const verificationsList = Array.isArray(verifications) ? verifications : [];
+      const pending = verificationsList.filter((v: any) =>
+        Array.isArray(v.documents) && v.documents.some((d: any) => d.verificationStatus === 'pending')
+      );
+      setPendingVerifications(pending);
+
+      const bankList = Array.isArray(bankAccounts) ? bankAccounts : [];
+      setPendingBankAccounts(bankList.filter((b: any) => b.verificationStatus === 'pending'));
+
+      setSupportTickets(Array.isArray(tickets) ? tickets : []);
+
+      setPremiumSubscriptions(Array.isArray(premiumSubs) ? premiumSubs : []);
 
       if (premiumReconData?.success) {
         setPremiumRecon({
@@ -284,6 +334,44 @@ export default function DashboardScreen() {
     } catch (err) {
       setLookupData(null);
       showModal('error', 'Lookup Failed', err instanceof Error ? err.message : 'Failed to lookup phone');
+    } finally {
+      setAdminActionLoading(false);
+    }
+  };
+
+  const handleViewContractor = async (phone: string) => {
+    if (!/^\d{10}$/.test(phone)) {
+      showModal('error', 'Invalid Phone', 'Contractor phone is invalid.');
+      return;
+    }
+
+    setAdminActionLoading(true);
+    try {
+      const data = await adminFetch(`/admin/lookup/${phone}`);
+      setSelectedContractorPhone(phone);
+      setSelectedContractorDetails(data.data || null);
+      setContractorDetailModalVisible(true);
+    } catch (err) {
+      showModal('error', 'View Failed', err instanceof Error ? err.message : 'Failed to load contractor details');
+    } finally {
+      setAdminActionLoading(false);
+    }
+  };
+
+  const handleViewWorker = async (phone: string) => {
+    if (!/^\d{10}$/.test(phone)) {
+      showModal('error', 'Invalid Phone', 'Worker phone is invalid.');
+      return;
+    }
+
+    setAdminActionLoading(true);
+    try {
+      const data = await adminFetch(`/admin/lookup/${phone}`);
+      setSelectedWorkerPhone(phone);
+      setSelectedWorkerDetails(data.data || null);
+      setWorkerDetailModalVisible(true);
+    } catch (err) {
+      showModal('error', 'View Failed', err instanceof Error ? err.message : 'Failed to load worker details');
     } finally {
       setAdminActionLoading(false);
     }
@@ -480,7 +568,9 @@ export default function DashboardScreen() {
     setWorkerDetails(null);
   };
 
+  // Single source of truth for admin: web admin panel.
   if (isAdmin) {
+    const webAdminUrl = `${API_BASE}/admin/index.html`;
     return (
       <ScrollView style={styles.container}>
         <View style={styles.header}>
@@ -488,261 +578,33 @@ export default function DashboardScreen() {
             <MaterialIcons name="arrow-back" size={28} color="#fff" />
           </TouchableOpacity>
           <Text style={styles.headerTitle}>Admin Console</Text>
-          <TouchableOpacity onPress={() => loadAdminData()}>
-            <MaterialIcons name="refresh" size={24} color="#fff" />
-          </TouchableOpacity>
-        </View>
-
-        {(adminLoading || adminActionLoading) && (
-          <ActivityIndicator size="small" color="#1a2f4d" style={{ marginTop: 14 }} />
-        )}
-
-        <View style={styles.adminStatsRow}>
-          <View style={styles.adminStatCard}>
-            <Text style={styles.adminStatNumber}>{adminStats?.totalUsers || 0}</Text>
-            <Text style={styles.adminStatLabel}>Contractors</Text>
-          </View>
-          <View style={styles.adminStatCard}>
-            <Text style={styles.adminStatNumber}>{adminStats?.totalWorkers || 0}</Text>
-            <Text style={styles.adminStatLabel}>Workers</Text>
-          </View>
-          <View style={styles.adminStatCard}>
-            <Text style={styles.adminStatNumber}>{adminStats?.totalJobs || 0}</Text>
-            <Text style={styles.adminStatLabel}>Jobs</Text>
-          </View>
-          <View style={styles.adminStatCard}>
-            <Text style={styles.adminStatNumber}>{adminStats?.openTickets || 0}</Text>
-            <Text style={styles.adminStatLabel}>Open Tickets</Text>
-          </View>
-          <View style={styles.adminStatCard}>
-            <Text style={styles.adminStatNumber}>{premiumRecon?.mismatchCount || 0}</Text>
-            <Text style={styles.adminStatLabel}>Premium Mismatches</Text>
-          </View>
+          <View style={{ width: 24 }} />
         </View>
 
         <View style={styles.sectionContainer}>
-          <Text style={styles.sectionTitle}>Phone Lookup</Text>
-          <View style={styles.lookupRow}>
-            <TextInput
-              value={lookupPhone}
-              onChangeText={setLookupPhone}
-              keyboardType="phone-pad"
-              maxLength={10}
-              placeholder="Enter 10-digit phone"
-              style={styles.lookupInput}
-            />
-            <TouchableOpacity style={styles.lookupBtn} onPress={handlePhoneLookup}>
-              <Text style={styles.lookupBtnText}>Search</Text>
-            </TouchableOpacity>
-          </View>
+          <View style={styles.adminListCard}>
+            <Text style={styles.lookupTitle}>Admin Panel Moved</Text>
+            <Text style={styles.lookupLine}>
+              To keep one source of truth, admin operations now run from the web panel.
+            </Text>
+            <Text style={[styles.lookupLine, { marginTop: 8 }]}>URL: {webAdminUrl}</Text>
 
-          {lookupData && (
-            <View style={styles.lookupCard}>
-              <Text style={styles.lookupTitle}>User: {lookupData.user?.name || '-'}</Text>
-              <Text style={styles.lookupLine}>Role: {lookupData.user?.role || '-'}</Text>
-              <Text style={styles.lookupLine}>Wallet: ₹{lookupData.wallet?.balance || 0}</Text>
-              <Text style={styles.lookupLine}>Bank: {lookupData.bankAccount?.verificationStatus || 'not added'}</Text>
-              <Text style={styles.lookupLine}>KYC: {lookupData.verification?.overallVerificationStatus || 'pending'}</Text>
-              <Text style={styles.lookupLine}>
-                Worker gigs: {lookupData.summaries?.worker?.totalJobs || 0} | Earnings: ₹{lookupData.summaries?.worker?.totalEarnings || 0}
-              </Text>
-              <Text style={styles.lookupLine}>
-                Contractor jobs: {lookupData.summaries?.contractor?.totalJobsPosted || 0} | Spending: ₹{lookupData.summaries?.contractor?.totalSpending || 0}
-              </Text>
-              <Text style={styles.lookupLine}>Jobs as worker: {lookupData.jobs?.asWorker?.length || 0}</Text>
-              <Text style={styles.lookupLine}>Jobs as contractor: {lookupData.jobs?.asContractor?.length || 0}</Text>
-            </View>
-          )}
-        </View>
-
-        <View style={styles.sectionContainer}>
-          <Text style={styles.sectionTitle}>Pending Bank Verification</Text>
-          {pendingBankAccounts.length === 0 ? (
-            <Text style={styles.noDataText}>No pending bank verification.</Text>
-          ) : (
-            pendingBankAccounts.map((bank) => (
-              <View key={bank._id} style={styles.adminListCard}>
-                <Text style={styles.lookupTitle}>{bank.phone}</Text>
-                <Text style={styles.lookupLine}>{bank.accountHolderName} • {bank.bankName}</Text>
-                <View style={styles.adminActionRow}>
-                  <TouchableOpacity style={styles.approveBtn} onPress={() => handleVerifyBank(bank._id, true)}>
-                    <Text style={styles.actionBtnText}>Approve</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity style={styles.rejectBtn} onPress={() => handleVerifyBank(bank._id, false)}>
-                    <Text style={styles.actionBtnText}>Reject</Text>
-                  </TouchableOpacity>
-                </View>
-              </View>
-            ))
-          )}
-        </View>
-
-        <View style={styles.sectionContainer}>
-          <Text style={styles.sectionTitle}>Pending Document Verification</Text>
-          {pendingVerifications.length === 0 ? (
-            <Text style={styles.noDataText}>No pending document verification.</Text>
-          ) : (
-            pendingVerifications.map((verification) => {
-              const pendingDocs = (verification.documents || []).filter((doc: any) => doc.verificationStatus === 'pending');
-              return (
-                <View key={verification._id} style={styles.adminListCard}>
-                  <Text style={styles.lookupTitle}>{verification.phone}</Text>
-                  {pendingDocs.map((doc: any) => (
-                    <View key={doc._id} style={{ marginTop: 8 }}>
-                      <Text style={styles.lookupLine}>{doc.type} • {doc.fileName || 'document'}</Text>
-                      <View style={styles.adminActionRow}>
-                        <TouchableOpacity
-                          style={styles.approveBtn}
-                          onPress={() => handleVerifyDocument(verification._id, doc._id, true)}
-                        >
-                          <Text style={styles.actionBtnText}>Approve</Text>
-                        </TouchableOpacity>
-                        <TouchableOpacity
-                          style={styles.rejectBtn}
-                          onPress={() => handleVerifyDocument(verification._id, doc._id, false)}
-                        >
-                          <Text style={styles.actionBtnText}>Reject</Text>
-                        </TouchableOpacity>
-                      </View>
-                    </View>
-                  ))}
-                </View>
-              );
-            })
-          )}
-        </View>
-
-        <View style={styles.sectionContainer}>
-          <Text style={styles.sectionTitle}>Support Tickets</Text>
-          {supportTickets.length === 0 ? (
-            <Text style={styles.noDataText}>No open support tickets.</Text>
-          ) : (
-            supportTickets.map((ticket) => (
-              <View key={ticket._id} style={styles.adminListCard}>
-                <Text style={styles.lookupTitle}>{ticket.ticketId}</Text>
-                <Text style={styles.lookupLine}>{ticket.reporterPhone} • {ticket.type}</Text>
-                <Text style={styles.lookupLine}>{ticket.subject}</Text>
-                <View style={styles.adminActionRow}>
-                  <TouchableOpacity style={styles.reviewBtn} onPress={() => handleSupportStatus(ticket.ticketId, 'under_review')}>
-                    <Text style={styles.actionBtnText}>Under Review</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity style={styles.approveBtn} onPress={() => handleSupportStatus(ticket.ticketId, 'resolved')}>
-                    <Text style={styles.actionBtnText}>Resolve</Text>
-                  </TouchableOpacity>
-                </View>
-              </View>
-            ))
-          )}
-        </View>
-
-        <View style={styles.sectionContainer}>
-          <Text style={styles.sectionTitle}>Premium Subscriptions (Latest 20)</Text>
-          {premiumSubscriptions.length === 0 ? (
-            <Text style={styles.noDataText}>No premium subscriptions found.</Text>
-          ) : (
-            premiumSubscriptions.map((sub) => (
-              <View key={sub._id || sub.subscriptionId} style={styles.adminListCard}>
-                <Text style={styles.lookupTitle}>
-                  {sub.userPhone} • {String(sub.planType || 'free').toUpperCase()}
-                </Text>
-                <Text style={styles.lookupLine}>
-                  Status: {sub.status || '-'} | Price: ₹{sub.price || 0} {sub.currency || 'INR'}
-                </Text>
-                <Text style={styles.lookupLine}>
-                  SubId: {sub.subscriptionId || '-'} | Invoice: {sub.invoiceId || '-'}
-                </Text>
-                <Text style={styles.lookupLine}>
-                  Started: {sub.startedAt ? new Date(sub.startedAt).toLocaleString() : '-'}
-                </Text>
-                <Text style={styles.lookupLine}>
-                  Expiry: {sub.expiryDate ? new Date(sub.expiryDate).toLocaleString() : '-'}
-                </Text>
-              </View>
-            ))
-          )}
-        </View>
-
-        <View style={styles.sectionContainer}>
-          <Text style={styles.sectionTitle}>Premium Reconciliation</Text>
-          {premiumRecon.latestRun ? (
-            <View style={styles.adminListCard}>
-              <Text style={styles.lookupTitle}>Latest Run: {premiumRecon.latestRun.status || '-'}</Text>
-              <Text style={styles.lookupLine}>
-                Started: {premiumRecon.latestRun.startedAt ? new Date(premiumRecon.latestRun.startedAt).toLocaleString() : '-'}
-              </Text>
-              <Text style={styles.lookupLine}>
-                Completed: {premiumRecon.latestRun.completedAt ? new Date(premiumRecon.latestRun.completedAt).toLocaleString() : '-'}
-              </Text>
-              <Text style={styles.lookupLine}>
-                Charges Checked: {premiumRecon.latestRun.summary?.paymentsChecked || 0} | Mismatches: {premiumRecon.mismatchCount}
-              </Text>
-            </View>
-          ) : (
-            <Text style={styles.noDataText}>No premium reconciliation run found yet.</Text>
-          )}
-
-          {premiumRecon.mismatches.length > 0 ? (
-            premiumRecon.mismatches.slice(0, 10).map((m, idx) => (
-              <View key={`${m.localId || 'row'}-${idx}`} style={styles.adminListCard}>
-                <Text style={styles.lookupTitle}>{m.issue || 'Unknown issue'}</Text>
-                <Text style={styles.lookupLine}>Entity: {m.entityType || '-'} | Local ID: {m.localId || '-'}</Text>
-                <Text style={styles.lookupLine}>Resolved: {m.resolved ? 'Yes' : 'No'}</Text>
-              </View>
-            ))
-          ) : null}
-        </View>
-
-        <View style={{ height: 30 }} />
-
-        <Modal
-          transparent={true}
-          animationType="fade"
-          visible={modalVisible}
-          onRequestClose={() => setModalVisible(false)}
-        >
-          <View style={styles.alertModalOverlay}>
-            <View style={styles.alertModalContainer}>
-              <View style={[
-                styles.alertModalHeader,
-                {
-                  backgroundColor: modalType === "success" ? "#10B98120" : modalType === "error" ? "#EF444420" : "#3B82F620",
-                }
-              ]}>
-                <View style={[
-                  styles.alertModalIconBg,
-                  {
-                    backgroundColor: modalType === "success" ? "#10B981" : modalType === "error" ? "#EF4444" : "#3B82F6",
-                  }
-                ]}>
-                  <MaterialIcons
-                    name={
-                      modalType === "success" ? "check-circle" :
-                      modalType === "error" ? "error" :
-                      "info"
-                    }
-                    size={32}
-                    color="#fff"
-                  />
-                </View>
-              </View>
-              <View style={styles.alertModalContent}>
-                <Text style={styles.alertModalTitle}>{modalTitle}</Text>
-                <Text style={styles.alertModalMessage}>{modalMessage}</Text>
-              </View>
+            <View style={styles.adminActionRow}>
               <TouchableOpacity
-                style={[
-                  styles.alertModalButton,
-                  {
-                    backgroundColor: modalType === "success" ? "#10B981" : modalType === "error" ? "#EF4444" : "#3B82F6",
+                style={styles.reviewBtn}
+                onPress={async () => {
+                  try {
+                    await Linking.openURL(webAdminUrl);
+                  } catch (err) {
+                    showModal('error', 'Open Failed', 'Could not open web admin panel.');
                   }
-                ]}
-                onPress={() => setModalVisible(false)}
+                }}
               >
-                <Text style={styles.alertModalButtonText}>OK</Text>
+                <Text style={styles.actionBtnText}>Open Web Admin</Text>
               </TouchableOpacity>
             </View>
           </View>
-        </Modal>
+        </View>
       </ScrollView>
     );
   }
@@ -1549,6 +1411,18 @@ const styles = StyleSheet.create({
     overflow: "hidden",
     width: "100%",
     maxWidth: 320,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.25,
+    shadowRadius: 8,
+    elevation: 8,
+  },
+  contractorDetailModalContainer: {
+    backgroundColor: "#fff",
+    borderRadius: 16,
+    width: "100%",
+    maxWidth: 360,
+    padding: 16,
     shadowColor: "#000",
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.25,

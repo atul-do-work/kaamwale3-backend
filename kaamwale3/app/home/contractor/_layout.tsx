@@ -12,11 +12,18 @@ export default function ContractorLayout() {
         headerShown: false,
         tabBarActiveTintColor: "#007AFF",
         tabBarInactiveTintColor: "gray",
+        tabBarLabelStyle: {
+          fontSize: 11,
+          marginBottom: 2,
+        },
+        tabBarIconStyle: {
+          marginTop: 2,
+        },
         tabBarStyle: {
           backgroundColor: "#fff",
-          height: 62 + Math.min(insets.bottom, 4),
-          paddingBottom: 8,
-          paddingTop: 6,
+          height: 58 + Math.max(insets.bottom, 10),
+          paddingBottom: Math.max(insets.bottom, 10),
+          paddingTop: 4,
           borderTopWidth: 1,
           borderTopColor: "#e0e0e0",
         },
@@ -27,8 +34,8 @@ export default function ContractorLayout() {
         name="index"
         options={{
           tabBarLabel: "Home",
-          tabBarIcon: ({ color, size }) => (
-            <MaterialIcons name="home" size={size} color={color} />
+          tabBarIcon: ({ color }) => (
+            <MaterialIcons name="home" size={20} color={color} />
           ),
         }}
       />
@@ -37,8 +44,8 @@ export default function ContractorLayout() {
         name="postjobs"
         options={{
           tabBarLabel: "Post Job",
-          tabBarIcon: ({ color, size }) => (
-            <FontAwesome5 name="plus-circle" size={size} color={color} />
+          tabBarIcon: ({ color }) => (
+            <FontAwesome5 name="plus-circle" size={18} color={color} />
           ),
         }}
       />
@@ -47,8 +54,8 @@ export default function ContractorLayout() {
         name="wallet"
         options={{
           tabBarLabel: "Wallet",
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="wallet-outline" size={size} color={color} />
+          tabBarIcon: ({ color }) => (
+            <Ionicons name="wallet-outline" size={20} color={color} />
           ),
         }}
       />
@@ -57,8 +64,8 @@ export default function ContractorLayout() {
         name="profile"
         options={{
           tabBarLabel: "Profile",
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="person-circle-outline" size={size} color={color} />
+          tabBarIcon: ({ color }) => (
+            <Ionicons name="person-circle-outline" size={20} color={color} />
           ),
         }}
       />

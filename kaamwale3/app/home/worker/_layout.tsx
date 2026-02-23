@@ -1,10 +1,11 @@
 import { Tabs } from 'expo-router';
 import { MaterialIcons, FontAwesome5, Ionicons } from '@expo/vector-icons';
-import { TouchableOpacity } from 'react-native';
 import { useRouter } from 'expo-router';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 export default function WorkerLayout() {
   const router = useRouter();
+  const insets = useSafeAreaInsets();
 
   return (
     <Tabs
@@ -12,6 +13,21 @@ export default function WorkerLayout() {
         headerShown: false,
         tabBarActiveTintColor: '#007AFF',
         tabBarInactiveTintColor: 'gray',
+        tabBarLabelStyle: {
+          fontSize: 11,
+          marginBottom: 2,
+        },
+        tabBarIconStyle: {
+          marginTop: 2,
+        },
+        tabBarStyle: {
+          backgroundColor: '#fff',
+          height: 58 + Math.max(insets.bottom, 10),
+          paddingBottom: Math.max(insets.bottom, 10),
+          paddingTop: 4,
+          borderTopWidth: 1,
+          borderTopColor: '#e0e0e0',
+        },
       }}
       initialRouteName="index"
     >
@@ -19,8 +35,8 @@ export default function WorkerLayout() {
         name="index"
         options={{
           tabBarLabel: 'Home',
-          tabBarIcon: ({ color, size }) => (
-            <MaterialIcons name="home" size={size} color={color} />
+          tabBarIcon: ({ color }) => (
+            <MaterialIcons name="home" size={20} color={color} />
           ),
         }}
       />
@@ -28,8 +44,8 @@ export default function WorkerLayout() {
         name="jobs"
         options={{
           tabBarLabel: 'Jobs',
-          tabBarIcon: ({ color, size }) => (
-            <FontAwesome5 name="briefcase" size={size} color={color} />
+          tabBarIcon: ({ color }) => (
+            <FontAwesome5 name="briefcase" size={18} color={color} />
           ),
         }}
       />
@@ -37,8 +53,8 @@ export default function WorkerLayout() {
         name="wallet"
         options={{
           tabBarLabel: 'Wallet',
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="wallet-outline" size={size} color={color} />
+          tabBarIcon: ({ color }) => (
+            <Ionicons name="wallet-outline" size={20} color={color} />
           ),
         }}
       />
@@ -46,8 +62,8 @@ export default function WorkerLayout() {
         name="profile"
         options={{
           tabBarLabel: 'Profile',
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="person-circle-outline" size={size} color={color} />
+          tabBarIcon: ({ color }) => (
+            <Ionicons name="person-circle-outline" size={20} color={color} />
           ),
         }}
       />

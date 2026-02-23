@@ -28,6 +28,12 @@ const checkAdmin = (req, res, next) => {
 };
 
 const isValidPhone = (phone) => /^\d{10}$/.test(String(phone || '').trim());
+const parsePagination = (req, defaultLimit = 100, maxLimit = 1000) => {
+    const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || defaultLimit, 1), maxLimit);
+    const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
+    const skip = (page - 1) * limit;
+    return { limit, page, skip };
+};
 
 const buildWorkerGigSummary = (jobs, phone) => {
     const workerJobs = jobs.filter((j) => {
@@ -279,14 +285,20 @@ router.get('/dashboard', authenticateToken, checkAdmin, async (req, res) => {
 // ============================
 router.get('/users', authenticateToken, checkAdmin, async (req, res) => {
     try {
+        const { limit, page, skip } = parsePagination(req);
+        const total = await User.countDocuments({ role: 'contractor' });
         const users = await User.find({ role: 'contractor' })
             .select('phone name email role createdAt')
-            .limit(100)
+            .limit(limit)
+            .skip(skip)
             .sort({ createdAt: -1 });
 
         res.json({
             success: true,
             count: users.length,
+            total,
+            page,
+            limit,
             users
         });
     } catch (error) {
@@ -300,8 +312,10 @@ router.get('/users', authenticateToken, checkAdmin, async (req, res) => {
 // ============================
 router.get('/workers', authenticateToken, checkAdmin, async (req, res) => {
     try {
+        const { limit, page, skip } = parsePagination(req);
+        const total = await Worker.countDocuments();
         // Get workers and join with User data
-        const workers = await Worker.find().limit(100);
+        const workers = await Worker.find().skip(skip).limit(limit);
         
         // Enrich worker data with User information
         const enrichedWorkers = await Promise.all(
@@ -326,6 +340,9 @@ router.get('/workers', authenticateToken, checkAdmin, async (req, res) => {
         res.json({
             success: true,
             count: enrichedWorkers.length,
+            total,
+            page,
+            limit,
             workers: enrichedWorkers
         });
     } catch (error) {
@@ -339,13 +356,19 @@ router.get('/workers', authenticateToken, checkAdmin, async (req, res) => {
 // ============================
 router.get('/jobs', authenticateToken, checkAdmin, async (req, res) => {
     try {
+        const { limit, page, skip } = parsePagination(req);
+        const total = await Job.countDocuments();
         const jobs = await Job.find()
-            .limit(100)
+            .limit(limit)
+            .skip(skip)
             .sort({ createdAt: -1 });
 
         res.json({
             success: true,
             count: jobs.length,
+            total,
+            page,
+            limit,
             jobs
         });
     } catch (error) {
@@ -359,11 +382,16 @@ router.get('/jobs', authenticateToken, checkAdmin, async (req, res) => {
 // ============================
 router.get('/bank-accounts', authenticateToken, checkAdmin, async (req, res) => {
     try {
-        const bankAccounts = await BankAccount.find().limit(100);
+        const { limit, page, skip } = parsePagination(req);
+        const total = await BankAccount.countDocuments();
+        const bankAccounts = await BankAccount.find().skip(skip).limit(limit);
 
         res.json({
             success: true,
             count: bankAccounts.length,
+            total,
+            page,
+            limit,
             bankAccounts
         });
     } catch (error) {
@@ -455,8 +483,11 @@ router.post('/bank-accounts/:bankId/reject', authenticateToken, checkAdmin, asyn
 // ============================
 router.get('/verifications', authenticateToken, checkAdmin, async (req, res) => {
     try {
+        const { limit, page, skip } = parsePagination(req);
+        const total = await VerificationDocument.countDocuments();
         const verifications = await VerificationDocument.find()
-            .limit(100)
+            .limit(limit)
+            .skip(skip)
             .sort({ uploadedAt: -1 });
 
         // Format response with document details
@@ -492,6 +523,9 @@ router.get('/verifications', authenticateToken, checkAdmin, async (req, res) => 
         res.json({
             success: true,
             count: formattedVerifications.length,
+            total,
+            page,
+            limit,
             verifications: formattedVerifications
         });
     } catch (error) {
@@ -853,18 +887,34 @@ router.get('/leaderboard', authenticateToken, checkAdmin, async (req, res) => {
 router.get('/support-tickets', authenticateToken, checkAdmin, async (req, res) => {
     try {
         const { status, priority } = req.query;
+        const { limit, page, skip } = parsePagination(req);
         
         let query = {};
-        if (status) query.status = status;
+        if (status) {
+            const statusList = String(status)
+                .split(',')
+                .map((s) => s.trim())
+                .filter(Boolean);
+            if (statusList.length > 1) {
+                query.status = { $in: statusList };
+            } else if (statusList.length === 1) {
+                query.status = statusList[0];
+            }
+        }
         if (priority) query.priority = priority;
 
         const tickets = await SupportTicket.find(query)
-            .limit(100)
+            .limit(limit)
+            .skip(skip)
             .sort({ createdAt: -1 });
+        const total = await SupportTicket.countDocuments(query);
 
         res.json({
             success: true,
             count: tickets.length,
+            total,
+            page,
+            limit,
             tickets
         });
     } catch (error) {
@@ -1073,22 +1123,26 @@ router.get('/lookup/:phone', authenticateToken, checkAdmin, async (req, res) => 
 // ============================
 router.get('/premium/subscriptions', authenticateToken, checkAdmin, async (req, res) => {
     try {
-        const { phone, status, limit = 50 } = req.query;
+        const { phone, status } = req.query;
+        const { limit, page, skip } = parsePagination(req, 50, 1000);
         const query = {};
 
         if (phone) query.userPhone = String(phone).trim();
         if (status) query.status = String(status).trim();
-
-        const pageSize = Math.min(parseInt(limit, 10) || 50, 200);
+        const total = await PremiumSubscription.countDocuments(query);
 
         const subscriptions = await PremiumSubscription.find(query)
             .sort({ createdAt: -1 })
-            .limit(pageSize)
+            .skip(skip)
+            .limit(limit)
             .lean();
 
         return res.json({
             success: true,
             count: subscriptions.length,
+            total,
+            page,
+            limit,
             subscriptions
         });
     } catch (error) {
