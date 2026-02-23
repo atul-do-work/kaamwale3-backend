@@ -109,6 +109,7 @@ app.use("/api/payment", razorpayRoutes);
 const { router: leaderboardRoutes, startLeaderboardScheduler } = require("./services/leaderboard");
 const { startWalletReconciliationScheduler } = require("./services/walletReconciliation");
 const { startJobReconciliationScheduler } = require("./services/jobReconciliation");
+const { startPremiumReconciliationScheduler } = require("./services/premiumReconciliation");
 app.use("/leaderboard", leaderboardRoutes);
 
 // ✅ Mount payout routes for earnings & payouts
@@ -2350,6 +2351,7 @@ setTimeout(() => {
   startJobOfferCleanupScheduler();
   startWalletReconciliationScheduler();
   startJobReconciliationScheduler();
+  startPremiumReconciliationScheduler();
 }, 2000); // Wait 2 seconds for DB to stabilize
 
 // ---------------- START SERVER ----------------

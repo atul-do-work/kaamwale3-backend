@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useRef, useState } from "react";
 import {
   View,
   Text,
@@ -23,10 +23,12 @@ export default function PremiumPlansModal({
   onClose,
   onPlanSelected,
 }: PremiumPlansModalProps) {
-  const { accessToken } = useAuth();
+  const { updateUserPremium } = useAuth();
   const [subscribing, setSubscribing] = useState(false);
+  const [subscribingPlanId, setSubscribingPlanId] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [walletBalance, setWalletBalance] = React.useState(0);
+  const subscribeInFlightRef = useRef(false);
 
   // Fetch wallet balance when modal opens
   React.useEffect(() => {
@@ -52,43 +54,38 @@ export default function PremiumPlansModal({
       id: "basic",
       name: "Basic",
       price: 399,
-      features: [
-        "🔥 Bulk Hiring",
-        "⚡ 24/7 Instant",
-        "📊 Leaderboard",
-      ],
+      features: ["Bulk Hiring", "24/7 Instant", "Leaderboard"],
       popular: false,
     },
     {
       id: "pro",
       name: "Pro",
       price: 699,
-      features: [
-        "🔥 Bulk Hiring",
-        "⚡ 24/7 Instant",
-        "📊 Leaderboard",
-        "✨ Custom Add-ons",
-      ],
+      features: ["Bulk Hiring", "24/7 Instant", "Leaderboard", "Custom Add-ons"],
       popular: true,
     },
   ];
 
   const handleSubscribe = async (planId: string) => {
+    if (subscribeInFlightRef.current || subscribing) return;
+
     try {
+      subscribeInFlightRef.current = true;
       setError("");
       setSubscribing(true);
+      setSubscribingPlanId(planId);
+      const idempotencyKey = `premium_${planId}_${Date.now()}`;
 
-      const res = await api.post(`/premium/subscribe`, { planId, customAddons: [] });
+      const res = await api.post(`/premium/subscribe`, { planId, customAddons: [], idempotencyKey });
       const data = res.data;
 
       if (data.success) {
-        // ✅ Update user premium status instantly in context
-        const { updateUserPremium } = useAuth();
+        // Keep auth context in sync immediately after successful subscription.
         if (data.premiumPlan) {
           await updateUserPremium(data.premiumPlan);
-          console.log('✅ Premium activated instantly:', data.premiumPlan);
+          console.log("Premium activated instantly:", data.premiumPlan);
         }
-        
+
         onPlanSelected(planId);
         onClose();
       } else {
@@ -97,7 +94,9 @@ export default function PremiumPlansModal({
     } catch (err) {
       setError(err instanceof Error ? err.message : "Network error");
     } finally {
+      subscribeInFlightRef.current = false;
       setSubscribing(false);
+      setSubscribingPlanId(null);
     }
   };
 
@@ -119,25 +118,19 @@ export default function PremiumPlansModal({
             maxHeight: "85%",
           }}
         >
-          {/* Header */}
           <View style={{ paddingHorizontal: 20, marginBottom: 15 }}>
             <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
               <View>
-                <Text style={{ fontSize: 20, fontWeight: "bold", color: "#333" }}>
-                  Choose Plan
-                </Text>
-                <Text style={{ fontSize: 12, color: "#666", marginTop: 4 }}>
-                  Wallet Balance: ₹{walletBalance}
-                </Text>
+                <Text style={{ fontSize: 20, fontWeight: "bold", color: "#333" }}>Choose Plan</Text>
+                <Text style={{ fontSize: 12, color: "#666", marginTop: 4 }}>Wallet Balance: {"\u20B9"}{walletBalance}</Text>
               </View>
-              <TouchableOpacity onPress={onClose}>
+              <TouchableOpacity onPress={onClose} disabled={subscribing}>
                 <MaterialIcons name="close" size={24} color="#666" />
               </TouchableOpacity>
             </View>
           </View>
 
-          {/* Error Message */}
-          {error && (
+          {error ? (
             <View
               style={{
                 backgroundColor: "#ffebee",
@@ -149,13 +142,10 @@ export default function PremiumPlansModal({
                 borderRadius: 4,
               }}
             >
-              <Text style={{ color: "#d32f2f", fontSize: 13, fontWeight: "500" }}>
-                {error}
-              </Text>
+              <Text style={{ color: "#d32f2f", fontSize: 13, fontWeight: "500" }}>{error}</Text>
             </View>
-          )}
+          ) : null}
 
-          {/* Plans */}
           <ScrollView style={{ paddingHorizontal: 15 }}>
             {plans.map((plan) => (
               <LinearGradient
@@ -170,8 +160,7 @@ export default function PremiumPlansModal({
                 }}
               >
                 <View style={{ padding: 15 }}>
-                  {/* Popular Badge */}
-                  {plan.popular && (
+                  {plan.popular ? (
                     <View
                       style={{
                         backgroundColor: "#FFD700",
@@ -182,13 +171,10 @@ export default function PremiumPlansModal({
                         marginBottom: 10,
                       }}
                     >
-                      <Text style={{ fontSize: 10, fontWeight: "bold", color: "#333" }}>
-                        POPULAR
-                      </Text>
+                      <Text style={{ fontSize: 10, fontWeight: "bold", color: "#333" }}>POPULAR</Text>
                     </View>
-                  )}
+                  ) : null}
 
-                  {/* Plan Name & Price */}
                   <View style={{ flexDirection: "row", alignItems: "baseline", marginBottom: 10 }}>
                     <Text
                       style={{
@@ -207,11 +193,10 @@ export default function PremiumPlansModal({
                         marginLeft: 10,
                       }}
                     >
-                      ₹{plan.price}
+                      {"\u20B9"}{plan.price}
                     </Text>
                   </View>
 
-                  {/* Features */}
                   <View style={{ marginBottom: 12 }}>
                     {plan.features.map((feature, idx) => (
                       <Text
@@ -227,7 +212,6 @@ export default function PremiumPlansModal({
                     ))}
                   </View>
 
-                  {/* Subscribe Button */}
                   <TouchableOpacity
                     onPress={() => handleSubscribe(plan.id)}
                     disabled={subscribing}
@@ -238,11 +222,8 @@ export default function PremiumPlansModal({
                       opacity: subscribing ? 0.6 : 1,
                     }}
                   >
-                    {subscribing ? (
-                      <ActivityIndicator
-                        color={plan.popular ? "#333" : "#fff"}
-                        size="small"
-                      />
+                    {subscribing && subscribingPlanId === plan.id ? (
+                      <ActivityIndicator color={plan.popular ? "#333" : "#fff"} size="small" />
                     ) : (
                       <Text
                         style={{
@@ -259,15 +240,16 @@ export default function PremiumPlansModal({
               </LinearGradient>
             ))}
 
-            {/* Close Button */}
             <TouchableOpacity
               onPress={onClose}
+              disabled={subscribing}
               style={{
                 paddingVertical: 12,
                 marginBottom: 20,
                 borderTopWidth: 1,
                 borderTopColor: "#eee",
                 marginTop: 10,
+                opacity: subscribing ? 0.6 : 1,
               }}
             >
               <Text
@@ -287,3 +269,6 @@ export default function PremiumPlansModal({
     </Modal>
   );
 }
+
+
+

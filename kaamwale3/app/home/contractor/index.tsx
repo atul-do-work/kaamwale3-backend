@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { View, Text, Image, TouchableOpacity, ScrollView, FlatList, Alert, Modal } from 'react-native';
-import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialIcons, FontAwesome } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { BlurView } from 'expo-blur';
@@ -20,7 +20,6 @@ const profile = require('../../../assets/oip2.jpg');
 
 export default function ContractorHome() {
   const router = useRouter();
-  const insets = useSafeAreaInsets();
   const { t } = useLanguage();
   const { accessToken, user: authUser } = useAuth();
   const [premiumModalVisible, setPremiumModalVisible] = React.useState(false);
@@ -599,8 +598,8 @@ export default function ContractorHome() {
 
   return (
     <SafeAreaView
-      edges={['top', 'left', 'right', 'bottom']}
-      style={[styles.container, { paddingBottom: Math.max(insets.bottom, 12) }]}
+      edges={['top', 'left', 'right']}
+      style={styles.container}
     >
       {/* Header with Gradient */}
       <LinearGradient 
@@ -667,7 +666,7 @@ export default function ContractorHome() {
         style={[
           styles.leaderboardWrapper,
           leaderboardExpanded && styles.leaderboardWrapperExpanded,
-          { paddingBottom: Math.max(insets.bottom + 24, 32) },
+          { paddingBottom: 16 },
         ]}
       >
         {/* Gradient Background */}
@@ -718,7 +717,7 @@ export default function ContractorHome() {
               data={sortedLeaderboard}
               keyExtractor={(person) => person.id}
               style={styles.leaderboardScroll}
-              contentContainerStyle={{ paddingBottom: Math.max(insets.bottom + 24, 32) }}
+              contentContainerStyle={{ paddingBottom: 16 }}
               showsVerticalScrollIndicator={false}
               scrollEnabled={true}
               initialNumToRender={5}

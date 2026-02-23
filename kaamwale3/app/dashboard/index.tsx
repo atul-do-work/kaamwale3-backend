@@ -110,6 +110,12 @@ export default function DashboardScreen() {
   const [pendingVerifications, setPendingVerifications] = useState<any[]>([]);
   const [pendingBankAccounts, setPendingBankAccounts] = useState<any[]>([]);
   const [supportTickets, setSupportTickets] = useState<any[]>([]);
+  const [premiumSubscriptions, setPremiumSubscriptions] = useState<any[]>([]);
+  const [premiumRecon, setPremiumRecon] = useState<{ latestRun: any | null; mismatches: any[]; mismatchCount: number }>({
+    latestRun: null,
+    mismatches: [],
+    mismatchCount: 0,
+  });
   const [lookupPhone, setLookupPhone] = useState('');
   const [lookupData, setLookupData] = useState<AdminLookupData | null>(null);
   const [adminLoading, setAdminLoading] = useState(false);
@@ -194,17 +200,21 @@ export default function DashboardScreen() {
         'Content-Type': 'application/json',
       };
 
-      const [dashboardRes, verificationsRes, bankRes, ticketsRes] = await Promise.all([
+      const [dashboardRes, verificationsRes, bankRes, ticketsRes, premiumSubsRes, premiumReconRes] = await Promise.all([
         fetch(`${API_BASE}/admin/dashboard`, { headers }),
         fetch(`${API_BASE}/admin/verifications`, { headers }),
         fetch(`${API_BASE}/admin/bank-accounts`, { headers }),
         fetch(`${API_BASE}/admin/support-tickets?status=open`, { headers }),
+        fetch(`${API_BASE}/admin/premium/subscriptions?limit=20`, { headers }),
+        fetch(`${API_BASE}/admin/premium/reconciliation/latest`, { headers }),
       ]);
 
       const dashboardData = await dashboardRes.json().catch(() => ({}));
       const verificationsData = await verificationsRes.json().catch(() => ({}));
       const bankData = await bankRes.json().catch(() => ({}));
       const ticketsData = await ticketsRes.json().catch(() => ({}));
+      const premiumSubsData = await premiumSubsRes.json().catch(() => ({}));
+      const premiumReconData = await premiumReconRes.json().catch(() => ({}));
 
       if (dashboardData?.success) {
         setAdminStats({
@@ -235,6 +245,22 @@ export default function DashboardScreen() {
         setSupportTickets(ticketsData.tickets);
       } else {
         setSupportTickets([]);
+      }
+
+      if (premiumSubsData?.success && Array.isArray(premiumSubsData.subscriptions)) {
+        setPremiumSubscriptions(premiumSubsData.subscriptions);
+      } else {
+        setPremiumSubscriptions([]);
+      }
+
+      if (premiumReconData?.success) {
+        setPremiumRecon({
+          latestRun: premiumReconData.latestRun || null,
+          mismatches: Array.isArray(premiumReconData.mismatches) ? premiumReconData.mismatches : [],
+          mismatchCount: Number(premiumReconData.mismatchCount || 0),
+        });
+      } else {
+        setPremiumRecon({ latestRun: null, mismatches: [], mismatchCount: 0 });
       }
     } catch (err) {
       console.error('Admin dashboard load error:', err);
@@ -488,6 +514,10 @@ export default function DashboardScreen() {
             <Text style={styles.adminStatNumber}>{adminStats?.openTickets || 0}</Text>
             <Text style={styles.adminStatLabel}>Open Tickets</Text>
           </View>
+          <View style={styles.adminStatCard}>
+            <Text style={styles.adminStatNumber}>{premiumRecon?.mismatchCount || 0}</Text>
+            <Text style={styles.adminStatLabel}>Premium Mismatches</Text>
+          </View>
         </View>
 
         <View style={styles.sectionContainer}>
@@ -603,6 +633,63 @@ export default function DashboardScreen() {
               </View>
             ))
           )}
+        </View>
+
+        <View style={styles.sectionContainer}>
+          <Text style={styles.sectionTitle}>Premium Subscriptions (Latest 20)</Text>
+          {premiumSubscriptions.length === 0 ? (
+            <Text style={styles.noDataText}>No premium subscriptions found.</Text>
+          ) : (
+            premiumSubscriptions.map((sub) => (
+              <View key={sub._id || sub.subscriptionId} style={styles.adminListCard}>
+                <Text style={styles.lookupTitle}>
+                  {sub.userPhone} • {String(sub.planType || 'free').toUpperCase()}
+                </Text>
+                <Text style={styles.lookupLine}>
+                  Status: {sub.status || '-'} | Price: ₹{sub.price || 0} {sub.currency || 'INR'}
+                </Text>
+                <Text style={styles.lookupLine}>
+                  SubId: {sub.subscriptionId || '-'} | Invoice: {sub.invoiceId || '-'}
+                </Text>
+                <Text style={styles.lookupLine}>
+                  Started: {sub.startedAt ? new Date(sub.startedAt).toLocaleString() : '-'}
+                </Text>
+                <Text style={styles.lookupLine}>
+                  Expiry: {sub.expiryDate ? new Date(sub.expiryDate).toLocaleString() : '-'}
+                </Text>
+              </View>
+            ))
+          )}
+        </View>
+
+        <View style={styles.sectionContainer}>
+          <Text style={styles.sectionTitle}>Premium Reconciliation</Text>
+          {premiumRecon.latestRun ? (
+            <View style={styles.adminListCard}>
+              <Text style={styles.lookupTitle}>Latest Run: {premiumRecon.latestRun.status || '-'}</Text>
+              <Text style={styles.lookupLine}>
+                Started: {premiumRecon.latestRun.startedAt ? new Date(premiumRecon.latestRun.startedAt).toLocaleString() : '-'}
+              </Text>
+              <Text style={styles.lookupLine}>
+                Completed: {premiumRecon.latestRun.completedAt ? new Date(premiumRecon.latestRun.completedAt).toLocaleString() : '-'}
+              </Text>
+              <Text style={styles.lookupLine}>
+                Charges Checked: {premiumRecon.latestRun.summary?.paymentsChecked || 0} | Mismatches: {premiumRecon.mismatchCount}
+              </Text>
+            </View>
+          ) : (
+            <Text style={styles.noDataText}>No premium reconciliation run found yet.</Text>
+          )}
+
+          {premiumRecon.mismatches.length > 0 ? (
+            premiumRecon.mismatches.slice(0, 10).map((m, idx) => (
+              <View key={`${m.localId || 'row'}-${idx}`} style={styles.adminListCard}>
+                <Text style={styles.lookupTitle}>{m.issue || 'Unknown issue'}</Text>
+                <Text style={styles.lookupLine}>Entity: {m.entityType || '-'} | Local ID: {m.localId || '-'}</Text>
+                <Text style={styles.lookupLine}>Resolved: {m.resolved ? 'Yes' : 'No'}</Text>
+              </View>
+            ))
+          ) : null}
         </View>
 
         <View style={{ height: 30 }} />

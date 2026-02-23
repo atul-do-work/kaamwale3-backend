@@ -12,7 +12,7 @@ import {
   Modal,
   Pressable
 } from "react-native";
-import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { WebView } from "react-native-webview";
 import { MaterialIcons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
@@ -53,7 +53,6 @@ interface Job {
 }
 
 export default function ContractorWalletAttendance() {
-  const insets = useSafeAreaInsets();
   const [activeTab, setActiveTab] = useState<"Wallet" | "Attendance">("Wallet");
   const { t } = useLanguage();
   const { accessToken, user: authUser } = useAuth();
@@ -154,11 +153,16 @@ export default function ContractorWalletAttendance() {
       const res = await api.get(`/jobs`);
       const data: Job[] = res.data;
 
+      const attendanceStatuses = new Set(["accepted", "in_progress", "completed"]);
       const myJobs = data
-        .filter(j => j.contractorName === contractorName && j.status === "accepted")
-        .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+        .filter(j => j.contractorName === contractorName && attendanceStatuses.has(j.status) && !!j.acceptedBy)
+        .sort((a, b) => {
+          const aTime = new Date((a as any).timestamp || (a as any).updatedAt || (a as any).createdAt || 0).getTime();
+          const bTime = new Date((b as any).timestamp || (b as any).updatedAt || (b as any).createdAt || 0).getTime();
+          return bTime - aTime;
+        });
 
-      console.log(`📥 Fetched ${data.length} total jobs, filtered to ${myJobs.length} accepted jobs for contractor: ${contractorName}`);
+      console.log(`📥 Fetched ${data.length} total jobs, filtered to ${myJobs.length} attendance jobs for contractor: ${contractorName}`);
 
       setJobs(
         myJobs.map(j => ({
@@ -852,7 +856,7 @@ export default function ContractorWalletAttendance() {
         flex: 1,
         backgroundColor: "#f5f5f5",
         paddingTop: 40,
-        paddingBottom: Math.max(insets.bottom + 8, 16),
+        paddingBottom: 8,
       }}
     >
       {/* Tabs */}
@@ -876,7 +880,7 @@ export default function ContractorWalletAttendance() {
       {activeTab === "Wallet" && (
         <ScrollView
           style={{ flex: 1 }}
-          contentContainerStyle={{ paddingBottom: Math.max(insets.bottom + 24, 32) }}
+          contentContainerStyle={{ paddingBottom: 16 }}
         >
           <View style={styles.balanceContainer}>
             <Text style={styles.balanceTitle}>Pocket Balance</Text>
@@ -1003,7 +1007,7 @@ export default function ContractorWalletAttendance() {
                 data={jobs.slice(0, displayedCount)} // ✅ Show only up to displayedCount
                 keyExtractor={item => item._id.toString()}
                 renderItem={renderJob}
-                contentContainerStyle={{ paddingBottom: Math.max(insets.bottom + 20, 32) }}
+                contentContainerStyle={{ paddingBottom: 16 }}
                 initialNumToRender={5}
                 maxToRenderPerBatch={5}
                 windowSize={5}

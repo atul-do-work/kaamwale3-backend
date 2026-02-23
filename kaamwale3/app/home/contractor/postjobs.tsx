@@ -452,7 +452,7 @@ export default function PostJobScreen() {
   };
 
   return (
-    <SafeAreaView edges={['top', 'left', 'right', 'bottom']} style={{ flex: 1, backgroundColor: '#f3f3f3' }}>
+    <SafeAreaView edges={['top', 'left', 'right']} style={{ flex: 1, backgroundColor: '#f3f3f3' }}>
       <ScrollView contentContainerStyle={styles.scroll}>
       <View style={styles.container}>
         <Text style={styles.header}>Post a New Job</Text>
@@ -741,8 +741,8 @@ export default function PostJobScreen() {
 }
 
 const styles = StyleSheet.create({
-  scroll: { flexGrow: 1, padding: 20, backgroundColor: "#f3f3f3", alignItems: "center" },
-  container: { backgroundColor: "#1f3a5f", borderRadius: 20, padding: 20, width: "100%", maxWidth: 400, marginBottom: 30 },
+  scroll: { flexGrow: 1, padding: 20, paddingBottom: 12, backgroundColor: "#f3f3f3", alignItems: "center" },
+  container: { backgroundColor: "#1f3a5f", borderRadius: 20, padding: 20, width: "100%", maxWidth: 400, marginBottom: 12 },
   header: { fontSize: 22, fontWeight: "700", color: "#fff", marginBottom: 20, textAlign: "center" },
   walletText: { color: "#fff", fontWeight: "700", marginBottom: 10 },
   inputCard: {

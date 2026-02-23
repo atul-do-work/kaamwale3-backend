@@ -14,9 +14,9 @@ export default function ContractorLayout() {
         tabBarInactiveTintColor: "gray",
         tabBarStyle: {
           backgroundColor: "#fff",
-          height: 60 + insets.bottom,
-          paddingBottom: insets.bottom > 0 ? insets.bottom : 8,
-          paddingTop: 8,
+          height: 62 + Math.min(insets.bottom, 4),
+          paddingBottom: 8,
+          paddingTop: 6,
           borderTopWidth: 1,
           borderTopColor: "#e0e0e0",
         },

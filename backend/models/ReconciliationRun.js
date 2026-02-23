@@ -27,7 +27,7 @@ const reconciliationRunSchema = new mongoose.Schema(
     },
     mismatches: [
       {
-        entityType: { type: String, enum: ['order', 'payment', 'payout', 'wallet_tx', 'withdrawal'] },
+        entityType: { type: String, enum: ['order', 'payment', 'payout', 'wallet_tx', 'withdrawal', 'subscription'] },
         localId: String,
         providerId: String,
         issue: String,

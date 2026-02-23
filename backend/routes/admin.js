@@ -15,6 +15,8 @@ const ContractorStats = require('../models/ContractorStats');
 const CancellationLog = require('../models/CancellationLog');
 const CityLeaderboard = require('../models/CityLeaderboard');
 const SupportTicket = require('../models/SupportTicket');
+const PremiumSubscription = require('../models/PremiumSubscription');
+const ReconciliationRun = require('../models/ReconciliationRun');
 const District = require('../models/City'); // File is City.js, exports as "District" model for GeoJSON import
 
 // Middleware to check admin role
@@ -1062,6 +1064,74 @@ router.get('/lookup/:phone', authenticateToken, checkAdmin, async (req, res) => 
         });
     } catch (error) {
         console.error('Admin lookup error:', error);
+        return res.status(500).json({ success: false, message: error.message });
+    }
+});
+
+// ============================
+// PREMIUM SUBSCRIPTIONS - History
+// ============================
+router.get('/premium/subscriptions', authenticateToken, checkAdmin, async (req, res) => {
+    try {
+        const { phone, status, limit = 50 } = req.query;
+        const query = {};
+
+        if (phone) query.userPhone = String(phone).trim();
+        if (status) query.status = String(status).trim();
+
+        const pageSize = Math.min(parseInt(limit, 10) || 50, 200);
+
+        const subscriptions = await PremiumSubscription.find(query)
+            .sort({ createdAt: -1 })
+            .limit(pageSize)
+            .lean();
+
+        return res.json({
+            success: true,
+            count: subscriptions.length,
+            subscriptions
+        });
+    } catch (error) {
+        console.error('Premium subscriptions fetch error:', error);
+        return res.status(500).json({ success: false, message: error.message });
+    }
+});
+
+// ============================
+// PREMIUM RECONCILIATION - Latest run + mismatches
+// ============================
+router.get('/premium/reconciliation/latest', authenticateToken, checkAdmin, async (req, res) => {
+    try {
+        const latestRun = await ReconciliationRun.findOne({ provider: 'internal_premium' })
+            .sort({ startedAt: -1 })
+            .lean();
+
+        if (!latestRun) {
+            return res.json({
+                success: true,
+                latestRun: null,
+                mismatches: [],
+                mismatchCount: 0
+            });
+        }
+
+        const mismatches = (latestRun.mismatches || []).filter((m) => m.entityType === 'subscription');
+
+        return res.json({
+            success: true,
+            latestRun: {
+                _id: latestRun._id,
+                runDate: latestRun.runDate,
+                startedAt: latestRun.startedAt,
+                completedAt: latestRun.completedAt,
+                status: latestRun.status,
+                summary: latestRun.summary || {},
+            },
+            mismatches,
+            mismatchCount: mismatches.length
+        });
+    } catch (error) {
+        console.error('Premium reconciliation fetch error:', error);
         return res.status(500).json({ success: false, message: error.message });
     }
 });

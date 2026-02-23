@@ -1,82 +1,241 @@
 const express = require("express");
+const mongoose = require("mongoose");
 const { authenticateToken } = require("../utils/auth");
+const { requireActivePremium, isPremiumEntitled } = require("../utils/premiumEntitlement");
 const User = require("../models/User");
 const Wallet = require("../models/Wallet");
 const ActivityLog = require("../models/ActivityLog");
+const PremiumSubscription = require("../models/PremiumSubscription");
 
 function createPremiumWalletRouter({ io }) {
   const router = express.Router();
 
+  const PLANS = {
+    basic: { price: 399, durationDays: 30 },
+    pro: { price: 699, durationDays: 30 },
+  };
+
+  function getIdempotencyKey(req) {
+    const fromHeader = (req.headers["x-idempotency-key"] || "").toString().trim();
+    const fromBody = (req.body?.idempotencyKey || "").toString().trim();
+    return fromHeader || fromBody || null;
+  }
+
+  function makeSubscriptionId(userPhone) {
+    return `sub_${userPhone}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  }
+
+  function makeInvoiceId(userPhone) {
+    return `inv_${userPhone}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  }
+
   router.post("/premium/subscribe", authenticateToken, async (req, res) => {
+    const session = await mongoose.startSession();
     try {
-      const { planId } = req.body;
-      const user = await User.findOne({ phone: req.user.phone });
+      const { planId, coupon = null } = req.body || {};
+      const plan = PLANS[planId];
+      const idempotencyKey = getIdempotencyKey(req);
 
-      if (!user) {
-        return res.status(404).json({ success: false, message: "User not found" });
-      }
-
-      const planPrice = planId === "basic" ? 399 : planId === "pro" ? 699 : 0;
-      if (!planPrice) {
+      if (!plan) {
         return res.status(400).json({ success: false, message: "Invalid plan" });
       }
-
-      let wallet = await Wallet.findOne({ phone: req.user.phone });
-      if (!wallet) {
-        wallet = new Wallet({ phone: req.user.phone, balance: 0, transactions: [] });
-        await wallet.save();
-      }
-
-      if (wallet.balance < planPrice) {
+      if (!idempotencyKey) {
         return res.status(400).json({
           success: false,
-          message: `Insufficient balance. You have ₹${wallet.balance}, but plan costs ₹${planPrice}`,
+          message: "Missing idempotency key. Send x-idempotency-key header or idempotencyKey in body.",
         });
       }
 
-      wallet.balance -= planPrice;
-      wallet.transactions.push({
-        type: "premium_subscription",
-        amount: planPrice,
-        planId,
-        date: new Date(),
-      });
-      await wallet.save();
+      let responsePayload = null;
 
-      const startDate = new Date();
-      const endDate = new Date(startDate.getTime() + 30 * 24 * 60 * 60 * 1000);
-      user.premiumPlan = {
-        type: planId,
-        price: planPrice,
-        startDate,
-        expiryDate: endDate,
-        autoRenew: false,
-      };
-      await user.save();
+      await session.withTransaction(async () => {
+        const user = await User.findOne({ phone: req.user.phone }).session(session);
+        if (!user) {
+          throw Object.assign(new Error("User not found"), { statusCode: 404 });
+        }
 
-      await ActivityLog.create({
-        userId: req.user.phone,
-        phone: req.user.phone,
-        action: "premium_subscription",
-        description: `Subscribed to ${planId} plan for ₹${planPrice}`,
-        status: "success",
+        const existingByKey = await PremiumSubscription.findOne({
+          userPhone: req.user.phone,
+          idempotencyKey,
+        }).session(session);
+
+        if (existingByKey) {
+          let wallet = await Wallet.findOne({ phone: req.user.phone }).session(session);
+          if (!wallet) {
+            wallet = new Wallet({ phone: req.user.phone, balance: 0, transactions: [] });
+            await wallet.save({ session });
+          }
+
+          responsePayload = {
+            success: true,
+            idempotent: true,
+            message: `Subscription already processed for plan ${existingByKey.planType}`,
+            premiumPlan: user.premiumPlan,
+            newBalance: wallet.balance,
+          };
+          return;
+        }
+
+        const activeExisting = await PremiumSubscription.findOne({
+          userPhone: req.user.phone,
+          isCurrent: true,
+          status: { $in: ["active", "grace"] },
+          expiryDate: { $gt: new Date() },
+        }).session(session);
+
+        if (activeExisting) {
+          throw Object.assign(new Error("Active subscription already exists"), { statusCode: 409 });
+        }
+
+        let wallet = await Wallet.findOne({ phone: req.user.phone }).session(session);
+        if (!wallet) {
+          wallet = new Wallet({ phone: req.user.phone, balance: 0, transactions: [] });
+          await wallet.save({ session });
+        }
+
+        if (wallet.balance < plan.price) {
+          throw Object.assign(
+            new Error(`Insufficient balance. You have Rs ${wallet.balance}, but plan costs Rs ${plan.price}`),
+            { statusCode: 400 }
+          );
+        }
+
+        await PremiumSubscription.updateMany(
+          { userPhone: req.user.phone, isCurrent: true },
+          { $set: { isCurrent: false } },
+          { session }
+        );
+
+        const now = new Date();
+        const expiryDate = new Date(now.getTime() + plan.durationDays * 24 * 60 * 60 * 1000);
+        const subscriptionId = makeSubscriptionId(req.user.phone);
+        const invoiceId = makeInvoiceId(req.user.phone);
+        const tax = 0;
+
+        const subscription = await PremiumSubscription.create(
+          [
+            {
+              subscriptionId,
+              userPhone: req.user.phone,
+              userName: user.name || "",
+              eventType: "subscription_started",
+              planType: planId,
+              price: plan.price,
+              currency: "INR",
+              tax,
+              coupon,
+              status: "active",
+              provider: "internal",
+              providerSubId: null,
+              invoiceId,
+              idempotencyKey,
+              startedAt: now,
+              expiryDate,
+              cancelAt: null,
+              graceUntil: null,
+              failureReason: null,
+              metadata: { source: "app", actorPhone: req.user.phone },
+              isCurrent: true,
+            },
+          ],
+          { session }
+        );
+
+        const createdSub = subscription[0];
+        const openingBalance = Number(wallet.balance) || 0;
+        wallet.balance = openingBalance - plan.price;
+        wallet.transactions.push({
+          type: "premium_subscription",
+          amount: plan.price,
+          date: now,
+          description: `Premium ${planId} subscription`,
+          idempotencyKey: `${req.user.phone}:${idempotencyKey}`,
+          status: "completed",
+          openingBalance,
+          closingBalance: wallet.balance,
+          source: "app",
+          provider: "internal",
+          providerEventId: createdSub.subscriptionId,
+          metadata: {
+            subscriptionId: createdSub.subscriptionId,
+            invoiceId: createdSub.invoiceId,
+            currency: createdSub.currency,
+            planType: planId,
+          },
+        });
+        await wallet.save({ session });
+
+        user.premiumPlan = {
+          type: planId,
+          price: plan.price,
+          startDate: now,
+          expiryDate,
+          autoRenew: false,
+          subscriptionId: createdSub.subscriptionId,
+          provider: createdSub.provider,
+          providerSubId: createdSub.providerSubId,
+          invoiceId: createdSub.invoiceId,
+          currency: createdSub.currency,
+          tax: createdSub.tax,
+          coupon: createdSub.coupon,
+          status: createdSub.status,
+          cancelAt: createdSub.cancelAt,
+          graceUntil: createdSub.graceUntil,
+          failureReason: createdSub.failureReason,
+        };
+        await user.save({ session });
+
+        await ActivityLog.create(
+          [
+            {
+              userId: req.user.phone,
+              phone: req.user.phone,
+              action: "premium_subscription",
+              description: `Subscribed to ${planId} plan for Rs ${plan.price}`,
+              status: "success",
+              metadata: {
+                subscriptionId: createdSub.subscriptionId,
+                invoiceId: createdSub.invoiceId,
+                idempotencyKey,
+              },
+            },
+          ],
+          { session }
+        );
+
+        responsePayload = {
+          success: true,
+          message: `Successfully subscribed to ${planId} plan`,
+          premiumPlan: user.premiumPlan,
+          newBalance: wallet.balance,
+          subscriptionId: createdSub.subscriptionId,
+          invoiceId: createdSub.invoiceId,
+        };
       });
 
-      io.emit("premiumSubscriptionUpdate", {
-        contractorPhone: req.user.phone,
-        contractorName: user.name,
-        planType: planId,
-        timestamp: new Date(),
-      });
+      if (responsePayload?.success) {
+        io.to(req.user.phone).emit("premiumSubscriptionUpdate", {
+          contractorPhone: req.user.phone,
+          contractorName: req.user.name,
+          planType: responsePayload.premiumPlan?.type,
+          subscriptionId: responsePayload.subscriptionId,
+          expiryDate: responsePayload.premiumPlan?.expiryDate,
+          timestamp: new Date(),
+        });
 
-      return res.json({
-        success: true,
-        message: `Successfully subscribed to ${planId} plan`,
-        premiumPlan: user.premiumPlan,
-        newBalance: wallet.balance,
-      });
+        io.to(req.user.phone).emit("walletUpdated", {
+          phone: req.user.phone,
+          balance: responsePayload.newBalance,
+          source: "premium_subscription",
+        });
+      }
+
+      return res.json(responsePayload || { success: false, message: "Subscription failed" });
     } catch (err) {
-      return res.status(500).json({ success: false, message: "Subscription failed" });
+      const code = err.statusCode || 500;
+      return res.status(code).json({ success: false, message: err.message || "Subscription failed" });
+    } finally {
+      session.endSession();
     }
   });
 
@@ -87,8 +246,7 @@ function createPremiumWalletRouter({ io }) {
         return res.status(404).json({ success: false, message: "User not found" });
       }
 
-      const now = new Date();
-      const isActive = user.premiumPlan?.expiryDate && user.premiumPlan.expiryDate > now;
+      const isActive = isPremiumEntitled(user);
       return res.json({
         success: true,
         premiumPlan: user.premiumPlan?.type || "free",
@@ -101,32 +259,87 @@ function createPremiumWalletRouter({ io }) {
   });
 
   router.post("/premium/cancel", authenticateToken, async (req, res) => {
+    const session = await mongoose.startSession();
     try {
-      const user = await User.findOne({ phone: req.user.phone });
-      if (!user) {
-        return res.status(404).json({ success: false, message: "User not found" });
-      }
+      await session.withTransaction(async () => {
+        const user = await User.findOne({ phone: req.user.phone }).session(session);
+        if (!user) {
+          throw Object.assign(new Error("User not found"), { statusCode: 404 });
+        }
 
-      user.premiumPlan = {
-        type: "free",
-        price: 0,
-        startDate: null,
-        expiryDate: null,
-        autoRenew: false,
-      };
-      await user.save();
+        await PremiumSubscription.updateMany(
+          { userPhone: req.user.phone, isCurrent: true },
+          { $set: { isCurrent: false } },
+          { session }
+        );
 
-      await ActivityLog.create({
-        userId: req.user.phone,
-        phone: req.user.phone,
-        action: "premium_cancelled",
-        description: "Premium plan cancelled",
-        status: "success",
+        const now = new Date();
+        const cancelSnapshot = {
+          subscriptionId: makeSubscriptionId(req.user.phone),
+          userPhone: req.user.phone,
+          userName: user.name || "",
+          eventType: "subscription_cancelled",
+          planType: "free",
+          price: 0,
+          currency: "INR",
+          tax: 0,
+          coupon: null,
+          status: "cancelled",
+          provider: "internal",
+          providerSubId: null,
+          invoiceId: null,
+          idempotencyKey: null,
+          startedAt: now,
+          expiryDate: null,
+          cancelAt: now,
+          graceUntil: null,
+          failureReason: null,
+          metadata: { source: "app", actorPhone: req.user.phone },
+          isCurrent: true,
+        };
+
+        await PremiumSubscription.create([cancelSnapshot], { session });
+
+        user.premiumPlan = {
+          type: "free",
+          price: 0,
+          startDate: null,
+          expiryDate: null,
+          autoRenew: false,
+          subscriptionId: null,
+          provider: "internal",
+          providerSubId: null,
+          invoiceId: null,
+          currency: "INR",
+          tax: 0,
+          coupon: null,
+          status: "inactive",
+          cancelAt: now,
+          graceUntil: null,
+          failureReason: null,
+        };
+        await user.save({ session });
+
+        await ActivityLog.create(
+          [
+            {
+              userId: req.user.phone,
+              phone: req.user.phone,
+              action: "premium_cancelled",
+              description: "Premium plan cancelled",
+              status: "success",
+            },
+          ],
+          { session }
+        );
       });
 
       return res.json({ success: true, message: "Premium plan cancelled" });
     } catch (err) {
-      return res.status(500).json({ success: false, message: "Failed to cancel plan" });
+      const code = err.statusCode || 500;
+      return res.status(code).json({ success: false, message: err.message || "Failed to cancel plan" });
+    } finally {
+      session.endSession();
     }
   });
 
@@ -209,19 +422,15 @@ function createPremiumWalletRouter({ io }) {
     }
   });
 
-  router.post("/premium/add-ons", authenticateToken, async (req, res) => {
+  router.post("/premium/add-ons", authenticateToken, requireActivePremium, async (req, res) => {
     try {
       const { addOns } = req.body;
-      const user = await User.findOne({ phone: req.user.phone });
-
-      if (!user || user.premiumPlan?.type === "free") {
-        return res.status(400).json({
-          success: false,
-          message: "Must have active premium plan to add custom add-ons",
-        });
-      }
-
-      return res.json({ success: true, message: "Custom add-ons feature coming soon" });
+      return res.json({
+        success: true,
+        message: "Custom add-ons feature coming soon",
+        entitlement: req.premiumEntitlement,
+        requestedAddOns: addOns || [],
+      });
     } catch (err) {
       return res.status(500).json({ success: false, message: "Failed to add custom add-ons" });
     }
