@@ -7,10 +7,10 @@ import {
   TouchableOpacity,
   FlatList,
   ActivityIndicator,
-  Alert,
   TextInput,
   Modal,
-  Pressable
+  Pressable,
+  Alert
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { WebView } from "react-native-webview";
@@ -51,6 +51,13 @@ interface Job {
     ratedAt: string;
   };
 }
+
+type AppModalVariant = "success" | "error" | "info";
+type AppModalAction = {
+  text: string;
+  onPress?: () => void;
+  style?: "default" | "cancel" | "destructive";
+};
 
 export default function ContractorWalletAttendance() {
   const [activeTab, setActiveTab] = useState<"Wallet" | "Attendance">("Wallet");
@@ -104,6 +111,24 @@ export default function ContractorWalletAttendance() {
     bankName: "",
     accountType: "savings"
   });
+
+  const showAppModal = (
+    _variant: AppModalVariant,
+    title: string,
+    message: string,
+    actions: AppModalAction[] = [{ text: "OK" }]
+  ) => {
+    Alert.alert(title, message, actions.length ? actions : [{ text: "OK" }]);
+  };
+
+  const showAlert = (
+    title: string,
+    message: string,
+    actions: AppModalAction[] = [{ text: "OK" }]
+  ) => {
+    Alert.alert(title, message, actions.length ? actions : [{ text: "OK" }]);
+  };
+
 
   // ✅ Close all modals when wallet tab loses focus (not visible in other tabs)
   useFocusEffect(
@@ -228,11 +253,11 @@ export default function ContractorWalletAttendance() {
       const data = res.data;
 
       if (data.success) {
-        Alert.alert(t('success'), t('paymentSuccessful'));
+        showAppModal("success", t('success'), t('paymentSuccessful'));
         // ✅ DON'T update state optimistically - let backend emit jobUpdated
         // Backend will broadcast updated job with paymentStatus, triggering fetchJobs
       } else {
-        Alert.alert(t('error'), data.message || t('paymentFailed'));
+        showAppModal("error", t('error'), data.message || t('paymentFailed'));
       }
     } catch (err) {
       console.error("Payment failed:", err);
@@ -254,7 +279,7 @@ export default function ContractorWalletAttendance() {
   const initiateRazorpayPayment = async (jobId: string) => {
     try {
       const job = jobs.find(j => j._id === jobId);
-      if (!job) return Alert.alert(t('error'), t('jobNotFound'));
+      if (!job) return showAppModal("error", t('error'), t('jobNotFound'));
 
       // Step 1: Create order on backend
       const orderRes = await api.post(`/api/payment/create-order`, {
@@ -265,7 +290,7 @@ export default function ContractorWalletAttendance() {
       });
 
       if (!orderRes.data.success) {
-        return Alert.alert(t('error'), t('failedCreatePayment'));
+        return showAppModal("error", t('error'), t('failedCreatePayment'));
       }
 
       // Step 2: Create Razorpay checkout HTML
@@ -326,7 +351,7 @@ export default function ContractorWalletAttendance() {
       setCurrentPaymentJobId(jobId);
       setRazorpayModalVisible(true);
     } catch (error) {
-      Alert.alert(t('error'), t('failedPayment'));
+      showAppModal("error", t('error'), t('failedPayment'));
       console.error("Payment initiation failed:", error);
     }
   };
@@ -340,7 +365,7 @@ export default function ContractorWalletAttendance() {
         await verifyRazorpayPayment(data);
       } else if (data.type === 'payment_failed') {
         setRazorpayModalVisible(false);
-        Alert.alert(t('error'), data.error || t('paymentCancelled'));
+        showAppModal("error", t('error'), data.error || t('paymentCancelled'));
       }
     } catch (error) {
       console.error("Error handling Razorpay response:", error);
@@ -369,16 +394,16 @@ export default function ContractorWalletAttendance() {
 
       // Check response success flag
       if (verifyData.success) {
-        Alert.alert(t('success'), t('paymentSuccessful') + "! " + t('paymentSuccessful'));
+        showAppModal("success", t('success'), t('paymentSuccessful') + "! " + t('paymentSuccessful'));
         // ✅ DON'T update state optimistically - let backend emit jobUpdated + walletUpdated
         // This ensures UI reflects authoritative backend state, not optimistic guess
         setCurrentPaymentJobId(null);
       } else {
-        Alert.alert(t('error'), verifyData.message || t('paymentFailed'));
+        showAppModal("error", t('error'), verifyData.message || t('paymentFailed'));
       }
     } catch (error) {
       setRazorpayModalVisible(false);
-      Alert.alert(t('error'), t('paymentFailed'));
+      showAppModal("error", t('error'), t('paymentFailed'));
       console.error("Verification error:", error);
     }
   };
@@ -403,15 +428,15 @@ export default function ContractorWalletAttendance() {
       const data = res.data;
 
       if (data.success) {
-        Alert.alert(t('success'), t('ratingSubmitted'));
+        showAppModal("success", t('success'), t('ratingSubmitted'));
         setRatingModalVisible(false);
         // ✅ DON'T update state optimistically - let backend emit jobUpdated with rating
         // Backend fetches from DB and broadcasts authoritative job state
       } else {
-        Alert.alert(t('error'), data.message || t('failedSubmitRating'));
+        showAppModal("error", t('error'), data.message || t('failedSubmitRating'));
       }
     } catch (error) {
-      Alert.alert(t('error'), t('failedSubmitRating'));
+      showAppModal("error", t('error'), t('failedSubmitRating'));
       console.error(error);
     } finally {
       setSubmittingRating(false);
@@ -451,27 +476,27 @@ export default function ContractorWalletAttendance() {
   const handleAddBankAccount = async () => {
     // Validation
     if (!bankDetails.accountHolderName.trim()) {
-      Alert.alert(t('error'), t('enterAccountHolderName'));
+      showAppModal("error", t('error'), t('enterAccountHolderName'));
       return;
     }
 
     if (bankDetails.accountNumber.length < 9 || bankDetails.accountNumber.length > 18) {
-      Alert.alert(t('error'), t('invalidAccountNumber'));
+      showAppModal("error", t('error'), t('invalidAccountNumber'));
       return;
     }
 
     if (bankDetails.accountNumber !== bankDetails.accountNumberConfirm) {
-      Alert.alert(t('error'), t('accountMismatch'));
+      showAppModal("error", t('error'), t('accountMismatch'));
       return;
     }
 
     if (bankDetails.ifscCode.length !== 11) {
-      Alert.alert(t('error'), t('invalidIFSC'));
+      showAppModal("error", t('error'), t('invalidIFSC'));
       return;
     }
 
     if (!bankDetails.bankName.trim()) {
-      Alert.alert(t('error'), t('enterBankName'));
+      showAppModal("error", t('error'), t('enterBankName'));
       return;
     }
 
@@ -491,22 +516,15 @@ export default function ContractorWalletAttendance() {
         setShowAddBank(false);
         setShowBankInfo(true);
         // Show success message with custom modal instead of Alert
-        Alert.alert(
-          "✅ Success",
-          "Bank account added! Waiting for verification.",
-          [
-            {
-              text: "OK",
-              onPress: () => {
-                fetchBankAccount();
-              },
-            },
-          ],
-          { cancelable: false }
-        );
+        showAppModal("success", "Success", "Bank account added! Waiting for verification.", [
+          {
+            text: "OK",
+            onPress: () => fetchBankAccount(),
+          },
+        ]);
       }
     } catch (err: any) {
-      Alert.alert(t('error'), err.response?.data?.message || t('failedAddBank'));
+      showAppModal("error", t('error'), err.response?.data?.message || t('failedAddBank'));
     }
   };
 
@@ -515,12 +533,12 @@ export default function ContractorWalletAttendance() {
     if (depositLoading) return; // ✅ Prevent double-submission
     
     if (!depositAmount || Number(depositAmount) <= 0) {
-      Alert.alert(t('error'), t('enterValidAmount'));
+      showAppModal("error", t('error'), t('enterValidAmount'));
       return;
     }
     
     if (Number(depositAmount) < 100) {
-      Alert.alert(t('error'), t('minimumDeposit'));
+      showAppModal("error", t('error'), t('minimumDeposit'));
       return;
     }
 
@@ -532,7 +550,7 @@ export default function ContractorWalletAttendance() {
       });
 
       if (!orderRes.data.success) {
-        Alert.alert(t('error'), t('failedCreateOrder'));
+        showAppModal("error", t('error'), t('failedCreateOrder'));
         return;
       }
 
@@ -599,7 +617,7 @@ export default function ContractorWalletAttendance() {
       setCurrentDepositAmount(Number(depositAmount));
       setCurrentDepositOrderId(orderId);
     } catch (err: any) {
-      Alert.alert(t('error'), err.response?.data?.message || t('failedInitiateDeposit'));
+      showAppModal("error", t('error'), err.response?.data?.message || t('failedInitiateDeposit'));
     } finally {
       setDepositLoading(false);
     }
@@ -616,7 +634,7 @@ export default function ContractorWalletAttendance() {
       } else if (data.type === "deposit_failed") {
         setDepositModalVisible(false);
         // ✅ Offer retry instead of just closing
-        Alert.alert(
+        showAlert(
           t('error'),
           data.error || t('depositCancelled'),
           [
@@ -648,7 +666,7 @@ export default function ContractorWalletAttendance() {
       if (res.data.success) {
         // ✅ Delay alert to ensure modal is fully closed
         setTimeout(() => {
-          Alert.alert(
+          showAlert(
             t('success'),
             `₹${currentDepositAmount} deposited successfully!`,
             [{ text: 'OK', onPress: () => {} }]
@@ -662,7 +680,7 @@ export default function ContractorWalletAttendance() {
       } else {
         // ✅ Offer retry for verification failures
         setTimeout(() => {
-          Alert.alert(
+          showAlert(
             t('error'),
             res.data.message || 'Deposit verification failed',
             [
@@ -681,7 +699,7 @@ export default function ContractorWalletAttendance() {
       
       // ✅ Delay alert to ensure modal is fully closed
       setTimeout(() => {
-        Alert.alert(
+        showAlert(
           t('error'),
           errorMsg,
           [
@@ -699,23 +717,23 @@ export default function ContractorWalletAttendance() {
   // ✅ Confirm Withdraw
   const confirmWithdraw = async () => {
     if (!withdrawAmount || Number(withdrawAmount) <= 0) {
-      Alert.alert(t('error'), t('enterValidWithdrawAmount'));
+      showAlert(t('error'), t('enterValidWithdrawAmount'));
       return;
     }
 
     if (Number(withdrawAmount) < 100) {
-      Alert.alert(t('error'), t('minimumWithdraw'));
+      showAlert(t('error'), t('minimumWithdraw'));
       return;
     }
 
     if (Number(withdrawAmount) > walletBalance) {
-      Alert.alert("Error", "Insufficient balance");
+      showAlert("Error", "Insufficient balance");
       return;
     }
 
     // Check if bank account is linked
     if (!bankAccount) {
-      Alert.alert(
+      showAlert(
         "Bank Account Required",
         "Please add your bank account details before withdrawing",
         [
@@ -733,14 +751,14 @@ export default function ContractorWalletAttendance() {
 
       if (res.data.success) {
         // ✅ Server-authoritative: socket.on('walletUpdated') will update balance
-        Alert.alert(t('success'), t('withdrawalInitiated') + "!\n\n" + t('amountTransferred'));
+        showAlert(t('success'), t('withdrawalInitiated') + "!\n\n" + t('amountTransferred'));
         setWithdrawAmount("");
         setShowWithdrawInput(false);
         
       }
     } catch (err: any) {
       const errorMsg = err.response?.data?.message || t('withdrawFailed');
-      Alert.alert(t('error'), errorMsg);
+      showAlert(t('error'), errorMsg);
     }
   };
 
@@ -1138,7 +1156,7 @@ export default function ContractorWalletAttendance() {
             <TouchableOpacity onPress={() => {
               setDepositModalVisible(false);
               setDepositModalHtml('');
-              Alert.alert(
+              showAlert(
                 "Deposit in Progress?",
                 "If you just completed payment, it may take a moment to process. Don't close the app.",
                 [{ text: "OK", onPress: () => {
@@ -1342,3 +1360,5 @@ export default function ContractorWalletAttendance() {
     </View>
   );
 }
+
+

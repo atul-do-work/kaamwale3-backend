@@ -674,6 +674,14 @@
                     <i class="fas fa-ticket-alt"></i>
                     <span>Support Tickets</span>
                 </a>
+                <a href="#" class="nav-item" data-section="premium-subscriptions">
+                    <i class="fas fa-crown"></i>
+                    <span>Premium Subscriptions</span>
+                </a>
+                <a href="#" class="nav-item" data-section="premium-reconciliation">
+                    <i class="fas fa-file-invoice-dollar"></i>
+                    <span>Premium Reconciliation</span>
+                </a>
                 <hr style="margin-top: 20px; opacity: 0.2;">
                 <a href="#" class="nav-item" onclick="logout()">
                     <i class="fas fa-sign-out-alt"></i>
@@ -1108,6 +1116,66 @@
                     </table>
                 </div>
             </div>
+
+            <!-- Premium Subscriptions Section -->
+            <div id="premium-subscriptions" class="data-section">
+                <div class="section-header">
+                    <h2>Premium Subscriptions</h2>
+                    <input type="text" class="search-box" id="premiumPhoneSearch" placeholder="Filter by phone...">
+                </div>
+                <div class="table-wrapper">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Phone</th>
+                                <th>User Name</th>
+                                <th>Plan</th>
+                                <th>Status</th>
+                                <th>Price</th>
+                                <th>Subscription ID</th>
+                                <th>Invoice ID</th>
+                                <th>Started</th>
+                                <th>Expiry</th>
+                            </tr>
+                        </thead>
+                        <tbody id="premiumSubscriptionsTable">
+                            <tr>
+                                <td colspan="9" class="loading"><div class="spinner"></div></td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Premium Reconciliation Section -->
+            <div id="premium-reconciliation" class="data-section">
+                <div class="section-header">
+                    <h2>Premium Reconciliation</h2>
+                    <button class="btn-small btn-view" onclick="loadPremiumReconciliation()">Refresh</button>
+                </div>
+                <div id="premiumReconSummary" style="margin-bottom: 16px; background: #f9f9f9; border-radius: 8px; padding: 12px;">
+                    <div class="loading"><div class="spinner"></div></div>
+                </div>
+                <div class="table-wrapper">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Issue</th>
+                                <th>Entity</th>
+                                <th>Local ID</th>
+                                <th>Provider ID</th>
+                                <th>Resolved</th>
+                                <th>Resolved At</th>
+                            </tr>
+                        </thead>
+                        <tbody id="premiumReconTable">
+                            <tr>
+                                <td colspan="6" class="loading"><div class="spinner"></div></td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
         </div>
     </div>
 
@@ -1231,6 +1299,8 @@
                 else if (sectionId === 'activity') loadActivityLogs();
                 else if (sectionId === 'leaderboard') loadLeaderboard();
                 else if (sectionId === 'support') loadSupportTickets();
+                else if (sectionId === 'premium-subscriptions') loadPremiumSubscriptions();
+                else if (sectionId === 'premium-reconciliation') loadPremiumReconciliation();
             }
         }
 
@@ -2214,6 +2284,111 @@
             }
         }
 
+        // Load premium subscriptions
+        async function loadPremiumSubscriptions() {
+            try {
+                const token = localStorage.getItem('adminToken');
+                const phone = (document.getElementById('premiumPhoneSearch')?.value || '').trim();
+                const queryString = phone ? `?phone=${encodeURIComponent(phone)}&limit=100` : '?limit=100';
+
+                const res = await fetch(`${API_BASE}/admin/premium/subscriptions${queryString}`, {
+                    headers: { 'Authorization': `Bearer ${token}` }
+                });
+
+                const data = await res.json();
+                const tbody = document.getElementById('premiumSubscriptionsTable');
+
+                if (data.success && Array.isArray(data.subscriptions) && data.subscriptions.length > 0) {
+                    tbody.innerHTML = data.subscriptions.map((sub) => {
+                        const price = Number(sub.price || 0).toLocaleString();
+                        const started = sub.startedAt ? new Date(sub.startedAt).toLocaleString() : '-';
+                        const expiry = sub.expiryDate ? new Date(sub.expiryDate).toLocaleString() : '-';
+                        const statusClass =
+                            sub.status === 'active' ? 'verified' :
+                            sub.status === 'cancelled' ? 'rejected' :
+                            sub.status === 'grace' ? 'warning' : 'pending';
+                        return `
+                            <tr>
+                                <td>${sub.userPhone || '-'}</td>
+                                <td>${sub.userName || '-'}</td>
+                                <td>${(sub.planType || 'free').toUpperCase()}</td>
+                                <td><span class="badge ${statusClass}">${sub.status || '-'}</span></td>
+                                <td>${sub.currency || 'INR'} ${price}</td>
+                                <td>${sub.subscriptionId || '-'}</td>
+                                <td>${sub.invoiceId || '-'}</td>
+                                <td>${started}</td>
+                                <td>${expiry}</td>
+                            </tr>
+                        `;
+                    }).join('');
+                } else {
+                    tbody.innerHTML = '<tr><td colspan="9">No premium subscriptions found</td></tr>';
+                }
+            } catch (err) {
+                console.error('Error loading premium subscriptions:', err);
+                document.getElementById('premiumSubscriptionsTable').innerHTML = '<tr><td colspan="9">Error loading data</td></tr>';
+            }
+        }
+
+        // Load premium reconciliation details
+        async function loadPremiumReconciliation() {
+            try {
+                const token = localStorage.getItem('adminToken');
+                const res = await fetch(`${API_BASE}/admin/premium/reconciliation/latest`, {
+                    headers: { 'Authorization': `Bearer ${token}` }
+                });
+
+                const data = await res.json();
+                const summary = document.getElementById('premiumReconSummary');
+                const tbody = document.getElementById('premiumReconTable');
+
+                if (!data.success) {
+                    summary.innerHTML = `<p style="color:#e74c3c;">${data.message || 'Failed to load reconciliation details'}</p>`;
+                    tbody.innerHTML = '<tr><td colspan="6">No data</td></tr>';
+                    return;
+                }
+
+                if (!data.latestRun) {
+                    summary.innerHTML = '<p>No premium reconciliation run found yet.</p>';
+                    tbody.innerHTML = '<tr><td colspan="6">No mismatches</td></tr>';
+                    return;
+                }
+
+                const run = data.latestRun;
+                summary.innerHTML = `
+                    <div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;">
+                        <div><strong>Status</strong><br><span class="badge ${run.status === 'completed' ? 'verified' : run.status === 'failed' ? 'rejected' : 'pending'}">${run.status || '-'}</span></div>
+                        <div><strong>Started</strong><br>${run.startedAt ? new Date(run.startedAt).toLocaleString() : '-'}</div>
+                        <div><strong>Completed</strong><br>${run.completedAt ? new Date(run.completedAt).toLocaleString() : '-'}</div>
+                        <div><strong>Mismatches</strong><br>${Number(data.mismatchCount || 0)}</div>
+                    </div>
+                    <div style="margin-top:10px;">
+                        Charges Checked: <strong>${run.summary?.paymentsChecked || 0}</strong> | Active Subs Checked: <strong>${run.summary?.payoutsChecked || 0}</strong>
+                    </div>
+                `;
+
+                const mismatches = Array.isArray(data.mismatches) ? data.mismatches : [];
+                if (mismatches.length > 0) {
+                    tbody.innerHTML = mismatches.map((m) => `
+                        <tr>
+                            <td>${m.issue || '-'}</td>
+                            <td>${m.entityType || '-'}</td>
+                            <td>${m.localId || '-'}</td>
+                            <td>${m.providerId || '-'}</td>
+                            <td>${m.resolved ? 'Yes' : 'No'}</td>
+                            <td>${m.resolvedAt ? new Date(m.resolvedAt).toLocaleString() : '-'}</td>
+                        </tr>
+                    `).join('');
+                } else {
+                    tbody.innerHTML = '<tr><td colspan="6">No mismatches found in latest run</td></tr>';
+                }
+            } catch (err) {
+                console.error('Error loading premium reconciliation:', err);
+                document.getElementById('premiumReconSummary').innerHTML = '<p style="color:#e74c3c;">Error loading reconciliation summary</p>';
+                document.getElementById('premiumReconTable').innerHTML = '<tr><td colspan="6">Error loading data</td></tr>';
+            }
+        }
+
         // Show full-size image
         function showImage(imageSrc) {
             const modal = document.createElement('div');
@@ -2261,6 +2436,13 @@
         // Add city select change listener
         document.getElementById('citySelect')?.addEventListener('change', () => {
             loadLeaderboard();
+        });
+
+        // Add premium phone filter listener
+        document.getElementById('premiumPhoneSearch')?.addEventListener('input', () => {
+            if (document.getElementById('premium-subscriptions')?.classList.contains('active')) {
+                loadPremiumSubscriptions();
+            }
         });
     </script>
 </body>
