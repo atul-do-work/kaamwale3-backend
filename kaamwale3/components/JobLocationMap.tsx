@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { View, Text, TouchableOpacity, ActivityIndicator, StyleSheet, Modal } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
 import {
   MapView,
@@ -172,7 +173,7 @@ export default function JobLocationMap({
       onRequestClose={onClose}
       statusBarTranslucent={true}
     >
-      <View style={styles.container}>
+      <SafeAreaView edges={['top', 'left', 'right', 'bottom']} style={styles.container}>
       {/* Header */}
       <View style={styles.header}>
         <Text style={styles.headerTitle}>{jobTitle}</Text>
@@ -296,7 +297,7 @@ export default function JobLocationMap({
           <Text style={styles.googleMapsButtonText}>Open in Google Maps</Text>
         </TouchableOpacity>
       </View>
-    </View>
+    </SafeAreaView>
     </Modal>
   );
 }

@@ -1,5 +1,5 @@
 import React, { useState, useCallback } from 'react';
-import { ScrollView, View, Text, Animated, RefreshControl } from 'react-native';
+import { ScrollView, View, Text, RefreshControl } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import styles from '../styles/FullContainerStyles';
@@ -66,32 +66,7 @@ export default function FullContainer({
   activeBonuses = 0,
   onRefresh,
 }: FullContainerProps) {
-  const [scrollY] = useState(new Animated.Value(0));
   const [refreshing, setRefreshing] = useState(false);
-
-  // ✅ Use native driver for better performance
-  const handleScroll = Animated.event(
-    [{ nativeEvent: { contentOffset: { y: scrollY } } }],
-    { useNativeDriver: false } // ✅ FIX: Disabled native driver to prevent scroll crashes
-  );
-
-  // ✅ Wrap scroll handler with error boundary
-  const safeHandleScroll = useCallback((event: any) => {
-    try {
-      if (handleScroll && typeof handleScroll === 'function') {
-        handleScroll(event);
-      }
-    } catch (err) {
-      console.error('Scroll handler error:', err);
-    }
-  }, [handleScroll]);
-
-  // ✅ Better interpolation values for subtle stretch
-  const welcomeScale = scrollY.interpolate({
-    inputRange: [-80, 0],
-    outputRange: [1.15, 1],
-    extrapolate: 'clamp',
-  });
 
   // ✅ Memoize refresh handler to prevent recreation on every render
   const handleRefresh = useCallback(async () => {
@@ -118,7 +93,6 @@ export default function FullContainer({
       style={styles.container} 
       contentContainerStyle={styles.scrollContent}
       scrollEventThrottle={16}
-      onScroll={safeHandleScroll}
       // ✅ Add pull-to-refresh
       refreshControl={
         <RefreshControl
@@ -129,13 +103,10 @@ export default function FullContainer({
         />
       }
     >
-      {/* Welcome Section - Stretches when pulled up */}
-      <Animated.View style={[
-        styles.welcomeSection,
-        { transform: [{ scaleY: welcomeScale }] }
-      ]}>
+      {/* Welcome Section */}
+      <View style={styles.welcomeSection}>
         <Text style={styles.welcomeText}>Today's Overview</Text>
-      </Animated.View>
+      </View>
 
       {/* Today's Progress - Grid Layout */}
       <View style={styles.gridContainer}>
@@ -169,6 +140,11 @@ export default function FullContainer({
             color="#f59e0b"
           />
         </View>
+      </View>
+
+      <View style={styles.overallPreview}>
+        <Text style={styles.overallPreviewTitle}>Overall Statistics</Text>
+        <Text style={styles.overallPreviewText}>Scroll down for full details</Text>
       </View>
 
       {/* Summary Section */}

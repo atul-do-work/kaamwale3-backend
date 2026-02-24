@@ -8,10 +8,28 @@ const ActivityLog = require("../models/ActivityLog");
 const { updateGigDataOnCompletion } = require("../utils/gigsDataTracker");
 const { createGigHistoryEvent } = require("./gigHistoryService");
 
-async function markAttendance({ jobId, status, userPhone, deps }) {
+async function markAttendance({ jobId, status, workerPhone, userPhone, deps }) {
   const { trackingJobs, emitJobUpdatedToUsers, logJobEvent } = deps;
   const job = await Job.findById(jobId);
   if (!job) return { code: 404, body: { message: "Job not found" } };
+
+  if (job.bulkHiring && workerPhone) {
+    const target = (job.acceptedWorkers || []).find((w) => w.phone === workerPhone);
+    if (!target) {
+      return { code: 404, body: { success: false, message: "Worker not found on this bulk job" } };
+    }
+
+    target.attendanceStatus = status;
+    target.attendanceTime = new Date();
+    if (status === "Present" && job.status === "accepted") {
+      job.status = "in_progress";
+    }
+    await job.save();
+
+    if (trackingJobs.has(jobId)) trackingJobs.delete(jobId);
+    await emitJobUpdatedToUsers(job, [job.contractorName, workerPhone, job.acceptedBy || job.contractorName]);
+    return { code: 200, body: { success: true, job } };
+  }
 
   const oldState = { status: job.status, attendanceStatus: job.attendanceStatus, paymentStatus: job.paymentStatus };
   job.attendanceStatus = status;
@@ -37,10 +55,116 @@ async function markAttendance({ jobId, status, userPhone, deps }) {
   return { code: 200, body: { success: true, job } };
 }
 
-async function payJob({ jobId, mode, userPhone, userName, deps }) {
+async function payJob({ jobId, mode, workerPhone, userPhone, userName, deps }) {
   const { updateContractorStats, emitJobUpdatedToUsers, logJobEvent } = deps;
   const job = await Job.findById(jobId);
   if (!job) return { code: 404, body: { message: "Job not found" } };
+
+  if (job.bulkHiring && workerPhone) {
+    const target = (job.acceptedWorkers || []).find((w) => w.phone === workerPhone);
+    if (!target) {
+      return { code: 404, body: { success: false, message: "Worker not found on this bulk job" } };
+    }
+    if (target.attendanceStatus !== "Present") {
+      return { code: 400, body: { success: false, message: "Payment allowed only for PRESENT workers" } };
+    }
+    if (target.paymentStatus === "Paid") {
+      return { code: 400, body: { success: false, message: "This worker is already paid for this job" } };
+    }
+
+    const oldState = { status: job.status, paymentStatus: job.paymentStatus, paymentMode: job.paymentMode };
+    target.paymentStatus = "Paid";
+    target.paymentMode = mode;
+    target.paymentTime = new Date();
+
+    const allPaid = (job.acceptedWorkers || []).length > 0 &&
+      (job.acceptedWorkers || []).every((w) => w.paymentStatus === "Paid");
+    if (allPaid) {
+      job.paymentStatus = "Paid";
+      job.paymentTime = target.paymentTime;
+      if (job.status === "accepted" || job.status === "in_progress") {
+        job.status = "completed";
+      }
+    } else if (job.paymentStatus !== "Paid") {
+      job.paymentStatus = "Pending";
+      if (job.status === "accepted") {
+        job.status = "in_progress";
+      }
+    }
+
+    await job.save();
+
+    await logJobEvent({
+      jobId: job._id,
+      eventType: "job_completed",
+      actorType: "contractor",
+      actorPhone: userPhone,
+      source: "app",
+      oldState,
+      newState: {
+        status: job.status,
+        paymentStatus: job.paymentStatus,
+        paymentMode: job.paymentMode,
+        paymentTime: job.paymentTime,
+      },
+      metadata: { amount: job.amount, workerPhone },
+    });
+
+    try {
+      await NotificationHistory.create({
+        recipientPhone: workerPhone,
+        senderPhone: userPhone,
+        senderName: userName || job.contractorName || "Contractor",
+        type: "payment_received",
+        title: `Payment Received: ₹${job.amount}`,
+        body: `Payment for ${job.title} has been transferred to your wallet`,
+        jobId: job._id,
+        metadata: { jobTitle: job.title, amount: job.amount, actionRequired: false, workerPhone },
+        deepLink: "worker/wallet",
+        pushNotificationSent: false,
+      });
+    } catch (e) {
+      console.error("Error creating payment notification:", e);
+    }
+
+    try {
+      let workerWallet = await Wallet.findOne({ phone: workerPhone });
+      if (!workerWallet) workerWallet = new Wallet({ phone: workerPhone, balance: 0, availableBalance: 0, pocketBalance: 0 });
+      const creditAmount = Number(job.amount) || 0;
+      workerWallet.availableBalance = Number(workerWallet.availableBalance ?? workerWallet.balance ?? 0) + creditAmount;
+      workerWallet.balance = Number(workerWallet.availableBalance || 0);
+      workerWallet.transactions.push({
+        type: "payment",
+        amount: creditAmount,
+        date: new Date(),
+        jobId: job._id,
+        source: "app",
+        provider: "internal",
+        status: "completed",
+        description: `Job payment credited to available balance (${job.title})`,
+        metadata: { balanceType: "available", workerPhone },
+      });
+      await workerWallet.save();
+    } catch (walletErr) {
+      console.error("Error updating worker wallet after payment:", walletErr);
+    }
+
+    try {
+      await updateGigDataOnCompletion(workerPhone, {
+        jobId: job._id.toString(),
+        title: job.title,
+        amount: job.amount,
+        workerType: job.workerType,
+        timeSpentMinutes: job.timeSpentMinutes || 0,
+      });
+    } catch (e) {
+      console.error("Error updating gigs data on completion:", e);
+    }
+
+    await updateContractorStats(userPhone);
+    await emitJobUpdatedToUsers(job, [job.contractorName, workerPhone, job.acceptedBy || job.contractorName]);
+    return { code: 200, body: { success: true, message: "Payment successful", job, workerPhone } };
+  }
 
   if (job.attendanceStatus !== "Present") {
     return { code: 400, body: { success: false, message: "Payment allowed only for PRESENT workers" } };

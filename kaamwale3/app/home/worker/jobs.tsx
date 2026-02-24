@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useRef } from "react";
-import { View, Text, FlatList, Alert, Image, TouchableOpacity, Modal, RefreshControl, TextInput, ActivityIndicator } from "react-native";
+import { View, Text, FlatList, Alert, Image, TouchableOpacity, Modal, RefreshControl, TextInput, ActivityIndicator, Linking } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useFocusEffect } from "@react-navigation/native";
 import { MaterialIcons } from "@expo/vector-icons";
@@ -22,6 +22,7 @@ interface Job {
   description: string;
   amount: string;
   contractorName: string;
+  contractorPhone?: string;
   location?: string;
   imageUrl?: string; // ✅ Job image URL
   startTime?: string; // ✅ Start time like "09:00"
@@ -45,7 +46,24 @@ interface Job {
     ratedAt?: string;
     ratedBy?: string;
   };
+  createdAt?: string;
+  paymentTime?: string;
 }
+
+const EMERGENCY_CALL_NUMBER = "112";
+const SUPPORT_CALL_NUMBER = "18001234567";
+
+const getWeekWindow = () => {
+  const now = new Date();
+  const weekStart = new Date(now);
+  weekStart.setHours(0, 0, 0, 0);
+  const day = weekStart.getDay(); // 0=Sun
+  const diffToMonday = (day + 6) % 7;
+  weekStart.setDate(weekStart.getDate() - diffToMonday);
+  const weekEnd = new Date(weekStart);
+  weekEnd.setDate(weekEnd.getDate() + 7);
+  return { weekStart, weekEnd };
+};
 
 export default function Jobs(): React.ReactElement {
   const [workerName, setWorkerName] = useState<string>("Test Worker");
@@ -68,6 +86,29 @@ export default function Jobs(): React.ReactElement {
   const previousPaymentState = useRef<Record<string, string | null>>({});
   const previousUserPhoneRef = useRef<string | null>(null); // ✅ Track previous user to detect changes
   const paymentNotifiedJobs = useRef<Set<string>>(new Set()); // ✅ Track jobs already notified
+
+  const dialNumber = async (number: string) => {
+    const telUrl = `tel:${number}`;
+    try {
+      const supported = await Linking.canOpenURL(telUrl);
+      if (!supported) {
+        Alert.alert("Error", "Calling is not supported on this device.");
+        return;
+      }
+      await Linking.openURL(telUrl);
+    } catch {
+      Alert.alert("Error", "Could not start the call.");
+    }
+  };
+
+  const showHelpOptions = (job?: Job) => {
+    const supportNumber = job?.contractorPhone || SUPPORT_CALL_NUMBER;
+    Alert.alert("Need Help?", "Choose an option", [
+      { text: "Cancel", style: "cancel" },
+      { text: "Emergency Call", style: "destructive", onPress: () => dialNumber(EMERGENCY_CALL_NUMBER) },
+      { text: "Support Call", onPress: () => dialNumber(supportNumber) },
+    ]);
+  };
 
   const normalizeMediaUrl = (url?: string | null): string | null => {
     if (!url || typeof url !== "string") return null;
@@ -456,6 +497,36 @@ export default function Jobs(): React.ReactElement {
     };
   }, [token, workerName]);
 
+  // Refresh weekly jobs at week boundary (Monday 12:00 AM local).
+  useEffect(() => {
+    if (!token || !workerName) return;
+
+    let weekTimeout: ReturnType<typeof setTimeout> | null = null;
+    let weekInterval: ReturnType<typeof setInterval> | null = null;
+
+    const reloadWeekly = async () => {
+      await fetchAcceptedJobs(workerName, token, true);
+    };
+
+    const scheduleWeeklyRefresh = () => {
+      const now = new Date();
+      const { weekEnd } = getWeekWindow();
+      const msUntilWeekBoundary = Math.max(1000, weekEnd.getTime() - now.getTime());
+
+      weekTimeout = setTimeout(() => {
+        reloadWeekly();
+        weekInterval = setInterval(reloadWeekly, 7 * 24 * 60 * 60 * 1000);
+      }, msUntilWeekBoundary);
+    };
+
+    scheduleWeeklyRefresh();
+
+    return () => {
+      if (weekTimeout) clearTimeout(weekTimeout);
+      if (weekInterval) clearInterval(weekInterval);
+    };
+  }, [token, workerName]);
+
   const submitContractorRating = async () => {
     if (!selectedJobForContractorRating || !token || submittingContractorRating) return;
 
@@ -519,6 +590,60 @@ export default function Jobs(): React.ReactElement {
             elevation: 4,
           }}
         >
+          {job.paymentStatus !== "Paid" && (
+            <View
+              style={{
+                position: "absolute",
+                right: 10,
+                top: 10,
+                zIndex: 5,
+                flexDirection: "row",
+                alignItems: "center",
+                gap: 8,
+              }}
+            >
+              <TouchableOpacity
+                onPress={() => dialNumber(job.contractorPhone || "")}
+                disabled={!job.contractorPhone}
+                style={{
+                  width: 36,
+                  height: 36,
+                  borderRadius: 18,
+                  backgroundColor: "#22c55e",
+                  justifyContent: "center",
+                  alignItems: "center",
+                  opacity: job.contractorPhone ? 1 : 0.4,
+                  shadowColor: "#000",
+                  shadowOffset: { width: 0, height: 2 },
+                  shadowOpacity: 0.25,
+                  shadowRadius: 4,
+                  elevation: 4,
+                }}
+              >
+                <MaterialIcons name="phone" size={18} color="#fff" />
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                onPress={() => showHelpOptions(job)}
+                style={{
+                  width: 36,
+                  height: 36,
+                  borderRadius: 18,
+                  backgroundColor: "#ef4444",
+                  justifyContent: "center",
+                  alignItems: "center",
+                  shadowColor: "#000",
+                  shadowOffset: { width: 0, height: 2 },
+                  shadowOpacity: 0.25,
+                  shadowRadius: 4,
+                  elevation: 4,
+                }}
+              >
+                <MaterialIcons name="notification-important" size={20} color="#fff" />
+              </TouchableOpacity>
+            </View>
+          )}
+
           {/* Top Image */}
           <View style={{ height: 180, overflow: "hidden", backgroundColor: "#EEE" }}>
             <Image
@@ -704,7 +829,16 @@ export default function Jobs(): React.ReactElement {
     );
   };
 
-  const previewJobs = acceptedJobs.slice(0, 3);
+  const pendingJobs = acceptedJobs.filter((job) => job.paymentStatus !== "Paid");
+  const previewJobs = pendingJobs.slice(0, 3);
+  const { weekStart, weekEnd } = getWeekWindow();
+  const weeklyJobs = acceptedJobs.filter((job) => {
+    const sourceDate = job.paymentTime || job.date || job.createdAt;
+    if (!sourceDate) return false;
+    const d = new Date(sourceDate);
+    if (Number.isNaN(d.getTime())) return false;
+    return d >= weekStart && d < weekEnd;
+  });
 
   return (
     <SafeAreaView edges={['top', 'left', 'right', 'bottom']} style={{ flex: 1 }}>
@@ -716,9 +850,9 @@ export default function Jobs(): React.ReactElement {
             backgroundColor: "#1d4ed8",
             justifyContent: "center",
             alignItems: "center",
-            opacity: acceptedJobs.length ? 1 : 0.5,
+            opacity: weeklyJobs.length ? 1 : 0.5,
           }}
-          disabled={!acceptedJobs.length}
+          disabled={!weeklyJobs.length}
           onPress={() => setSeeAllModalVisible(true)}
         >
           <Text style={{ color: "#fff", fontSize: 14, fontWeight: "700" }}>
@@ -739,7 +873,7 @@ export default function Jobs(): React.ReactElement {
             {loading ? (
               <Text style={styles.loadingText}>Loading jobs...</Text>
             ) : (
-              <Text style={styles.noJobsText}>No accepted jobs yet.</Text>
+              <Text style={styles.noJobsText}>No pending jobs.</Text>
             )}
           </View>
         }
@@ -763,7 +897,7 @@ export default function Jobs(): React.ReactElement {
               alignItems: "center",
             }}
           >
-            <Text style={{ fontSize: 18, fontWeight: "800", color: "#111827" }}>All Jobs</Text>
+            <Text style={{ fontSize: 18, fontWeight: "800", color: "#111827" }}>This Week's Jobs</Text>
             <TouchableOpacity
               onPress={() => setSeeAllModalVisible(false)}
               style={{
@@ -778,7 +912,7 @@ export default function Jobs(): React.ReactElement {
           </View>
 
           <FlatList
-            data={acceptedJobs}
+            data={weeklyJobs}
             keyExtractor={(item) => item._id}
             style={styles.container}
             contentContainerStyle={{ paddingVertical: 12 }}
@@ -790,7 +924,7 @@ export default function Jobs(): React.ReactElement {
                 {loading ? (
                   <Text style={styles.loadingText}>Loading jobs...</Text>
                 ) : (
-                  <Text style={styles.noJobsText}>No jobs available.</Text>
+                  <Text style={styles.noJobsText}>No jobs in this week.</Text>
                 )}
               </View>
             }

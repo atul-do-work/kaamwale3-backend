@@ -5,7 +5,7 @@ import { Ionicons } from '@expo/vector-icons';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import * as Location from 'expo-location';
 import * as ImagePicker from 'expo-image-picker';
-import { MapView, Camera, PointAnnotation } from '@maplibre/maplibre-react-native';
+import { MapView, Camera } from '@maplibre/maplibre-react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { socket } from "../../../utils/socket";
 import { SERVER_URL } from "../../../utils/config";
@@ -66,8 +66,8 @@ export default function PostJobScreen() {
   const [showMapPicker, setShowMapPicker] = useState(false);
   const [mapLoading, setMapLoading] = useState(false);
   const [mapCenter, setMapCenter] = useState<{ lat: number; lon: number }>({ lat: 26.9124, lon: 75.7873 });
-  const [mapPin, setMapPin] = useState<{ lat: number; lon: number } | null>(null);
   const [isPostingJob, setIsPostingJob] = useState(false); // ✅ Loading state for posting job
+  const [showImagePreviewHold, setShowImagePreviewHold] = useState(false);
 
   // SERVER_URL is loaded from central config
   const router = useRouter();   // ⭐ ADDED
@@ -253,7 +253,6 @@ export default function PostJobScreen() {
       setMapLoading(true);
       if (selectedLocation) {
         setMapCenter({ lat: selectedLocation.lat, lon: selectedLocation.lon });
-        setMapPin({ lat: selectedLocation.lat, lon: selectedLocation.lon });
         setShowMapPicker(true);
         return;
       }
@@ -262,55 +261,35 @@ export default function PostJobScreen() {
       if (status === 'granted') {
         const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
         setMapCenter({ lat: loc.coords.latitude, lon: loc.coords.longitude });
-        setMapPin({ lat: loc.coords.latitude, lon: loc.coords.longitude });
-      } else {
-        // fallback stays Jaipur
-        setMapPin({ lat: mapCenter.lat, lon: mapCenter.lon });
       }
       setShowMapPicker(true);
     } catch {
-      setMapPin({ lat: mapCenter.lat, lon: mapCenter.lon });
       setShowMapPicker(true);
     } finally {
       setMapLoading(false);
     }
   };
 
-  const onMapPress = (event: any) => {
+  const onMapRegionDidChange = (event: any) => {
     const coordinates =
       event?.geometry?.coordinates ||
-      event?.features?.[0]?.geometry?.coordinates ||
+      event?.properties?.center ||
+      event?.nativeEvent?.geometry?.coordinates ||
       event?.coordinates;
 
     if (!coordinates || coordinates.length < 2) return;
     const [lon, lat] = coordinates;
     if (typeof lat !== 'number' || typeof lon !== 'number') return;
-    setMapPin({ lat, lon });
-  };
-
-  const onPinDragEnd = (event: any) => {
-    const coordinates =
-      event?.geometry?.coordinates ||
-      event?.nativeEvent?.coordinates ||
-      event?.coordinates;
-
-    if (!coordinates || coordinates.length < 2) return;
-    const [lon, lat] = coordinates;
-    if (typeof lat !== 'number' || typeof lon !== 'number') return;
-    setMapPin({ lat, lon });
+    setMapCenter({ lat, lon });
   };
 
   const confirmMapLocation = async () => {
-    if (!mapPin) {
-      return Alert.alert('Missing', 'Tap on map to select location first');
-    }
-
     try {
-      let placeName = `${mapPin.lat.toFixed(4)}, ${mapPin.lon.toFixed(4)}`;
+      let placeName = `${mapCenter.lat.toFixed(4)}, ${mapCenter.lon.toFixed(4)}`;
       try {
         const reverse = await Location.reverseGeocodeAsync({
-          latitude: mapPin.lat,
-          longitude: mapPin.lon,
+          latitude: mapCenter.lat,
+          longitude: mapCenter.lon,
         });
         if (reverse && reverse.length > 0) {
           const g = reverse[0];
@@ -322,8 +301,8 @@ export default function PostJobScreen() {
       }
 
       setSelectedLocation({
-        lat: mapPin.lat,
-        lon: mapPin.lon,
+        lat: mapCenter.lat,
+        lon: mapCenter.lon,
         placeName,
       });
       setShowMapPicker(false);
@@ -646,88 +625,92 @@ export default function PostJobScreen() {
 
         </View>
 
-        {/* Image Upload */}
-        <TouchableOpacity style={[styles.inputCard, { backgroundColor: selectedImage ? '#1a4c6d' : '#162b49ff' }]} onPress={pickImage}>
-          <Ionicons name="image-outline" size={22} color={selectedImage ? '#3b82f6' : '#bcbec7ff'} />
-          <Text style={[styles.input, { color: selectedImage ? '#3b82f6' : '#aaa' }]}>
-            {selectedImage ? '📷 Image Selected' : 'Choose Image'}
-          </Text>
-        </TouchableOpacity>
+        {/* Start + End Time in one row */}
+        <View style={styles.twoColRow}>
+          <View style={styles.twoColItem}>
+            <Text style={styles.label}>Start Time</Text>
+            <TouchableOpacity style={styles.inputCard} onPress={() => setShowStartTimePicker(true)}>
+              <Ionicons name="time-outline" size={22} color="#bcbec7ff" />
+              <Text style={[styles.input, { color: "#fff" }]}>
+                {formatTimeDisplay(startTime)}
+              </Text>
+            </TouchableOpacity>
+          </View>
 
-        {selectedImage && (
-          <View style={styles.imagePreview}>
-            <Image source={{ uri: selectedImage }} style={styles.previewImage} />
+          <View style={styles.twoColItem}>
+            <Text style={styles.label}>End Time</Text>
+            <TouchableOpacity style={styles.inputCard} onPress={() => setShowEndTimePicker(true)}>
+              <Ionicons name="time-outline" size={22} color="#bcbec7ff" />
+              <Text style={[styles.input, { color: "#fff" }]}>
+                {formatTimeDisplay(endTime)}
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+        {showStartTimePicker && (
+          <View style={{ backgroundColor: "#fff" }}>
+            <DateTimePicker
+              value={startTime}
+              mode="time"
+              display="default"
+              onChange={(e, d) => {
+                setShowStartTimePicker(false);
+                if (d) setStartTime(d);
+              }}
+            />
+          </View>
+        )}
+        {showEndTimePicker && (
+          <View style={{ backgroundColor: "#fff" }}>
+            <DateTimePicker
+              value={endTime}
+              mode="time"
+              display="default"
+              onChange={(e, d) => {
+                setShowEndTimePicker(false);
+                if (d) setEndTime(d);
+              }}
+            />
           </View>
         )}
 
-        {/* Start Time Picker */}
-        <View style={{ marginBottom: 15 }}>
-          <Text style={styles.label}>Start Time</Text>
-          <TouchableOpacity style={styles.inputCard} onPress={() => setShowStartTimePicker(true)}>
-            <Ionicons name="time-outline" size={22} color="#bcbec7ff" />
-            <Text style={[styles.input, { color: "#fff" }]}>
-              {formatTimeDisplay(startTime)}
-            </Text>
-          </TouchableOpacity>
-          {showStartTimePicker && (
-            <View style={{ backgroundColor: "#fff" }}>
-              <DateTimePicker
-                value={startTime}
-                mode="time"
-                display="default"
-                onChange={(e, d) => {
-                  setShowStartTimePicker(false);
-                  if (d) setStartTime(d);
-                }}
-              />
-            </View>
-          )}
-        </View>
-
-        {/* End Time Picker */}
-        <View style={{ marginBottom: 15 }}>
-          <Text style={styles.label}>End Time</Text>
-          <TouchableOpacity style={styles.inputCard} onPress={() => setShowEndTimePicker(true)}>
-            <Ionicons name="time-outline" size={22} color="#bcbec7ff" />
-            <Text style={[styles.input, { color: "#fff" }]}>
-              {formatTimeDisplay(endTime)}
-            </Text>
-          </TouchableOpacity>
-          {showEndTimePicker && (
-            <View style={{ backgroundColor: "#fff" }}>
-              <DateTimePicker
-                value={endTime}
-                mode="time"
-                display="default"
-                onChange={(e, d) => {
-                  setShowEndTimePicker(false);
-                  if (d) setEndTime(d);
-                }}
-              />
-            </View>
-          )}
-        </View>
-
         {/* Date Picker */}
 
-        {/* ✅ Bulk Hiring Option - Only for Premium Users */}
+        {/* ✅ Bulk Hiring + Duration in one row (Premium) */}
         {hasPremium && (
-          <View style={styles.bulkHiringContainer}>
-            <View style={styles.bulkHiringHeader}>
-              <Ionicons name="people-outline" size={22} color="#667eea" />
-              <Text style={styles.bulkHiringLabel}>Bulk Hiring</Text>
+          <View style={styles.bulkDurationWrap}>
+            <View style={styles.twoColRow}>
+              <View style={styles.twoColItem}>
+                <Text style={styles.label}>Bulk Hiring</Text>
+                <TouchableOpacity
+                  style={[styles.bulkHiringToggle, bulkHiringEnabled && styles.bulkHiringToggleActive]}
+                  onPress={() => setBulkHiringEnabled(!bulkHiringEnabled)}
+                >
+                  <View style={[styles.toggleCircle, bulkHiringEnabled && styles.toggleCircleActive]} />
+                  <Text style={styles.toggleText}>
+                    {bulkHiringEnabled ? 'Enabled' : 'Disabled'}
+                  </Text>
+                </TouchableOpacity>
+              </View>
+
+              <View style={styles.twoColItem}>
+                <Text style={styles.label}>Job Duration</Text>
+                <TouchableOpacity style={styles.dropdown} onPress={() => setShowDaysDropdown(!showDaysDropdown)}>
+                  <Text style={[styles.dropdownText, { color: '#fff' }]}>{numberOfDays} {numberOfDays === 1 ? 'Day' : 'Days'}</Text>
+                  <Ionicons name={showDaysDropdown ? 'chevron-up' : 'chevron-down'} size={20} color="#fff" />
+                </TouchableOpacity>
+                {showDaysDropdown && (
+                  <View style={styles.dropdownMenu}>
+                    {Array.from({ length: 30 }, (_, i) => i + 1).map((day) => (
+                      <TouchableOpacity key={day} style={styles.dropdownItem} onPress={() => { setNumberOfDays(day); setShowDaysDropdown(false); }}>
+                        <Text style={styles.dropdownItemText}>{day} {day === 1 ? 'Day' : 'Days'}</Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                )}
+              </View>
             </View>
-            
-            <TouchableOpacity 
-              style={[styles.bulkHiringToggle, bulkHiringEnabled && styles.bulkHiringToggleActive]}
-              onPress={() => setBulkHiringEnabled(!bulkHiringEnabled)}
-            >
-              <View style={[styles.toggleCircle, bulkHiringEnabled && styles.toggleCircleActive]} />
-              <Text style={styles.toggleText}>
-                {bulkHiringEnabled ? 'Enabled' : 'Disabled'}
-              </Text>
-            </TouchableOpacity>
-            
+
             {bulkHiringEnabled && (
               <View style={styles.workerCountContainer}>
                 <Text style={styles.workerCountLabel}>Select Number of Workers</Text>
@@ -755,37 +738,50 @@ export default function PostJobScreen() {
                 </Text>
               </View>
             )}
-          </View>
-        )}
 
-        {/* ✅ Job Duration (Days) - Only for Premium Users */}
-        {hasPremium && (
-          <View style={styles.dropdownContainer}>
-            <Text style={styles.label}>Job Duration (Days)</Text>
-            <TouchableOpacity style={styles.dropdown} onPress={() => setShowDaysDropdown(!showDaysDropdown)}>
-              <Text style={[styles.dropdownText, { color: '#fff' }]}>{numberOfDays} {numberOfDays === 1 ? 'Day' : 'Days'}</Text>
-              <Ionicons name={showDaysDropdown ? 'chevron-up' : 'chevron-down'} size={20} color="#fff" />
-            </TouchableOpacity>
-            {showDaysDropdown && (
-              <View style={styles.dropdownMenu}>
-                {Array.from({ length: 30 }, (_, i) => i + 1).map((day) => (
-                  <TouchableOpacity key={day} style={styles.dropdownItem} onPress={() => { setNumberOfDays(day); setShowDaysDropdown(false); }}>
-                    <Text style={styles.dropdownItemText}>{day} {day === 1 ? 'Day' : 'Days'}</Text>
-                  </TouchableOpacity>
-                ))}
-              </View>
-            )}
-            <Text style={{ color: '#999', fontSize: 12, marginTop: 8, paddingHorizontal: 16 }}>
+            <Text style={{ color: '#999', fontSize: 12, marginTop: 8, paddingHorizontal: 4 }}>
               Workers will know the expected job duration before accepting
             </Text>
           </View>
         )}
 
-        {/* Date Picker - Fixed */}
-        <TouchableOpacity style={styles.inputCard} onPress={() => setShowDatePicker(true)}>
-          <Ionicons name="calendar-outline" size={22} color="#bcbec7ff" />
-          <Text style={[styles.input, { color: "#fff" }]}>{date.toDateString()}</Text>
-        </TouchableOpacity>
+        {/* Date + Image in one row */}
+        <View style={styles.twoColRow}>
+          <View style={styles.twoColItem}>
+            <Text style={styles.label}>Date</Text>
+            <TouchableOpacity style={styles.inputCard} onPress={() => setShowDatePicker(true)}>
+              <Ionicons name="calendar-outline" size={22} color="#bcbec7ff" />
+              <Text style={[styles.input, { color: "#fff" }]}>{date.toDateString()}</Text>
+            </TouchableOpacity>
+          </View>
+
+          <View style={styles.twoColItem}>
+            <Text style={styles.label}>Image</Text>
+            <TouchableOpacity style={[styles.inputCard, { backgroundColor: selectedImage ? '#1a4c6d' : '#162b49ff' }]} onPress={pickImage}>
+              <Ionicons name="image-outline" size={22} color={selectedImage ? '#3b82f6' : '#bcbec7ff'} />
+              <Text style={[styles.input, { color: selectedImage ? '#3b82f6' : '#aaa' }]} numberOfLines={1}>
+                {selectedImage ? 'Image Selected' : 'Choose Image'}
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+
+        {selectedImage && (
+          <TouchableOpacity
+            style={{ marginTop: -6, marginBottom: 12 }}
+            onLongPress={() => setShowImagePreviewHold(true)}
+            onPressOut={() => setShowImagePreviewHold(false)}
+            delayLongPress={180}
+          >
+            <Text style={{ color: '#93c5fd', fontSize: 12 }}>Image selected (long press to preview)</Text>
+          </TouchableOpacity>
+        )}
+
+        {selectedImage && showImagePreviewHold && (
+          <View style={styles.imagePreview}>
+            <Image source={{ uri: selectedImage }} style={styles.previewImage} />
+          </View>
+        )}
 
         {showDatePicker && (
           <DateTimePicker
@@ -838,30 +834,21 @@ export default function PostJobScreen() {
             mapStyle={MAP_STYLE_URL}
             logoEnabled={false}
             attributionEnabled={false}
-            onPress={onMapPress}
+            onRegionDidChange={onMapRegionDidChange}
           >
             <Camera
               centerCoordinate={[mapCenter.lon, mapCenter.lat]}
               zoomLevel={14}
               animationDuration={400}
             />
-            {mapPin && (
-              <PointAnnotation
-                id="job-pin"
-                coordinate={[mapPin.lon, mapPin.lat]}
-                draggable
-                onDragEnd={onPinDragEnd}
-              >
-                <View style={styles.mapPin}>
-                  <Ionicons name="location" size={22} color="#fff" />
-                </View>
-              </PointAnnotation>
-            )}
           </MapView>
+          <View style={styles.mapCenterPin}>
+            <Ionicons name="location" size={24} color="#fff" />
+          </View>
         </View>
 
         <View style={styles.mapFooter}>
-          <Text style={styles.mapHint}>Tap anywhere on map to set exact job point</Text>
+          <Text style={styles.mapHint}>Move map and keep the red pin at exact job point</Text>
           <TouchableOpacity style={styles.confirmMapBtn} onPress={confirmMapLocation}>
             <Text style={styles.confirmMapBtnText}>Confirm Location</Text>
           </TouchableOpacity>
@@ -920,8 +907,26 @@ const styles = StyleSheet.create({
   },
   dropdownItemText: { color: '#fff', fontSize: 16 },
   errorText: { color: '#ff4444', fontWeight: '600', marginBottom: 10, marginTop: -10 },
+  twoColRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: 10,
+    marginBottom: 8,
+  },
+  twoColItem: {
+    flex: 1,
+    minWidth: 0,
+  },
   imagePreview: { alignItems: 'center', marginBottom: 15 },
   previewImage: { width: 150, height: 120, borderRadius: 10, backgroundColor: '#0f1f35' },
+  bulkDurationWrap: {
+    backgroundColor: '#0f1f35',
+    borderRadius: 14,
+    padding: 12,
+    marginBottom: 15,
+    borderLeftWidth: 4,
+    borderLeftColor: '#667eea',
+  },
   // ✅ Bulk hiring styles
   bulkHiringContainer: {
     backgroundColor: '#0f1f35',
@@ -1071,15 +1076,25 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#0b1d33',
   },
-  mapPin: {
-    width: 34,
-    height: 34,
-    borderRadius: 17,
-    backgroundColor: '#1a5c3a',
+  mapCenterPin: {
+    position: 'absolute',
+    left: '50%',
+    top: '50%',
+    marginLeft: -18,
+    marginTop: -36,
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: '#ef4444',
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: 2,
     borderColor: '#fff',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 4,
+    elevation: 5,
   },
   mapFooter: {
     padding: 14,

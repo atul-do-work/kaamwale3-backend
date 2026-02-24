@@ -9,9 +9,9 @@ import {
   RefreshControl,
   Platform,
   Dimensions,
-  SafeAreaView,
   Alert,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useRouter, useFocusEffect } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -726,7 +726,7 @@ export default function GigHistory() {
   };
 
   return (
-    <View style={[styles.container, { paddingTop: Platform.OS === 'ios' ? 12 : 8 }]}>
+    <SafeAreaView edges={['top', 'left', 'right', 'bottom']} style={[styles.container, { paddingTop: Platform.OS === 'ios' ? 12 : 8 }]}>
       {/* Header */}
       <View style={[styles.header, { paddingTop: Platform.OS === 'ios' ? 12 : 8 }]}>
         <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
@@ -766,7 +766,7 @@ export default function GigHistory() {
           />
         </>
       )}
-    </View>
+    </SafeAreaView>
   );
 }
 

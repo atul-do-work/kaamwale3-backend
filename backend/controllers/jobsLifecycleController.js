@@ -7,6 +7,7 @@ function createJobsLifecycleController(deps) {
         const result = await jobsLifecycleService.markAttendance({
           jobId: req.params.id,
           status: req.body.status,
+          workerPhone: req.body.workerPhone,
           userPhone: req.user.phone,
           deps,
         });
@@ -22,6 +23,7 @@ function createJobsLifecycleController(deps) {
         const result = await jobsLifecycleService.payJob({
           jobId: req.params.id,
           mode: req.body.mode,
+          workerPhone: req.body.workerPhone,
           userPhone: req.user.phone,
           userName: req.user.name,
           deps,

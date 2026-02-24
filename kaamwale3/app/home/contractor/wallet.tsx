@@ -36,10 +36,20 @@ const walletCards = [
 interface Job {
   _id: string; // MongoDB ObjectId
   id?: string; // Legacy - no longer used
+  rootJobId?: string;
+  workerPhone?: string;
+  isBulkWorkerEntry?: boolean;
   title: string;
   description: string;
   amount: number;
-  acceptedBy?: string;
+  acceptedBy: string;
+  acceptedWorkers?: Array<{
+    phone?: string;
+    name?: string;
+    acceptedAt?: string;
+    attendanceStatus?: "Present" | "Absent" | null;
+    paymentStatus?: "Paid" | null;
+  }>;
   contractorName: string;
   status: string;
   timestamp: string;
@@ -74,7 +84,7 @@ export default function ContractorWalletAttendance() {
   // NEW UI states
   const [showDepositInput, setShowDepositInput] = useState<boolean>(false);
   const [showWithdrawInput, setShowWithdrawInput] = useState<boolean>(false);
-  const [payOptionsJobId, setPayOptionsJobId] = useState<string | null>(null);
+  const [payOptionsTarget, setPayOptionsTarget] = useState<{ jobId: string; workerPhone?: string } | null>(null);
 
   // Rating states
   const [ratingModalVisible, setRatingModalVisible] = useState(false);
@@ -87,6 +97,7 @@ export default function ContractorWalletAttendance() {
   const [razorpayModalVisible, setRazorpayModalVisible] = useState(false);
   const [razorpayHtml, setRazorpayHtml] = useState("");
   const [currentPaymentJobId, setCurrentPaymentJobId] = useState<string | null>(null);
+  const [currentPaymentWorkerPhone, setCurrentPaymentWorkerPhone] = useState<string | null>(null);
 
   // ✅ Pagination state for attendance cards
   const [displayedCount, setDisplayedCount] = useState(5); // Show 5 cards initially
@@ -178,9 +189,12 @@ export default function ContractorWalletAttendance() {
       const res = await api.get(`/jobs`);
       const data: Job[] = res.data;
 
-      const attendanceStatuses = new Set(["accepted", "in_progress", "completed"]);
+      const attendanceStatuses = new Set(["offered", "accepted", "in_progress", "completed"]);
       const myJobs = data
-        .filter(j => j.contractorName === contractorName && attendanceStatuses.has(j.status) && !!j.acceptedBy)
+        .filter(j => {
+          const hasAnyAcceptedWorker = !!j.acceptedBy || (Array.isArray(j.acceptedWorkers) && j.acceptedWorkers.length > 0);
+          return j.contractorName === contractorName && attendanceStatuses.has(j.status) && hasAnyAcceptedWorker;
+        })
         .sort((a, b) => {
           const aTime = new Date((a as any).timestamp || (a as any).updatedAt || (a as any).createdAt || 0).getTime();
           const bTime = new Date((b as any).timestamp || (b as any).updatedAt || (b as any).createdAt || 0).getTime();
@@ -189,13 +203,37 @@ export default function ContractorWalletAttendance() {
 
       console.log(`📥 Fetched ${data.length} total jobs, filtered to ${myJobs.length} attendance jobs for contractor: ${contractorName}`);
 
-      setJobs(
-        myJobs.map(j => ({
-          ...j,
-          attendanceStatus: j.attendanceStatus || null,
-          paymentStatus: j.paymentStatus || null,
-        }))
-      );
+      const expandedJobs: Job[] = myJobs.flatMap((j): Job[] => {
+        const bulkWorkers = Array.isArray(j.acceptedWorkers) ? j.acceptedWorkers : [];
+        if (bulkWorkers.length > 0) {
+          return bulkWorkers
+            .filter((w) => !!w?.phone)
+            .map((w) => ({
+              ...j,
+              _id: `${j._id}:${w.phone}`,
+              rootJobId: j._id,
+              acceptedBy: (w.name || w.phone || "").trim(),
+              workerPhone: w.phone || undefined,
+              isBulkWorkerEntry: true,
+              attendanceStatus: w.attendanceStatus ?? null,
+              paymentStatus: w.paymentStatus ?? null,
+            }));
+        }
+
+        return [
+          {
+            ...j,
+            rootJobId: j._id,
+            acceptedBy: (j.acceptedBy || "").trim(),
+            workerPhone: j.acceptedBy || undefined,
+            isBulkWorkerEntry: false,
+            attendanceStatus: j.attendanceStatus || null,
+            paymentStatus: j.paymentStatus || null,
+          },
+        ];
+      });
+
+      setJobs(expandedJobs);
     } catch (err) {
       console.error("Job fetch error:", err);
     } finally {
@@ -235,9 +273,9 @@ export default function ContractorWalletAttendance() {
   }, [fetchJobs, accessToken, authUser?.phone]);
 
   // Mark attendance
-  const markAttendance = async (jobId: string, status: "Present" | "Absent") => {
+  const markAttendance = async (jobId: string, status: "Present" | "Absent", workerPhone?: string) => {
     try {
-      await api.post(`/jobs/attendance/${jobId}`, { status });
+      await api.post(`/jobs/attendance/${jobId}`, { status, workerPhone });
       // ✅ DON'T update state optimistically - let backend emit jobUpdated
       // Backend will broadcast updated job with attendanceStatus, triggering fetchJobs
     } catch (err) {
@@ -247,9 +285,9 @@ export default function ContractorWalletAttendance() {
 
   // PAY WORKER
   // Pay worker - supports mode: "Cash" | "Online" (keeps existing logic)
-  const payWorker = async (jobId: string, mode: string = "Cash") => {
+  const payWorker = async (jobId: string, mode: string = "Cash", workerPhone?: string) => {
     try {
-      const res = await api.post(`/jobs/pay/${jobId}`, { mode });
+      const res = await api.post(`/jobs/pay/${jobId}`, { mode, workerPhone });
       const data = res.data;
 
       if (data.success) {
@@ -264,28 +302,28 @@ export default function ContractorWalletAttendance() {
     }
   };
 
-  const handlePayOption = (jobId: string, option: "Cash" | "Online") => {
-    setPayOptionsJobId(null);
+  const handlePayOption = (jobId: string, option: "Cash" | "Online", workerPhone?: string) => {
+    setPayOptionsTarget(null);
     if (option === "Cash") {
       // preserve existing cash flow
-      payWorker(jobId, "Cash");
+      payWorker(jobId, "Cash", workerPhone);
     } else {
       // Open Razorpay for online payment
-      initiateRazorpayPayment(jobId);
+      initiateRazorpayPayment(jobId, workerPhone);
     }
   };
 
   // ✅ Initiate Razorpay Payment
-  const initiateRazorpayPayment = async (jobId: string) => {
+  const initiateRazorpayPayment = async (jobId: string, workerPhone?: string) => {
     try {
-      const job = jobs.find(j => j._id === jobId);
+      const job = jobs.find((j) => (j.rootJobId || j._id) === jobId && (!workerPhone || j.workerPhone === workerPhone)) || jobs.find(j => (j.rootJobId || j._id) === jobId);
       if (!job) return showAppModal("error", t('error'), t('jobNotFound'));
 
       // Step 1: Create order on backend
       const orderRes = await api.post(`/api/payment/create-order`, {
-        jobId: job._id,
+        jobId,
         amount: job.amount,
-        workerPhone: job.acceptedBy,
+        workerPhone: workerPhone || job.workerPhone || job.acceptedBy,
         workerName: job.acceptedBy
       });
 
@@ -349,6 +387,7 @@ export default function ContractorWalletAttendance() {
 
       setRazorpayHtml(razorpayHtml);
       setCurrentPaymentJobId(jobId);
+      setCurrentPaymentWorkerPhone((workerPhone || job.workerPhone || job.acceptedBy || null) as string | null);
       setRazorpayModalVisible(true);
     } catch (error) {
       showAppModal("error", t('error'), t('failedPayment'));
@@ -377,15 +416,17 @@ export default function ContractorWalletAttendance() {
     if (!currentPaymentJobId) return;
 
     try {
-      const job = jobs.find(j => j._id === currentPaymentJobId);
+      const job =
+        jobs.find((j) => (j.rootJobId || j._id) === currentPaymentJobId && (!currentPaymentWorkerPhone || j.workerPhone === currentPaymentWorkerPhone)) ||
+        jobs.find((j) => (j.rootJobId || j._id) === currentPaymentJobId);
       if (!job) return;
 
       const verifyRes = await api.post(`/api/payment/verify-payment`, {
         orderId: data.orderId,
         paymentId: data.paymentId,
         signature: data.signature,
-        jobId: job._id,
-        workerPhone: job.acceptedBy
+        jobId: currentPaymentJobId,
+        workerPhone: currentPaymentWorkerPhone || job.workerPhone || job.acceptedBy
       });
 
       const verifyData = verifyRes.data;
@@ -398,6 +439,7 @@ export default function ContractorWalletAttendance() {
         // ✅ DON'T update state optimistically - let backend emit jobUpdated + walletUpdated
         // This ensures UI reflects authoritative backend state, not optimistic guess
         setCurrentPaymentJobId(null);
+        setCurrentPaymentWorkerPhone(null);
       } else {
         showAppModal("error", t('error'), verifyData.message || t('paymentFailed'));
       }
@@ -775,14 +817,14 @@ export default function ContractorWalletAttendance() {
         <View style={styles.attendanceButtons}>
           <TouchableOpacity
             style={[styles.presentButton, { backgroundColor: "#2ecc71" }]}
-            onPress={() => markAttendance(item._id, "Present")}
+            onPress={() => markAttendance(item.rootJobId || item._id, "Present", item.workerPhone)}
           >
             <Text style={styles.buttonText}>Present</Text>
           </TouchableOpacity>
 
           <TouchableOpacity
             style={[styles.absentButton, { backgroundColor: "#e74c3c" }]}
-            onPress={() => markAttendance(item._id, "Absent")}
+            onPress={() => markAttendance(item.rootJobId || item._id, "Absent", item.workerPhone)}
           >
             <Text style={styles.buttonText}>Absent</Text>
           </TouchableOpacity>
@@ -807,7 +849,7 @@ export default function ContractorWalletAttendance() {
                 padding: 12,
                 borderRadius: 8,
               }}
-              onPress={() => setPayOptionsJobId(item._id)}
+              onPress={() => setPayOptionsTarget({ jobId: item.rootJobId || item._id, workerPhone: item.workerPhone })}
             >
               <Text style={{ color: "#fff", fontWeight: "600", textAlign: "center" }}>
                 Pay Now
@@ -815,7 +857,7 @@ export default function ContractorWalletAttendance() {
             </TouchableOpacity>
           )}
 
-          {item.paymentStatus === "Paid" && !item.rating && (
+          {item.paymentStatus === "Paid" && !item.rating && !item.isBulkWorkerEntry && (
             <TouchableOpacity
               style={{
                 marginTop: 15,
@@ -860,7 +902,7 @@ export default function ContractorWalletAttendance() {
       )}
     </View>
     ),
-    [markAttendance, setPayOptionsJobId, handleOpenRatingModal]
+    [markAttendance, setPayOptionsTarget, handleOpenRatingModal]
   );
 
   // ✅ Reset pagination when jobs data changes
@@ -1327,12 +1369,12 @@ export default function ContractorWalletAttendance() {
       )}
 
       {/* ✅ Pay Options Modal - Moved outside FlatList for safety & performance */}
-      <Modal visible={payOptionsJobId !== null} transparent animationType="fade">
+      <Modal visible={payOptionsTarget !== null} transparent animationType="fade">
         <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: 'rgba(0,0,0,0.4)' }}>
           {/* Backdrop - closes when tapped outside modal */}
           <TouchableOpacity
             activeOpacity={1}
-            onPress={() => setPayOptionsJobId(null)}
+            onPress={() => setPayOptionsTarget(null)}
             style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }}
           />
 
@@ -1341,7 +1383,7 @@ export default function ContractorWalletAttendance() {
 
             <TouchableOpacity
               style={{ padding: 12, borderRadius: 8, backgroundColor: '#f3f4f6', marginBottom: 8 }}
-              onPress={() => payOptionsJobId && handlePayOption(payOptionsJobId, 'Cash')}
+              onPress={() => payOptionsTarget && handlePayOption(payOptionsTarget.jobId, 'Cash', payOptionsTarget.workerPhone)}
             >
               <Text style={{ fontWeight: '600' }}>Pay via Cash</Text>
               <Text style={{ color: '#666', marginTop: 4 }}>Worker will be paid cash on site</Text>
@@ -1349,7 +1391,7 @@ export default function ContractorWalletAttendance() {
 
             <TouchableOpacity
               style={{ padding: 12, borderRadius: 8, backgroundColor: '#e6f7ff' }}
-              onPress={() => payOptionsJobId && handlePayOption(payOptionsJobId, 'Online')}
+              onPress={() => payOptionsTarget && handlePayOption(payOptionsTarget.jobId, 'Online', payOptionsTarget.workerPhone)}
             >
               <Text style={{ fontWeight: '600' }}>Pay via Online</Text>
               <Text style={{ color: '#666', marginTop: 4 }}>Use online wallet / UPI</Text>

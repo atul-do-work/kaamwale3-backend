@@ -10,6 +10,7 @@ import {
   Modal,
   Platform,
   Image,
+  Linking,
 } from "react-native";
 import * as Notifications from 'expo-notifications'; // ✅ For foreground notifications
 import { useFocusEffect } from "@react-navigation/native";
@@ -30,6 +31,8 @@ import {
 
 const WORKER_NAME_FALLBACK = "Test Worker";
 const AUTO_DECLINE_SECONDS = 30;
+const EMERGENCY_CALL_NUMBER = "112";
+const SUPPORT_CALL_NUMBER = "18001234567";
 
 // ============= ERROR BOUNDARY CLASS =============
 class ErrorBoundary extends React.Component<
@@ -191,7 +194,6 @@ function WorkerHome() {
   const [todayIncentiveEarnings, setTodayIncentiveEarnings] = useState<number>(0);
   const [notificationCount, setNotificationCount] = useState<number>(0);
   const [workerProfilePhoto, setWorkerProfilePhoto] = useState<string | null>(null); // ✅ Worker profile photo
-  const [showHelpModal, setShowHelpModal] = useState<boolean>(false); // ✅ Help modal state
 
   // Online/Offline toggle state
   const [isOnline, setIsOnline] = useState<boolean>(false);
@@ -210,6 +212,29 @@ function WorkerHome() {
   const [showSetupWageMenu, setShowSetupWageMenu] = useState<boolean>(false);
 
   const router = useRouter();
+
+  const dialNumber = async (number: string) => {
+    const telUrl = `tel:${number}`;
+    try {
+      const supported = await Linking.canOpenURL(telUrl);
+      if (!supported) {
+        Alert.alert("Error", "Calling is not supported on this device.");
+        return;
+      }
+      await Linking.openURL(telUrl);
+    } catch {
+      Alert.alert("Error", "Could not start the call.");
+    }
+  };
+
+  const openSupportCallOptions = () => {
+    const supportNumber = currentJob?.contractorPhone || SUPPORT_CALL_NUMBER;
+    Alert.alert("Need Help?", "Choose an option", [
+      { text: "Cancel", style: "cancel" },
+      { text: "Emergency Call", style: "destructive", onPress: () => dialNumber(EMERGENCY_CALL_NUMBER) },
+      { text: "Support Call", onPress: () => dialNumber(supportNumber) },
+    ]);
+  };
 
   const [timer, setTimer] = useState<number>(AUTO_DECLINE_SECONDS);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -1023,6 +1048,41 @@ function WorkerHome() {
     }
   }, [token, calculateMetrics]);
 
+  // Refresh weekly overall statistics at week boundary (Monday 12:00 AM local).
+  useEffect(() => {
+    if (!token) return;
+
+    let weekTimeout: ReturnType<typeof setTimeout> | null = null;
+    let weekInterval: ReturnType<typeof setInterval> | null = null;
+
+    const runRefresh = () => {
+      calculateMetrics();
+      fetchNotificationCount();
+    };
+
+    const scheduleWeeklyRefresh = () => {
+      const now = new Date();
+      const boundary = new Date(now);
+      boundary.setHours(0, 0, 0, 0);
+      const day = boundary.getDay(); // 0=Sun
+      const daysToNextMonday = day === 0 ? 1 : 8 - day;
+      boundary.setDate(boundary.getDate() + daysToNextMonday);
+
+      const msUntilBoundary = Math.max(1000, boundary.getTime() - now.getTime());
+      weekTimeout = setTimeout(() => {
+        runRefresh();
+        weekInterval = setInterval(runRefresh, 7 * 24 * 60 * 60 * 1000);
+      }, msUntilBoundary);
+    };
+
+    scheduleWeeklyRefresh();
+
+    return () => {
+      if (weekTimeout) clearTimeout(weekTimeout);
+      if (weekInterval) clearInterval(weekInterval);
+    };
+  }, [token, calculateMetrics]);
+
   // Refresh daily metrics exactly at local midnight so Today's Overview resets without app restart.
   useEffect(() => {
     if (!token) return;
@@ -1569,6 +1629,9 @@ function WorkerHome() {
 
       <View style={styles.topSection}>
         <WorkerMap style={styles.map} />
+        <TouchableOpacity style={styles.mapHelpIcon} onPress={openSupportCallOptions}>
+          <MaterialIcons name="notification-important" size={22} color="#fff" />
+        </TouchableOpacity>
       </View>
 
       {/* ✅ FIXED: Always render Modal component (not conditionally) to ensure it can appear when job arrives */}
@@ -1600,9 +1663,7 @@ function WorkerHome() {
                 {currentJob.contractorPhone && (
                   <TouchableOpacity 
                     style={styles.helpButton}
-                    onPress={() => {
-                      setShowHelpModal(true);
-                    }}
+                    onPress={openSupportCallOptions}
                   >
                     <MaterialIcons name="phone" size={28} color="#2ecc71" />
                   </TouchableOpacity>
@@ -1985,25 +2046,6 @@ function WorkerHome() {
         </TouchableOpacity>
       </Modal>
 
-      {/* ✅ Help Modal - "Team will call you in 5 minutes" */}
-      <Modal visible={showHelpModal} animationType="fade" transparent={true}>
-        <View style={styles.helpModalContainer}>
-          <View style={styles.helpModalContent}>
-            <MaterialIcons name="phone" size={48} color="#2ecc71" style={{ marginBottom: 16 }} />
-            <Text style={styles.helpModalTitle}>Help Request Sent!</Text>
-            <Text style={styles.helpModalMessage}>
-              The team will call you in 5 minutes
-            </Text>
-            <TouchableOpacity 
-              style={styles.helpModalButton}
-              onPress={() => setShowHelpModal(false)}
-            >
-              <Text style={styles.helpModalButtonText}>OK</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </Modal>
-
       {/* ✅ POST-LOGIN LOCATION PERMISSION MODAL */}
       <Modal visible={showLocationModal} transparent animationType="fade">
         <TouchableOpacity 
@@ -2193,6 +2235,22 @@ const styles = StyleSheet.create({
     fontWeight: "700",
   },
   topSection: { zIndex: 0, marginBottom: -1, overflow: "hidden", backgroundColor: "#f5f5f5" },
+  mapHelpIcon: {
+    position: "absolute",
+    right: 14,
+    bottom: 14,
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    backgroundColor: "#ef4444",
+    alignItems: "center",
+    justifyContent: "center",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 4,
+    elevation: 5,
+  },
   map: { width: "100%", height: 350 },
   horizontalScrollContainer: { marginTop: -2, paddingLeft: 12, paddingBottom: 8 },
   jobCard: {

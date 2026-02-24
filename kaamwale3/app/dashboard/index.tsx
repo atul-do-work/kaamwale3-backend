@@ -27,9 +27,13 @@ interface Job {
   description: string;
   amount: string;
   contractorName: string;
+  contractorPhone?: string;
   acceptedBy: string;
   status: string;
   timestamp: string;
+  createdAt?: string;
+  date?: string;
+  isCancelled?: boolean;
   attendanceStatus?: 'Present' | 'Absent' | null;
   paymentStatus?: 'Paid' | null;
   acceptedWorker?: {
@@ -113,6 +117,7 @@ export default function DashboardScreen() {
   const [loading, setLoading] = useState(true);
   const [token, setToken] = useState<string>('');
   const [dateRange, setDateRange] = useState<'today' | 'week' | 'month'>('today');
+  const [showAllTodayAcceptances, setShowAllTodayAcceptances] = useState(false);
   const [stats, setStats] = useState<AggregatedStats | null>(null);
   
   // Worker details modal state
@@ -448,9 +453,13 @@ export default function DashboardScreen() {
       if (!res.ok) throw new Error('Failed to fetch jobs');
 
       const data: Job[] = await res.json();
-      const myJobs = data.filter(
-        (j) => j.contractorName === name && j.status === 'accepted'
-      );
+      const authPhone = authUser?.phone;
+      const myJobs = data.filter((j) => {
+        const isMineByPhone = !!authPhone && j.contractorPhone === authPhone;
+        const isMineByName = j.contractorName === name;
+        const isCancelled = j.isCancelled === true || String(j.status || '').toLowerCase() === 'cancelled';
+        return (isMineByPhone || isMineByName) && !isCancelled;
+      });
 
       setJobs(myJobs);
     } catch (err) {
@@ -508,6 +517,7 @@ export default function DashboardScreen() {
 
   const handleDateRangeChange = async (newRange: 'today' | 'week' | 'month') => {
     setDateRange(newRange);
+    setShowAllTodayAcceptances(false);
     if (token) {
       await fetchStats(token, newRange);
     }
@@ -609,14 +619,44 @@ export default function DashboardScreen() {
     );
   }
 
+  const getJobDate = (job: Job) => {
+    const raw = job.timestamp || job.createdAt || job.date;
+    const parsed = raw ? new Date(raw) : new Date(0);
+    return Number.isNaN(parsed.getTime()) ? new Date(0) : parsed;
+  };
+
+  const isJobInSelectedRange = (job: Job) => {
+    const jobDate = getJobDate(job);
+    const now = new Date();
+    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+
+    if (dateRange === 'today') {
+      const tomorrowStart = new Date(todayStart);
+      tomorrowStart.setDate(tomorrowStart.getDate() + 1);
+      return jobDate >= todayStart && jobDate < tomorrowStart;
+    }
+
+    if (dateRange === 'week') {
+      const weekStart = new Date(todayStart);
+      weekStart.setDate(weekStart.getDate() - 6);
+      return jobDate >= weekStart;
+    }
+
+    const monthStart = new Date(todayStart);
+    monthStart.setDate(monthStart.getDate() - 29);
+    return jobDate >= monthStart;
+  };
+
   const today = new Date().toDateString();
   // ✅ Show jobs that were ACCEPTED today (not just jobs with attendance marked)
   const jobsWithAttendance = jobs.filter((j) => {
-    if (!j.acceptedBy) return false; // Only accepted jobs
-    // Check if accepted timestamp matches today
-    const acceptedDate = new Date(j.timestamp).toDateString();
+    if (!j.acceptedBy) return false;
+    const acceptedDate = getJobDate(j).toDateString();
     return acceptedDate === today;
   });
+  const visibleTodayAcceptances = showAllTodayAcceptances ? jobsWithAttendance : jobsWithAttendance.slice(0, 2);
+  const hasMoreTodayAcceptances = jobsWithAttendance.length > 2;
+  const jobsForWeekOrMonth = jobs.filter((j) => isJobInSelectedRange(j));
 
   return (
     <ScrollView style={styles.container}>
@@ -696,7 +736,7 @@ export default function DashboardScreen() {
           ) : jobsWithAttendance.length === 0 ? (
             <Text style={styles.noDataText}>{t('noWorkersAcceptedJobToday')}</Text>
           ) : (
-            jobsWithAttendance.map((job) => (
+            visibleTodayAcceptances.map((job) => (
               <View key={job._id} style={styles.workerCard}>
                 {/* Background bubbles for visual appeal */}
                 <View style={[styles.cardBubble, { position: 'absolute', left: 10, top: 10, backgroundColor: 'rgba(108, 92, 231, 0.08)' }]} />
@@ -729,17 +769,23 @@ export default function DashboardScreen() {
               </View>
             ))
           )}
+          {!loading && hasMoreTodayAcceptances && !showAllTodayAcceptances && (
+            <TouchableOpacity onPress={() => setShowAllTodayAcceptances(true)} style={styles.seeMoreBtn}>
+              <Text style={styles.seeMoreText}>See more</Text>
+            </TouchableOpacity>
+          )}
         </View>
       )}
 
       {/* All Jobs Section */}
+      {dateRange !== 'today' && (
       <View style={styles.sectionContainer}>
         <Text style={styles.sectionTitle}>{t('allPostedJobs')}</Text>
 
-        {jobs.length === 0 ? (
+        {jobsForWeekOrMonth.length === 0 ? (
           <Text style={styles.noDataText}>{t('noJobsPostedYet')}</Text>
         ) : (
-          jobs.map((job) => (
+          jobsForWeekOrMonth.map((job) => (
             <TouchableOpacity key={job._id} style={styles.jobCard} onPress={() => handleJobCardClick(job)}>
               <View style={styles.jobCardHeader}>
                 <Text style={styles.jobCardTitle}>{job.title}</Text>
@@ -747,7 +793,7 @@ export default function DashboardScreen() {
               </View>
               <Text style={styles.jobDescription}>{job.description}</Text>
               <View style={styles.jobCardFooter}>
-                <Text style={styles.workerAccepted}>Worker: {job.acceptedBy}</Text>
+                <Text style={styles.workerAccepted}>Worker: {job.acceptedBy || 'Not accepted yet'}</Text>
                 <View
                   style={[
                     styles.statusBadge,
@@ -766,6 +812,7 @@ export default function DashboardScreen() {
           ))
         )}
       </View>
+      )}
 
       {/* Performance Tips */}
       <View style={styles.tipsContainer}>
@@ -1249,6 +1296,17 @@ const styles = StyleSheet.create({
     color: '#b2bec3',
     fontSize: 14,
     paddingVertical: 20,
+  },
+  seeMoreBtn: {
+    alignSelf: 'center',
+    marginTop: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 8,
+  },
+  seeMoreText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#1a2f4d',
   },
  
   tipsContainer: {

@@ -51,6 +51,11 @@ function createJobsLifecycleCoreRouter({
           profilePhoto: userRecord?.profilePhoto || null,
           location: workerRecord?.location || null,
           acceptedAt: new Date(),
+          attendanceStatus: null,
+          attendanceTime: null,
+          paymentStatus: "Pending",
+          paymentMode: null,
+          paymentTime: null,
         };
       } catch (e) {
         console.error("Error fetching worker record for accept snapshot:", e);

@@ -46,27 +46,78 @@ function createContractorStatsRouter() {
 
   router.get("/contractor/stats", authenticateToken, async (req, res) => {
     try {
-      const { phone } = req.user;
+      const { phone, name } = req.user;
       const { range = "today" } = req.query;
 
-      const startDate = new Date();
+      const now = new Date();
+      const startDate = new Date(now);
       startDate.setHours(0, 0, 0, 0);
+      const endDate = new Date(now);
+      endDate.setHours(23, 59, 59, 999);
 
       if (range === "week") {
-        startDate.setDate(startDate.getDate() - 7);
+        startDate.setDate(startDate.getDate() - 6);
       } else if (range === "month") {
-        startDate.setMonth(startDate.getMonth() - 1);
+        startDate.setDate(startDate.getDate() - 29);
       }
 
-      const stats = await ContractorStats.find({
-        phone,
-        date: { $gte: startDate },
-      }).sort({ date: -1 });
+      const jobQuery = {
+        $and: [
+          {
+            $or: [
+              { contractorPhone: phone },
+              ...(name ? [{ contractorName: name }] : []),
+            ],
+          },
+          {
+            $or: [{ isCancelled: { $exists: false } }, { isCancelled: { $ne: true } }],
+          },
+          { status: { $ne: "cancelled" } },
+          { createdAt: { $gte: startDate, $lte: endDate } },
+        ],
+      };
+
+      const jobs = await Job.find(jobQuery).lean();
+
+      const dayMap = new Map();
+      for (const job of jobs) {
+        const day = new Date(job.createdAt || now);
+        day.setHours(0, 0, 0, 0);
+        const dayKey = day.toISOString();
+        if (!dayMap.has(dayKey)) {
+          dayMap.set(dayKey, {
+            phone,
+            date: day,
+            jobsPosted: 0,
+            jobsCompleted: 0,
+            workersList: [],
+            totalSpending: 0,
+          });
+        }
+
+        const bucket = dayMap.get(dayKey);
+        bucket.jobsPosted += 1;
+        if (job.paymentStatus === "Paid") {
+          bucket.jobsCompleted += 1;
+          bucket.totalSpending += Number(job.amount) || 0;
+        }
+        if (job.acceptedBy) {
+          bucket.workersList.push(job.acceptedBy);
+        }
+      }
+
+      const stats = Array.from(dayMap.values())
+        .map((s) => ({
+          ...s,
+          workersList: [...new Set(s.workersList.filter(Boolean))],
+          workersEngaged: [...new Set(s.workersList.filter(Boolean))].length,
+        }))
+        .sort((a, b) => new Date(b.date) - new Date(a.date));
 
       const aggregated = {
         totalJobsPosted: stats.reduce((sum, s) => sum + s.jobsPosted, 0),
         totalJobsCompleted: stats.reduce((sum, s) => sum + s.jobsCompleted, 0),
-        totalWorkersEngaged: new Set(stats.flatMap((s) => s.workersList)).size,
+        totalWorkersEngaged: new Set(stats.flatMap((s) => s.workersList || [])).size,
         totalSpending: stats.reduce((sum, s) => sum + s.totalSpending, 0),
         avgJobsPerDay:
           stats.length > 0
@@ -112,7 +163,11 @@ function createContractorStatsRouter() {
   router.post("/contractor/stats/update-from-jobs", authenticateToken, async (req, res) => {
     try {
       const { phone } = req.user;
-      const jobs = await Job.find({ contractorName: phone });
+      const jobs = await Job.find({
+        contractorPhone: phone,
+        isCancelled: { $ne: true },
+        status: { $ne: "cancelled" },
+      });
 
       const today = new Date();
       today.setHours(0, 0, 0, 0);

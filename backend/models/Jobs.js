@@ -65,6 +65,11 @@ const jobSchema = new mongoose.Schema(
         name: String,
         profilePhoto: String,
         acceptedAt: Date,
+        attendanceStatus: { type: String, enum: ["Present", "Absent", null], default: null },
+        attendanceTime: Date,
+        paymentStatus: { type: String, enum: PAYMENT_STATUS, default: "Pending" },
+        paymentMode: String,
+        paymentTime: Date,
         skills: [String],
         location: {
           type: { type: String, enum: ['Point'], default: 'Point' },

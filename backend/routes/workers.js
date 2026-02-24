@@ -271,10 +271,19 @@ function createWorkersRouter({
         return res.status(401).json({ success: false, message: "Not authenticated" });
       }
 
-      const todayStart = new Date();
+      const now = new Date();
+      const todayStart = new Date(now);
       todayStart.setHours(0, 0, 0, 0);
       const todayEnd = new Date(todayStart);
       todayEnd.setDate(todayEnd.getDate() + 1);
+
+      // Week window: Monday 00:00 -> next Monday 00:00 (local time)
+      const weekStart = new Date(todayStart);
+      const dayOfWeek = weekStart.getDay(); // 0=Sunday, 1=Monday...
+      const diffToMonday = (dayOfWeek + 6) % 7;
+      weekStart.setDate(weekStart.getDate() - diffToMonday);
+      const weekEnd = new Date(weekStart);
+      weekEnd.setDate(weekEnd.getDate() + 7);
 
       const workerJobQuery = {
         $or: [
@@ -291,25 +300,41 @@ function createWorkersRouter({
         .select("amount paymentTime timeSpentMinutes rating")
         .lean();
 
-      const historyCount = await Job.countDocuments(workerJobQuery);
-
       const todayCompletedJobs = completedJobs.filter((j) => {
         const d = j.paymentTime ? new Date(j.paymentTime) : null;
         return d && d >= todayStart && d < todayEnd;
+      });
+      const weeklyCompletedJobs = completedJobs.filter((j) => {
+        const d = j.paymentTime ? new Date(j.paymentTime) : null;
+        return d && d >= weekStart && d < weekEnd;
       });
 
       const todayEarnings = todayCompletedJobs.reduce((sum, j) => sum + (Number(j.amount) || 0), 0);
       const timeOnOrder = todayCompletedJobs.reduce((sum, j) => sum + (Number(j.timeSpentMinutes) || 0), 0);
       const todayJobs = todayCompletedJobs.length;
-      const totalEarnings = completedJobs.reduce((sum, j) => sum + (Number(j.amount) || 0), 0);
-      const jobsCompleted = completedJobs.length;
+      const totalEarnings = weeklyCompletedJobs.reduce((sum, j) => sum + (Number(j.amount) || 0), 0);
+      const jobsCompleted = weeklyCompletedJobs.length;
 
-      const ratings = completedJobs
+      const ratings = weeklyCompletedJobs
         .map((j) => Number(j.rating?.stars || 0))
         .filter((v) => Number.isFinite(v) && v > 0);
-      const avgCompletedRating = ratings.length
+      let avgCompletedRating = ratings.length
         ? Number((ratings.reduce((s, v) => s + v, 0) / ratings.length).toFixed(2))
         : 0;
+
+      // Source-of-truth rating for worker profile/overall summary.
+      const workerDoc = await WorkerModel.findOne({ phone: workerPhone })
+        .select("performanceMetrics.averageRating rating")
+        .lean();
+      const persistedAvg = Number(workerDoc?.performanceMetrics?.averageRating || workerDoc?.rating || 0);
+      if (persistedAvg > 0) {
+        avgCompletedRating = Number(persistedAvg.toFixed(2));
+      }
+
+      const historyCount = await Job.countDocuments({
+        ...workerJobQuery,
+        createdAt: { $gte: weekStart, $lt: weekEnd },
+      });
 
       const wallet = await Wallet.findOne({ phone: workerPhone }).select("transactions").lean();
       const transactions = Array.isArray(wallet?.transactions) ? wallet.transactions : [];
@@ -317,12 +342,16 @@ function createWorkersRouter({
         .filter((t) => String(t?.type || "").toLowerCase() === "incentive_reward")
         .filter((t) => {
           const d = new Date(t?.date || 0);
-          return !Number.isNaN(d.getTime()) && d >= todayStart && d < todayEnd;
+          return !Number.isNaN(d.getTime()) && d >= weekStart && d < weekEnd;
         })
         .reduce((sum, t) => sum + (Number(t?.amount) || 0), 0);
 
       return res.json({
         success: true,
+        weekWindow: {
+          start: weekStart,
+          end: weekEnd,
+        },
         stats: {
           todayEarnings,
           timeOnOrder,
