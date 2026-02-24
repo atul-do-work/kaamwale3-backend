@@ -18,6 +18,11 @@ const withdrawalSchema = new mongoose.Schema(
     retryCount: { type: Number, default: 0 },
     failureReason: { type: String, default: null },
     reconciledAt: { type: Date, default: null },
+    balanceSource: {
+      type: String,
+      enum: ['available', 'pocket'],
+      default: 'available',
+    },
     bankSnapshot: {
       accountHolderName: String,
       maskedAccount: String,
@@ -32,4 +37,3 @@ const withdrawalSchema = new mongoose.Schema(
 withdrawalSchema.index({ phone: 1, createdAt: -1 });
 
 module.exports = mongoose.model('Withdrawal', withdrawalSchema);
-

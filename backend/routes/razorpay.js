@@ -442,10 +442,17 @@ router.post('/webhook', async (req, res) => {
     const jobId = notes?.jobId;
     const actualAmount = amount / 100; // Convert from paise
 
+    // Wallet deposits are handled by /wallet/deposit/webhook route.
+    if (String(notes?.type || "").toLowerCase() === "wallet_deposit") {
+      console.log(`ℹ️ Ignoring wallet deposit event on payment webhook: ${paymentId}`);
+      await session.commitTransaction();
+      return res.status(200).json({ received: true, ignored: "wallet_deposit" });
+    }
+
     if (!workerPhone || !jobId) {
-      console.error('🔴 Missing workerPhone or jobId in payment notes');
-      await session.abortTransaction();
-      return res.status(400).json({ success: false, message: 'Invalid payment notes' });
+      console.warn(`⚠️ Ignoring payment webhook without workerPhone/jobId notes: ${paymentId}`);
+      await session.commitTransaction();
+      return res.status(200).json({ received: true, ignored: "missing_job_notes" });
     }
 
     console.log(`💰 Webhook processing payment: ${paymentId}, Amount: ₹${actualAmount}, Worker: ${workerPhone}`);

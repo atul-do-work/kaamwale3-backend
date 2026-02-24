@@ -600,6 +600,8 @@ router.post("/withdraw", authenticateToken, withdrawLimiter, async (req, res) =>
     if (!(await requirePayoutAccess(req, res))) return;
     const { amount, payoutMethod: payoutMethodInput } = req.body;
     const payoutMethod = String(payoutMethodInput || "bank").toLowerCase();
+    const isWorker = String(req.user?.role || "").toLowerCase() === "worker";
+    const balanceSource = isWorker ? "pocket" : "available";
     
     // 🔐 STEP 1: INPUT VALIDATION - Numeric type safety
     if (amount === undefined || amount === null) {
@@ -682,20 +684,28 @@ router.post("/withdraw", authenticateToken, withdrawLimiter, async (req, res) =>
       return res.status(404).json({ success: false, message: "Wallet not found. Please login again." });
     }
     const openingBalance = Number(
-      existingWalletBeforeWithdraw.availableBalance ?? existingWalletBeforeWithdraw.balance ?? 0
+      isWorker
+        ? (existingWalletBeforeWithdraw.pocketBalance ?? 0)
+        : (existingWalletBeforeWithdraw.availableBalance ?? existingWalletBeforeWithdraw.balance ?? 0)
     );
     const closingBalance = openingBalance - withdrawAmount;
 
     const wallet = await Wallet.findOneAndUpdate(
       {
         phone: req.user.phone,
-        $or: [
-          { availableBalance: { $gte: withdrawAmount } },
-          { availableBalance: { $exists: false }, balance: { $gte: withdrawAmount } },
-        ], // Only proceed if available balance is sufficient
+        ...(isWorker
+          ? { pocketBalance: { $gte: withdrawAmount } }
+          : {
+              $or: [
+                { availableBalance: { $gte: withdrawAmount } },
+                { availableBalance: { $exists: false }, balance: { $gte: withdrawAmount } },
+              ],
+            }),
       },
       {
-        $inc: { balance: -withdrawAmount, availableBalance: -withdrawAmount }, // Atomically decrement withdrawable balance
+        $inc: isWorker
+          ? { pocketBalance: -withdrawAmount }
+          : { balance: -withdrawAmount, availableBalance: -withdrawAmount },
         $push: {
           transactions: appendAuditFields({
             type: "withdraw",
@@ -711,8 +721,8 @@ router.post("/withdraw", authenticateToken, withdrawLimiter, async (req, res) =>
             provider: "razorpay",
             metadata:
               payoutMethod === "bank"
-                ? { payoutMethod: "bank", bankMasked: bankAccount.maskedAccount }
-                : { payoutMethod: "upi", upiMasked: upiDetails.maskedUpiId },
+                ? { payoutMethod: "bank", bankMasked: bankAccount.maskedAccount, balanceSource }
+                : { payoutMethod: "upi", upiMasked: upiDetails.maskedUpiId, balanceSource },
           })
         }
       },
@@ -729,6 +739,7 @@ router.post("/withdraw", authenticateToken, withdrawLimiter, async (req, res) =>
       phone: req.user.phone,
       amount: withdrawAmount,
       status: 'initiated',
+      balanceSource,
       walletTransactionId: latestTransaction?._id || null,
       provider: 'razorpay',
       bankSnapshot:
@@ -773,6 +784,7 @@ router.post("/withdraw", authenticateToken, withdrawLimiter, async (req, res) =>
       availableBalance: Number(wallet.availableBalance || wallet.balance || 0),
       pocketBalance: Number(wallet.pocketBalance || 0),
       withdrawalAmount: withdrawAmount,
+      balanceSource,
       payoutMethod,
       bankAccount: bankAccount?.maskedAccount || null,
       upiId: upiDetails?.maskedUpiId || null,
@@ -1014,10 +1026,20 @@ router.post("/payout/webhook", async (req, res) => {
           (tx) => tx.providerEventId === rollbackEventId
         );
         if (!alreadyRolledBack) {
-          const openingBalance = Number(wallet.availableBalance ?? wallet.balance ?? 0);
+          const source = String(withdrawal.balanceSource || "available");
+          const fromPocket = source === "pocket";
+          const openingBalance = Number(
+            fromPocket
+              ? (wallet.pocketBalance ?? 0)
+              : (wallet.availableBalance ?? wallet.balance ?? 0)
+          );
           const closingBalance = openingBalance + Number(withdrawal.amount || 0);
-          wallet.availableBalance = closingBalance;
-          wallet.balance = closingBalance;
+          if (fromPocket) {
+            wallet.pocketBalance = closingBalance;
+          } else {
+            wallet.availableBalance = closingBalance;
+            wallet.balance = closingBalance;
+          }
           wallet.transactions.push(
             appendAuditFields({
               type: "refund",
@@ -1029,7 +1051,7 @@ router.post("/payout/webhook", async (req, res) => {
               source: "webhook",
               provider: "razorpay",
               providerEventId: rollbackEventId,
-              metadata: { payoutEvent: event, payoutId },
+              metadata: { payoutEvent: event, payoutId, balanceSource: source },
             })
           );
           await wallet.save();
