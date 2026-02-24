@@ -686,6 +686,10 @@
                     <i class="fas fa-file-invoice-dollar"></i>
                     <span>Premium Reconciliation</span>
                 </a>
+                <a href="#" class="nav-item" data-section="ops-console">
+                    <i class="fas fa-tools"></i>
+                    <span>Ops Console</span>
+                </a>
                 <hr style="margin-top: 20px; opacity: 0.2;">
                 <a href="#" class="nav-item" onclick="logout()">
                     <i class="fas fa-sign-out-alt"></i>
@@ -1212,6 +1216,116 @@
                     </table>
                 </div>
             </div>
+
+            <!-- Ops Console Section -->
+            <div id="ops-console" class="data-section">
+                <div class="section-header">
+                    <h2>Ops Console (Admin Only)</h2>
+                </div>
+
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
+                    <div style="background:#f9fafb;padding:14px;border-radius:10px;border:1px solid #e5e7eb;">
+                        <h4>Global Search</h4>
+                        <div style="display:flex;gap:8px;">
+                            <input id="opsSearchQ" class="search-box" placeholder="phone / name / id" style="width:100%;">
+                            <button class="btn-small btn-view" onclick="runOpsSearch()">Search</button>
+                        </div>
+                        <div id="opsSearchOut" style="margin-top:10px;max-height:220px;overflow:auto;background:#fff;padding:10px;border-radius:8px;font-size:12px;border:1px solid #e5e7eb;"></div>
+                    </div>
+
+                    <div style="background:#f9fafb;padding:14px;border-radius:10px;border:1px solid #e5e7eb;">
+                        <h4>Worker Control</h4>
+                        <input id="opsWorkerPhone" class="search-box" placeholder="Worker phone" style="width:100%;margin-bottom:8px;">
+                        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+                            <button class="btn-small btn-reject" onclick="opsWorkerControl(true)">Block</button>
+                            <button class="btn-small btn-approve" onclick="opsWorkerControl(false)">Unblock</button>
+                        </div>
+                        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px;">
+                            <input id="opsRiskAdd" class="search-box" placeholder="Add risk flag">
+                            <input id="opsRiskRemove" class="search-box" placeholder="Remove risk flag">
+                        </div>
+                        <button class="btn-small btn-view" style="margin-top:8px;" onclick="opsForceOffline()">Force Offline</button>
+                    </div>
+                </div>
+
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:16px;">
+                    <div style="background:#f9fafb;padding:14px;border-radius:10px;border:1px solid #e5e7eb;">
+                        <h4>Jobs Control Center</h4>
+                        <input id="opsJobId" class="search-box" placeholder="Job ID" style="width:100%;margin-bottom:8px;">
+                        <input id="opsToWorkerPhone" class="search-box" placeholder="Reassign to worker phone" style="width:100%;margin-bottom:8px;">
+                        <input id="opsJobReason" class="search-box" placeholder="Reason" style="width:100%;margin-bottom:8px;">
+                        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+                            <button class="btn-small btn-view" onclick="opsJobAction('reassign')">Reassign</button>
+                            <button class="btn-small btn-reject" onclick="opsJobAction('manual-cancel')">Cancel</button>
+                            <button class="btn-small btn-view" onclick="opsJobAction('expire-now')">Expire</button>
+                            <button class="btn-small btn-approve" onclick="opsJobAction('reopen')">Reopen</button>
+                        </div>
+                        <button class="btn-small btn-view" style="margin-top:8px;" onclick="opsLoadTimeline()">Load Timeline</button>
+                        <div id="opsTimelineOut" style="margin-top:10px;max-height:200px;overflow:auto;background:#fff;padding:10px;border-radius:8px;font-size:12px;border:1px solid #e5e7eb;"></div>
+                    </div>
+
+                    <div style="background:#f9fafb;padding:14px;border-radius:10px;border:1px solid #e5e7eb;">
+                        <h4>Bulk Attendance / Payment</h4>
+                        <input id="opsBulkJobId" class="search-box" placeholder="Job ID" style="width:100%;margin-bottom:8px;">
+                        <input id="opsBulkWorkerPhone" class="search-box" placeholder="Worker phone" style="width:100%;margin-bottom:8px;">
+                        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+                            <button class="btn-small btn-approve" onclick="opsBulkAttendance('Present')">Present</button>
+                            <button class="btn-small btn-reject" onclick="opsBulkAttendance('Absent')">Absent</button>
+                        </div>
+                        <button class="btn-small btn-view" style="margin-top:8px;" onclick="opsBulkPay()">Mark Paid</button>
+                        <div id="opsBulkOut" style="margin-top:10px;max-height:200px;overflow:auto;background:#fff;padding:10px;border-radius:8px;font-size:12px;border:1px solid #e5e7eb;"></div>
+                    </div>
+                </div>
+
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:16px;">
+                    <div style="background:#f9fafb;padding:14px;border-radius:10px;border:1px solid #e5e7eb;">
+                        <h4>Ledger</h4>
+                        <input id="opsLedgerPhone" class="search-box" placeholder="Phone (optional)" style="width:100%;margin-bottom:8px;">
+                        <button class="btn-small btn-view" onclick="opsLoadLedger()">Load Ledger</button>
+                        <div id="opsLedgerOut" style="margin-top:10px;max-height:220px;overflow:auto;background:#fff;padding:10px;border-radius:8px;font-size:12px;border:1px solid #e5e7eb;"></div>
+                    </div>
+
+                    <div style="background:#f9fafb;padding:14px;border-radius:10px;border:1px solid #e5e7eb;">
+                        <h4>Wallet Adjustments (Maker-Checker)</h4>
+                        <input id="opsAdjPhone" class="search-box" placeholder="Phone" style="width:100%;margin-bottom:8px;">
+                        <input id="opsAdjAmount" class="search-box" placeholder="Amount" style="width:100%;margin-bottom:8px;">
+                        <input id="opsAdjReason" class="search-box" placeholder="Reason" style="width:100%;margin-bottom:8px;">
+                        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+                            <button class="btn-small btn-approve" onclick="opsCreateAdjustment('credit')">Request Credit</button>
+                            <button class="btn-small btn-reject" onclick="opsCreateAdjustment('debit')">Request Debit</button>
+                        </div>
+                        <button class="btn-small btn-view" style="margin-top:8px;" onclick="opsLoadAdjustments()">Refresh Queue</button>
+                        <div id="opsAdjOut" style="margin-top:10px;max-height:220px;overflow:auto;background:#f1f5f9;padding:8px;border-radius:8px;font-size:12px;"></div>
+                    </div>
+                </div>
+
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:16px;">
+                    <div style="background:#f9fafb;padding:14px;border-radius:10px;border:1px solid #e5e7eb;">
+                        <h4>Payout Queue</h4>
+                        <button class="btn-small btn-view" onclick="opsCreatePayoutBatch()">Create Weekly Batch</button>
+                        <button class="btn-small btn-view" onclick="opsLoadPayoutQueue()">Refresh Queue</button>
+                        <div id="opsPayoutOut" style="margin-top:10px;max-height:220px;overflow:auto;background:#fff;padding:10px;border-radius:8px;font-size:12px;border:1px solid #e5e7eb;"></div>
+                    </div>
+
+                    <div style="background:#f9fafb;padding:14px;border-radius:10px;border:1px solid #e5e7eb;">
+                        <h4>Incentives, Ratings, Leaderboard Debug</h4>
+                        <input id="opsDebugPhone" class="search-box" placeholder="Worker phone for incentive debug" style="width:100%;margin-bottom:8px;">
+                        <button class="btn-small btn-view" onclick="opsIncentiveDebug()">Incentive Debug</button>
+                        <button class="btn-small btn-view" onclick="opsRatingsCenter()">Ratings Center</button>
+                        <button class="btn-small btn-view" onclick="opsLeaderboardDebug()">Leaderboard Debug</button>
+                        <div id="opsDebugOut" style="margin-top:10px;max-height:220px;overflow:auto;background:#fff;padding:10px;border-radius:8px;font-size:12px;border:1px solid #e5e7eb;"></div>
+                    </div>
+                </div>
+
+                <div style="background:#f9fafb;padding:14px;border-radius:10px;border:1px solid #e5e7eb;margin-top:16px;">
+                    <h4>Analytics + Export</h4>
+                    <input id="opsFunnelCity" class="search-box" placeholder="City filter (optional)" style="width:100%;margin-bottom:8px;">
+                    <button class="btn-small btn-view" onclick="opsFunnel()">Load Funnel</button>
+                    <button class="btn-small btn-view" onclick="window.open(`${API_BASE}/admin/analytics/funnel/export.csv`, '_blank')">Export CSV</button>
+                    <button class="btn-small btn-view" onclick="window.open(`${API_BASE}/admin/analytics/funnel/export.excel`, '_blank')">Export Excel</button>
+                    <div id="opsFunnelOut" style="margin-top:10px;max-height:200px;overflow:auto;background:#fff;padding:10px;border-radius:8px;font-size:12px;border:1px solid #e5e7eb;"></div>
+                </div>
+            </div>
         </div>
     </div>
 
@@ -1276,6 +1390,24 @@
         let currentUser = null;
         let currentBankAccountId = null;
         let activeWalletDetailsPhone = null;
+        let authRedirectInProgress = false;
+
+        function getAdminToken() {
+            let token = localStorage.getItem('adminToken') || localStorage.getItem('token') || '';
+            token = String(token || '').trim();
+            if (token.startsWith('"') && token.endsWith('"')) token = token.slice(1, -1);
+            if (/^Bearer\s+/i.test(token)) token = token.replace(/^Bearer\s+/i, '');
+            return token;
+        }
+
+        function handleAuthFailure(message) {
+            if (authRedirectInProgress) return;
+            authRedirectInProgress = true;
+            localStorage.removeItem('adminToken');
+            localStorage.removeItem('token');
+            alert(message || 'Session expired. Please login again.');
+            window.location.href = '/admin/login.html';
+        }
 
         // Initialize
         document.addEventListener('DOMContentLoaded', () => {
@@ -1286,7 +1418,7 @@
 
         // Check authentication
         async function checkAuth() {
-            const token = localStorage.getItem('adminToken');
+            const token = getAdminToken();
             if (!token) {
                 window.location.href = '/admin/login.html';
                 return;
@@ -1297,7 +1429,10 @@
                     headers: { 'Authorization': `Bearer ${token}` }
                 });
 
-                if (!res.ok) throw new Error('Unauthorized');
+                if (!res.ok) {
+                    const payload = await res.json().catch(() => ({}));
+                    throw new Error(payload.message || 'Unauthorized');
+                }
 
                 const data = await res.json();
                 currentUser = data.user;
@@ -1311,8 +1446,7 @@
                 document.getElementById('userPhone').textContent = currentUser.phone;
             } catch (err) {
                 console.error('Auth error:', err);
-                localStorage.removeItem('adminToken');
-                window.location.href = '/admin/login.html';
+                handleAuthFailure(err.message || 'Unauthorized');
             }
         }
 
@@ -1351,6 +1485,7 @@
                 else if (sectionId === 'support') loadSupportTickets();
                 else if (sectionId === 'premium-subscriptions') loadPremiumSubscriptions();
                 else if (sectionId === 'premium-reconciliation') loadPremiumReconciliation();
+                else if (sectionId === 'ops-console') loadOpsConsole();
             }
         }
 
@@ -2624,6 +2759,466 @@
             modal.appendChild(img);
             modal.onclick = () => modal.remove();
             document.body.appendChild(modal);
+        }
+
+        async function adminApi(path, options = {}) {
+            const token = getAdminToken();
+            if (!token) {
+                handleAuthFailure('Missing session token. Please login again.');
+                throw new Error('Missing token');
+            }
+            const headers = {
+                'Authorization': `Bearer ${token}`,
+                ...(options.headers || {}),
+            };
+            if (options.body && !headers['Content-Type']) headers['Content-Type'] = 'application/json';
+            const res = await fetch(`${API_BASE}${path}`, { ...options, headers });
+            const data = await res.json().catch(() => ({}));
+            if (res.status === 401 || res.status === 403) {
+                handleAuthFailure(data.message || 'Token invalid');
+                throw new Error(data.message || 'Unauthorized');
+            }
+            if (!res.ok || data.success === false) throw new Error(data.message || `API error (${res.status})`);
+            return data;
+        }
+
+        function toPretty(value) {
+            return JSON.stringify(value || {}, null, 2);
+        }
+
+        function loadOpsConsole() {
+            const searchOut = document.getElementById('opsSearchOut');
+            if (searchOut && !searchOut.textContent) searchOut.textContent = 'Ready';
+        }
+
+        async function runOpsSearch() {
+            try {
+                const q = (document.getElementById('opsSearchQ').value || '').trim();
+                if (!q) return alert('Enter search query');
+                const data = await adminApi(`/admin/search?q=${encodeURIComponent(q)}`);
+                document.getElementById('opsSearchOut').textContent = toPretty(data.results);
+            } catch (err) {
+                alert(err.message);
+            }
+        }
+
+        async function opsWorkerControl(block) {
+            try {
+                const phone = (document.getElementById('opsWorkerPhone').value || '').trim();
+                if (!phone) return alert('Enter worker phone');
+                const addFlag = (document.getElementById('opsRiskAdd').value || '').trim();
+                const removeFlag = (document.getElementById('opsRiskRemove').value || '').trim();
+                const body = {
+                    block,
+                    blockReason: block ? 'Blocked by admin console' : '',
+                    addRiskFlags: addFlag ? [addFlag] : [],
+                    removeRiskFlags: removeFlag ? [removeFlag] : [],
+                };
+                const data = await adminApi(`/admin/workers/${encodeURIComponent(phone)}/control`, {
+                    method: 'PATCH',
+                    body: JSON.stringify(body),
+                });
+                document.getElementById('opsSearchOut').textContent = toPretty(data.worker);
+            } catch (err) {
+                alert(err.message);
+            }
+        }
+
+        async function opsForceOffline() {
+            try {
+                const phone = (document.getElementById('opsWorkerPhone').value || '').trim();
+                if (!phone) return alert('Enter worker phone');
+                const data = await adminApi(`/admin/workers/${encodeURIComponent(phone)}/control`, {
+                    method: 'PATCH',
+                    body: JSON.stringify({ forceOffline: true, forceOfflineReason: 'forced_by_admin_console' }),
+                });
+                document.getElementById('opsSearchOut').textContent = toPretty(data.worker);
+            } catch (err) {
+                alert(err.message);
+            }
+        }
+
+        async function opsJobAction(action) {
+            try {
+                const jobId = (document.getElementById('opsJobId').value || '').trim();
+                if (!jobId) return alert('Enter job ID');
+                const reason = (document.getElementById('opsJobReason').value || '').trim();
+                const toWorkerPhone = (document.getElementById('opsToWorkerPhone').value || '').trim();
+                const body = { reason };
+                if (action === 'reassign') {
+                    if (!toWorkerPhone) return alert('Enter worker phone for reassign');
+                    body.toWorkerPhone = toWorkerPhone;
+                }
+                const data = await adminApi(`/admin/jobs/${encodeURIComponent(jobId)}/${action}`, {
+                    method: 'POST',
+                    body: JSON.stringify(body),
+                });
+                document.getElementById('opsTimelineOut').textContent = toPretty(data.job || data);
+            } catch (err) {
+                alert(err.message);
+            }
+        }
+
+        async function opsLoadTimeline() {
+            try {
+                const jobId = (document.getElementById('opsJobId').value || '').trim();
+                if (!jobId) return alert('Enter job ID');
+                const data = await adminApi(`/admin/jobs/${encodeURIComponent(jobId)}/timeline`);
+                document.getElementById('opsTimelineOut').textContent = toPretty(data.events || []);
+            } catch (err) {
+                alert(err.message);
+            }
+        }
+
+        async function opsBulkAttendance(attendanceStatus) {
+            try {
+                const jobId = (document.getElementById('opsBulkJobId').value || '').trim();
+                const workerPhone = (document.getElementById('opsBulkWorkerPhone').value || '').trim();
+                if (!jobId || !workerPhone) return alert('Enter job ID and worker phone');
+                const data = await adminApi(`/admin/jobs/${encodeURIComponent(jobId)}/bulk/attendance`, {
+                    method: 'POST',
+                    body: JSON.stringify({ workerPhone, attendanceStatus }),
+                });
+                document.getElementById('opsBulkOut').textContent = toPretty(data);
+            } catch (err) {
+                alert(err.message);
+            }
+        }
+
+        async function opsBulkPay() {
+            try {
+                const jobId = (document.getElementById('opsBulkJobId').value || '').trim();
+                const workerPhone = (document.getElementById('opsBulkWorkerPhone').value || '').trim();
+                if (!jobId || !workerPhone) return alert('Enter job ID and worker phone');
+                const key = `admin_bulk_${jobId}_${workerPhone}_${Date.now()}`;
+                const data = await adminApi(`/admin/jobs/${encodeURIComponent(jobId)}/bulk/payment`, {
+                    method: 'POST',
+                    headers: { 'X-Idempotency-Key': key },
+                    body: JSON.stringify({ workerPhone, idempotencyKey: key, paymentMode: 'online' }),
+                });
+                document.getElementById('opsBulkOut').textContent = toPretty(data);
+            } catch (err) {
+                alert(err.message);
+            }
+        }
+
+        async function opsLoadLedger() {
+            try {
+                const phone = (document.getElementById('opsLedgerPhone').value || '').trim();
+                const qs = phone ? `?phone=${encodeURIComponent(phone)}` : '';
+                const data = await adminApi(`/admin/ledger${qs}`);
+                document.getElementById('opsLedgerOut').textContent = toPretty(data.rows || []);
+            } catch (err) {
+                alert(err.message);
+            }
+        }
+
+        async function opsCreateAdjustment(mode) {
+            try {
+                const phone = (document.getElementById('opsAdjPhone').value || '').trim();
+                const amount = Number((document.getElementById('opsAdjAmount').value || '').trim());
+                const reason = (document.getElementById('opsAdjReason').value || '').trim();
+                if (!phone || !Number.isFinite(amount) || amount <= 0) return alert('Enter valid phone and amount');
+                await adminApi('/admin/wallet-adjustments', {
+                    method: 'POST',
+                    body: JSON.stringify({ phone, amount, mode, reason }),
+                });
+                await opsLoadAdjustments();
+            } catch (err) {
+                alert(err.message);
+            }
+        }
+
+        async function opsLoadAdjustments() {
+            try {
+                const data = await adminApi('/admin/wallet-adjustments');
+                const wrap = document.getElementById('opsAdjOut');
+                wrap.innerHTML = (data.rows || []).map((r) => `
+                    <div style="padding:8px;margin-bottom:8px;border:1px solid #cbd5e1;border-radius:8px;">
+                        <div><strong>${r.id}</strong> | ${r.phone} | ${r.mode} ₹${r.amount} | ${r.status}</div>
+                        <div style="margin-top:6px;display:flex;gap:8px;">
+                            ${r.status === 'pending_approval' ? `
+                                <button class="btn-small btn-approve" onclick="opsApproveAdjustment('${r.id}')">Approve</button>
+                                <button class="btn-small btn-reject" onclick="opsRejectAdjustment('${r.id}')">Reject</button>
+                            ` : ''}
+                        </div>
+                    </div>
+                `).join('') || '<p>No adjustments</p>';
+            } catch (err) {
+                alert(err.message);
+            }
+        }
+
+        async function opsApproveAdjustment(id) {
+            try {
+                await adminApi(`/admin/wallet-adjustments/${encodeURIComponent(id)}/approve`, { method: 'POST' });
+                await opsLoadAdjustments();
+            } catch (err) {
+                alert(err.message);
+            }
+        }
+
+        async function opsRejectAdjustment(id) {
+            try {
+                await adminApi(`/admin/wallet-adjustments/${encodeURIComponent(id)}/reject`, {
+                    method: 'POST',
+                    body: JSON.stringify({ reason: 'Rejected from ops console' }),
+                });
+                await opsLoadAdjustments();
+            } catch (err) {
+                alert(err.message);
+            }
+        }
+
+        async function opsCreatePayoutBatch() {
+            try {
+                const data = await adminApi('/admin/payouts/batches', { method: 'POST', body: JSON.stringify({}) });
+                document.getElementById('opsPayoutOut').textContent = toPretty(data.batch || data);
+                await opsLoadPayoutQueue();
+            } catch (err) {
+                alert(err.message);
+            }
+        }
+
+        async function opsLoadPayoutQueue() {
+            try {
+                const data = await adminApi('/admin/payouts/queue');
+                document.getElementById('opsPayoutOut').textContent = toPretty(data.batches || []);
+            } catch (err) {
+                alert(err.message);
+            }
+        }
+
+        async function opsIncentiveDebug() {
+            try {
+                const phone = (document.getElementById('opsDebugPhone').value || '').trim();
+                if (!phone) return alert('Enter worker phone');
+                const data = await adminApi(`/admin/incentives/debug/${encodeURIComponent(phone)}`);
+                document.getElementById('opsDebugOut').textContent = toPretty(data);
+            } catch (err) {
+                alert(err.message);
+            }
+        }
+
+        async function opsRatingsCenter() {
+            try {
+                const data = await adminApi('/admin/ratings/center');
+                document.getElementById('opsDebugOut').textContent = toPretty(data.summary || data);
+            } catch (err) {
+                alert(err.message);
+            }
+        }
+
+        async function opsLeaderboardDebug() {
+            try {
+                const data = await adminApi('/admin/leaderboard/debug');
+                document.getElementById('opsDebugOut').textContent = toPretty((data.rows || []).slice(0, 50));
+            } catch (err) {
+                alert(err.message);
+            }
+        }
+
+        async function opsFunnel() {
+            try {
+                const city = (document.getElementById('opsFunnelCity').value || '').trim();
+                const qs = city ? `?city=${encodeURIComponent(city)}` : '';
+                const data = await adminApi(`/admin/analytics/funnel${qs}`);
+                document.getElementById('opsFunnelOut').textContent = toPretty(data.metrics || data);
+            } catch (err) {
+                alert(err.message);
+            }
+        }
+
+        function escapeHtml(value) {
+            return String(value ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#039;');
+        }
+        function renderTable(targetId, columns, rows) {
+            const target = document.getElementById(targetId);
+            if (!target) return;
+            if (!Array.isArray(rows) || rows.length === 0) {
+                target.innerHTML = '<p style="color:#64748b;">No records</p>';
+                return;
+            }
+            target.innerHTML = `
+                <div class="table-wrapper"><table>
+                    <thead><tr>${columns.map((c) => `<th>${escapeHtml(c.label)}</th>`).join('')}</tr></thead>
+                    <tbody>
+                        ${rows.map((row) => `<tr>${columns.map((c) => `<td>${escapeHtml(c.format ? c.format(row[c.key], row) : row[c.key])}</td>`).join('')}</tr>`).join('')}
+                    </tbody>
+                </table></div>
+            `;
+        }
+
+        function loadOpsConsole() {
+            const out = document.getElementById('opsSearchOut');
+            if (out && !out.innerHTML.trim()) out.innerHTML = '<p style="color:#64748b;">Ready</p>';
+        }
+
+        async function runOpsSearch() {
+            try {
+                const q = (document.getElementById('opsSearchQ').value || '').trim();
+                if (!q) return alert('Enter search query');
+                const data = await adminApi(`/admin/search?q=${encodeURIComponent(q)}`);
+                const rows = [];
+                (data.results?.users || []).forEach((r) => rows.push({ type: 'user', id: r._id, phone: r.phone, name: r.name || '-', status: r.role || '-' }));
+                (data.results?.workers || []).forEach((r) => rows.push({ type: 'worker', id: r._id, phone: r.phone, name: '-', status: r.isAvailable ? 'available' : 'busy' }));
+                (data.results?.jobs || []).forEach((r) => rows.push({ type: 'job', id: r._id, phone: r.contractorPhone || '-', name: r.title || '-', status: r.status || '-' }));
+                (data.results?.tickets || []).forEach((r) => rows.push({ type: 'ticket', id: r._id, phone: r.reporterPhone || '-', name: r.ticketId || '-', status: r.status || '-' }));
+                (data.results?.wallets || []).forEach((r) => rows.push({ type: 'wallet', id: r._id, phone: r.phone || '-', name: 'INR ' + Number(r.balance || 0), status: 'wallet' }));
+                renderTable('opsSearchOut', [{ key: 'type', label: 'Type' }, { key: 'id', label: 'ID' }, { key: 'phone', label: 'Phone' }, { key: 'name', label: 'Name/Title' }, { key: 'status', label: 'Status' }], rows);
+            } catch (err) { alert(err.message); }
+        }
+
+        async function opsWorkerControl(block) {
+            try {
+                const phone = (document.getElementById('opsWorkerPhone').value || '').trim();
+                if (!phone) return alert('Enter worker phone');
+                const addFlag = (document.getElementById('opsRiskAdd').value || '').trim();
+                const removeFlag = (document.getElementById('opsRiskRemove').value || '').trim();
+                const data = await adminApi(`/admin/workers/${encodeURIComponent(phone)}/control`, {
+                    method: 'PATCH',
+                    body: JSON.stringify({
+                        block,
+                        blockReason: block ? 'Blocked by admin console' : '',
+                        addRiskFlags: addFlag ? [addFlag] : [],
+                        removeRiskFlags: removeFlag ? [removeFlag] : [],
+                    }),
+                });
+                renderTable('opsSearchOut', [{ key: 'phone', label: 'Phone' }, { key: 'isAvailable', label: 'Available' }, { key: 'isBlocked', label: 'Blocked' }, { key: 'blockedReason', label: 'Blocked Reason' }, { key: 'riskFlags', label: 'Risk Flags', format: (v) => (Array.isArray(v) ? v.join(', ') : '') }], [data.worker || {}]);
+            } catch (err) { alert(err.message); }
+        }
+
+        async function opsForceOffline() {
+            try {
+                const phone = (document.getElementById('opsWorkerPhone').value || '').trim();
+                if (!phone) return alert('Enter worker phone');
+                const data = await adminApi(`/admin/workers/${encodeURIComponent(phone)}/control`, {
+                    method: 'PATCH',
+                    body: JSON.stringify({ forceOffline: true, forceOfflineReason: 'forced_by_admin_console' }),
+                });
+                renderTable('opsSearchOut', [{ key: 'phone', label: 'Phone' }, { key: 'isAvailable', label: 'Available' }, { key: 'forceOfflineAt', label: 'Forced At' }, { key: 'forceOfflineReason', label: 'Reason' }], [data.worker || {}]);
+            } catch (err) { alert(err.message); }
+        }
+
+        async function opsJobAction(action) {
+            try {
+                const jobId = (document.getElementById('opsJobId').value || '').trim();
+                if (!jobId) return alert('Enter job ID');
+                const reason = (document.getElementById('opsJobReason').value || '').trim();
+                const toWorkerPhone = (document.getElementById('opsToWorkerPhone').value || '').trim();
+                const body = { reason };
+                if (action === 'reassign') {
+                    if (!toWorkerPhone) return alert('Enter worker phone for reassign');
+                    body.toWorkerPhone = toWorkerPhone;
+                }
+                const data = await adminApi(`/admin/jobs/${encodeURIComponent(jobId)}/${action}`, { method: 'POST', body: JSON.stringify(body) });
+                renderTable('opsTimelineOut', [{ key: '_id', label: 'Job ID' }, { key: 'title', label: 'Title' }, { key: 'status', label: 'Status' }, { key: 'acceptedBy', label: 'Accepted By' }, { key: 'paymentStatus', label: 'Payment' }], [data.job || {}]);
+            } catch (err) { alert(err.message); }
+        }
+
+        async function opsLoadTimeline() {
+            try {
+                const jobId = (document.getElementById('opsJobId').value || '').trim();
+                if (!jobId) return alert('Enter job ID');
+                const data = await adminApi(`/admin/jobs/${encodeURIComponent(jobId)}/timeline`);
+                renderTable('opsTimelineOut', [{ key: 'timestamp', label: 'Time' }, { key: 'eventType', label: 'Event' }, { key: 'actorType', label: 'Actor' }, { key: 'actorPhone', label: 'Actor Phone' }, { key: 'reasonText', label: 'Reason' }], data.events || []);
+            } catch (err) { alert(err.message); }
+        }
+
+        async function opsBulkAttendance(attendanceStatus) {
+            try {
+                const jobId = (document.getElementById('opsBulkJobId').value || '').trim();
+                const workerPhone = (document.getElementById('opsBulkWorkerPhone').value || '').trim();
+                if (!jobId || !workerPhone) return alert('Enter job ID and worker phone');
+                const data = await adminApi(`/admin/jobs/${encodeURIComponent(jobId)}/bulk/attendance`, { method: 'POST', body: JSON.stringify({ workerPhone, attendanceStatus }) });
+                renderTable('opsBulkOut', [{ key: 'success', label: 'Success' }, { key: 'message', label: 'Message' }], [data]);
+            } catch (err) { alert(err.message); }
+        }
+
+        async function opsBulkPay() {
+            try {
+                const jobId = (document.getElementById('opsBulkJobId').value || '').trim();
+                const workerPhone = (document.getElementById('opsBulkWorkerPhone').value || '').trim();
+                if (!jobId || !workerPhone) return alert('Enter job ID and worker phone');
+                const key = `admin_bulk_${jobId}_${workerPhone}_${Date.now()}`;
+                const data = await adminApi(`/admin/jobs/${encodeURIComponent(jobId)}/bulk/payment`, {
+                    method: 'POST',
+                    headers: { 'X-Idempotency-Key': key },
+                    body: JSON.stringify({ workerPhone, idempotencyKey: key, paymentMode: 'online' }),
+                });
+                renderTable('opsBulkOut', [{ key: 'workerPhone', label: 'Worker' }, { key: 'amount', label: 'Amount' }, { key: 'idempotencyKey', label: 'Idempotency Key' }, { key: 'success', label: 'Success' }], [data]);
+            } catch (err) { alert(err.message); }
+        }
+
+        async function opsLoadLedger() {
+            try {
+                const phone = (document.getElementById('opsLedgerPhone').value || '').trim();
+                const qs = phone ? `?phone=${encodeURIComponent(phone)}` : '';
+                const data = await adminApi(`/admin/ledger${qs}`);
+                renderTable('opsLedgerOut', [{ key: 'phone', label: 'Phone' }, { key: 'txType', label: 'Type' }, { key: 'amount', label: 'Amount' }, { key: 'status', label: 'Status' }, { key: 'date', label: 'Date' }, { key: 'jobId', label: 'Job ID' }, { key: 'reason', label: 'Reason' }], data.rows || []);
+            } catch (err) { alert(err.message); }
+        }
+
+        async function opsCreateAdjustment(mode) {
+            try {
+                const phone = (document.getElementById('opsAdjPhone').value || '').trim();
+                const amount = Number((document.getElementById('opsAdjAmount').value || '').trim());
+                const reason = (document.getElementById('opsAdjReason').value || '').trim();
+                if (!phone || !Number.isFinite(amount) || amount <= 0) return alert('Enter valid phone and amount');
+                await adminApi('/admin/wallet-adjustments', { method: 'POST', body: JSON.stringify({ phone, amount, mode, reason }) });
+                await opsLoadAdjustments();
+            } catch (err) { alert(err.message); }
+        }
+
+        async function opsLoadAdjustments() {
+            try {
+                const data = await adminApi('/admin/wallet-adjustments');
+                const rows = data.rows || [];
+                const wrap = document.getElementById('opsAdjOut');
+                if (!rows.length) { wrap.innerHTML = '<p style="color:#64748b;">No adjustments</p>'; return; }
+                wrap.innerHTML = `
+                    <div class="table-wrapper"><table>
+                        <thead><tr><th>ID</th><th>Phone</th><th>Mode</th><th>Amount</th><th>Status</th><th>Actions</th></tr></thead>
+                        <tbody>
+                            ${rows.map((r) => `<tr><td>${escapeHtml(r.id)}</td><td>${escapeHtml(r.phone)}</td><td>${escapeHtml(r.mode)}</td><td>${escapeHtml(r.amount)}</td><td>${escapeHtml(r.status)}</td><td>${r.status === 'pending_approval' ? `<button class="btn-small btn-approve" onclick="opsApproveAdjustment('${escapeHtml(r.id)}')">Approve</button> <button class="btn-small btn-reject" onclick="opsRejectAdjustment('${escapeHtml(r.id)}')">Reject</button>` : '-'}</td></tr>`).join('')}
+                        </tbody>
+                    </table></div>`;
+            } catch (err) { alert(err.message); }
+        }
+
+        async function opsApproveAdjustment(id) { try { await adminApi(`/admin/wallet-adjustments/${encodeURIComponent(id)}/approve`, { method: 'POST' }); await opsLoadAdjustments(); } catch (err) { alert(err.message); } }
+        async function opsRejectAdjustment(id) { try { await adminApi(`/admin/wallet-adjustments/${encodeURIComponent(id)}/reject`, { method: 'POST', body: JSON.stringify({ reason: 'Rejected from ops console' }) }); await opsLoadAdjustments(); } catch (err) { alert(err.message); } }
+
+        async function opsCreatePayoutBatch() { try { await adminApi('/admin/payouts/batches', { method: 'POST', body: JSON.stringify({}) }); await opsLoadPayoutQueue(); } catch (err) { alert(err.message); } }
+        async function opsLoadPayoutQueue() {
+            try { const data = await adminApi('/admin/payouts/queue'); renderTable('opsPayoutOut', [{ key: 'batchId', label: 'Batch ID' }, { key: 'status', label: 'Status' }, { key: 'totalWorkers', label: 'Workers' }, { key: 'totalAmount', label: 'Amount' }, { key: 'createdAt', label: 'Created At' }], data.batches || []); } catch (err) { alert(err.message); }
+        }
+
+        async function opsIncentiveDebug() {
+            try {
+                const phone = (document.getElementById('opsDebugPhone').value || '').trim();
+                if (!phone) return alert('Enter worker phone');
+                const data = await adminApi(`/admin/incentives/debug/${encodeURIComponent(phone)}`);
+                const c = data.computed || {};
+                renderTable('opsDebugOut', [{ key: 'metric', label: 'Metric' }, { key: 'value', label: 'Value' }], [{ metric: 'Consecutive Days', value: c.consecutiveDays || 0 }, { metric: 'Total Hours', value: c.totalHours || 0 }, { metric: 'Cancellations', value: c.cancellations || 0 }, { metric: 'Eligibility 5 Days', value: c.eligibility?.['5days'] ? 'Yes' : 'No' }, { metric: 'Eligibility 10 Days', value: c.eligibility?.['10days'] ? 'Yes' : 'No' }, { metric: 'Eligibility 20 Days', value: c.eligibility?.['20days'] ? 'Yes' : 'No' }]);
+            } catch (err) { alert(err.message); }
+        }
+        async function opsRatingsCenter() {
+            try {
+                const data = await adminApi('/admin/ratings/center');
+                const s = data.summary || {};
+                renderTable('opsDebugOut', [{ key: 'metric', label: 'Metric' }, { key: 'value', label: 'Value' }], [{ metric: 'Worker Ratings Count', value: s.workerRatingsCount || 0 }, { metric: 'Contractor Ratings Count', value: s.contractorRatingsCount || 0 }, { metric: 'Avg Worker Rating', value: s.avgWorkerRating || 0 }, { metric: 'Avg Contractor Rating', value: s.avgContractorRating || 0 }, { metric: 'Bulk Coverage %', value: s.bulkWorkerRatingCoverage || 0 }]);
+            } catch (err) { alert(err.message); }
+        }
+        async function opsLeaderboardDebug() { try { const data = await adminApi('/admin/leaderboard/debug'); renderTable('opsDebugOut', [{ key: 'rank', label: 'Rank' }, { key: 'contractorName', label: 'Contractor' }, { key: 'contractorPhone', label: 'Phone' }, { key: 'avgRating', label: 'Rating' }, { key: 'totalJobsPosted', label: 'Jobs' }, { key: 'finalScore', label: 'Score' }], (data.rows || []).slice(0, 50)); } catch (err) { alert(err.message); } }
+        async function opsFunnel() {
+            try {
+                const city = (document.getElementById('opsFunnelCity').value || '').trim();
+                const qs = city ? `?city=${encodeURIComponent(city)}` : '';
+                const data = await adminApi(`/admin/analytics/funnel${qs}`);
+                const m = data.metrics || {};
+                renderTable('opsFunnelOut', [{ key: 'metric', label: 'Metric' }, { key: 'value', label: 'Value' }], [{ metric: 'Posted', value: m.posted || 0 }, { metric: 'Accepted', value: m.accepted || 0 }, { metric: 'Present', value: m.present || 0 }, { metric: 'Paid', value: m.paid || 0 }, { metric: 'Cancelled', value: m.cancelled || 0 }, { metric: 'Total Jobs', value: m.totalJobs || 0 }]);
+            } catch (err) { alert(err.message); }
         }
 
         // Logout

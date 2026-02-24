@@ -11,6 +11,7 @@ function createJobDispatchHelpers(deps) {
     sendNotificationToUserPhone,
     logJobEvent,
   } = deps;
+  const { scheduleDispatchState } = require("./dispatchStateService");
 
 async function checkJobMatchesForWorker(workerPhone) {
   try {
@@ -44,9 +45,9 @@ async function checkJobMatchesForWorker(workerPhone) {
     
     let matchCount = 0;
     for (const job of pendingJobs) {
-      // Check if worker has declined this job
-      const declinedBy = job.declinedBy || [];
-      if (declinedBy.includes(workerRecord.name)) {
+      // Check if worker has declined this job (phone-only identity)
+      const declinedBy = Array.isArray(job.declinedBy) ? job.declinedBy : [];
+      if (declinedBy.includes(workerPhone)) {
         continue;
       }
       
@@ -96,7 +97,7 @@ async function checkJobMatchesForWorker(workerPhone) {
 // ✅ HELPER: Offer job to next available worker (dynamic + skip declined)
 async function offerJobToNextWorker(job) {
   try {
-    const declinedWorkerNames = job.declinedBy || [];
+    const declinedWorkerIds = Array.isArray(job.declinedBy) ? job.declinedBy : [];
     
     // Clear previous timeout
     if (pendingJobTimeouts.has(job._id.toString())) {
@@ -117,14 +118,15 @@ async function offerJobToNextWorker(job) {
     );
     
     console.log(`🔍 Job Details - Title: ${job.title}, Skill: ${job.description}, Amount: ${job.amount}, Location: (${job.lat}, ${job.lon})`);
-    console.log(`🔍 Smart matching: Found ${currentNearbyWorkers.length} nearby workers with matching skill & wage (${declinedWorkerNames.length} declined)`);
+    console.log(`🔍 Smart matching: Found ${currentNearbyWorkers.length} nearby workers with matching skill & wage (${declinedWorkerIds.length} declined)`);
     
     // Build list of candidate workers who haven't declined, are online and don't have unpaid jobs
     // ✅ For bulk hiring, also skip workers already in acceptedWorkers
     const acceptedPhones = (job.bulkHiring && job.acceptedWorkers) ? job.acceptedWorkers.map(w => w.phone) : [];
     const candidates = [];
     for (const worker of currentNearbyWorkers) {
-      if (declinedWorkerNames.includes(worker.name)) {
+      // Canonical decline identity is phone.
+      if (declinedWorkerIds.includes(worker.phone)) {
         continue; // Skip declined workers
       }
       
@@ -142,11 +144,24 @@ async function offerJobToNextWorker(job) {
       }
       
       // ✅ CHECK: Does this worker have an unpaid job? (single or bulk)
+      // Bulk unpaid must be checked per worker entry (acceptedWorkers.$.paymentStatus), not job-level paymentStatus.
       const hasUnpaidJob = await Job.findOne({
-        $or: [
-          { acceptedBy: worker.phone, paymentStatus: { $ne: "Paid" } },  // Single job
-          { "acceptedWorkers.phone": worker.phone, paymentStatus: { $ne: "Paid" } }  // Bulk job
-        ]
+        $and: [
+          {
+            $or: [
+              { acceptedBy: worker.phone, paymentStatus: { $ne: "Paid" } }, // Single job
+              {
+                acceptedWorkers: {
+                  $elemMatch: {
+                    phone: worker.phone,
+                    paymentStatus: { $ne: "Paid" },
+                  },
+                },
+              }, // Bulk job (per-worker)
+            ],
+          },
+          { status: { $nin: ["cancelled", "expired", "completed"] } },
+        ],
       });
       
       if (hasUnpaidJob) {
@@ -177,6 +192,12 @@ async function offerJobToNextWorker(job) {
       }, RETRY_SECONDS * 1000);
       
       pendingJobTimeouts.set(job._id.toString(), retryTimeoutId);
+      await scheduleDispatchState({
+        jobId: job._id,
+        type: "retry_offer",
+        runAt: new Date(Date.now() + RETRY_SECONDS * 1000),
+        metadata: { reason: "no_available_workers" },
+      });
       return;
     }
 
@@ -261,6 +282,12 @@ async function offerJobToNextWorker(job) {
 
           // Store timeout (overwrite previous simple timeout id)
           pendingJobTimeouts.set(job._id.toString(), timeoutId);
+          await scheduleDispatchState({
+            jobId: job._id,
+            type: "retry_offer",
+            runAt: new Date(Date.now() + WORKER_TIMEOUT_SECONDS * 1000),
+            metadata: { reason: "bulk_worker_offer_timeout", workerPhone: candidate.phone },
+          });
           offered++;
           console.log(`⏳ Bulk offer sent to ${candidate.name} (${candidate.phone})`);
         } catch (emitErr) {
@@ -359,6 +386,12 @@ async function offerJobToNextWorker(job) {
       }, WORKER_TIMEOUT_SECONDS * 1000);
       
       pendingJobTimeouts.set(job._id.toString(), timeoutId);
+      await scheduleDispatchState({
+        jobId: job._id,
+        type: "retry_offer",
+        runAt: new Date(Date.now() + WORKER_TIMEOUT_SECONDS * 1000),
+        metadata: { reason: "single_worker_offer_timeout", workerPhone: nextWorker.phone },
+      });
       console.log(`⏳ Timeout set for ${nextWorker.name} (${WORKER_TIMEOUT_SECONDS}s)`);
     } else {
       // Worker not connected - try next one

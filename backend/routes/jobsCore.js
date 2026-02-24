@@ -1,5 +1,7 @@
 const express = require("express");
 const path = require("path");
+const { scheduleDispatchState, cancelDispatchState } = require("../services/dispatchStateService");
+const { isPremiumEntitled } = require("../utils/premiumEntitlement");
 
 function createJobsCoreRouter({
   authenticateToken,
@@ -40,10 +42,27 @@ function createJobsCoreRouter({
 
   router.post("/jobs/post", authenticateToken, async (req, res) => {
     try {
-      const { title, description, workerType, amount, lat, lon, date, imageUrl, startTime, endTime, bulkHiring, requiredWorkers } = req.body;
+      const { title, description, workerType, amount, lat, lon, date, imageUrl, startTime, endTime, bulkHiring, requiredWorkers, numberOfDays } = req.body;
 
       if (!title || !lat || !lon || lat === 0 || lon === 0) {
         return res.status(400).json({ success: false, message: "Missing required fields: title, lat, lon must be provided and non-zero" });
+      }
+
+      const userRecord = await User.findOne({ phone: req.user.phone }).select("premiumPlan");
+      if (!userRecord) {
+        return res.status(404).json({ success: false, message: "User not found" });
+      }
+
+      const wantsBulkHiring = bulkHiring === true || bulkHiring === "true";
+      const requestedDays = Number.parseInt(numberOfDays, 10);
+      const normalizedDays = Number.isFinite(requestedDays) && requestedDays > 0 ? requestedDays : 1;
+      const hasActivePremium = isPremiumEntitled(userRecord);
+
+      if ((wantsBulkHiring || normalizedDays > 1) && !hasActivePremium) {
+        return res.status(403).json({
+          success: false,
+          message: "Active premium subscription required for bulk hiring or multi-day jobs.",
+        });
       }
 
       let wallet = await Wallet.findOne({ phone: req.user.phone });
@@ -52,7 +71,7 @@ function createJobsCoreRouter({
         await wallet.save();
       }
 
-      const workersCount = (bulkHiring === true || bulkHiring === "true") ? (parseInt(requiredWorkers) || 1) : 1;
+      const workersCount = wantsBulkHiring ? (parseInt(requiredWorkers) || 1) : 1;
       const requiredBalance = workersCount * 25;
 
       if (wallet.balance < requiredBalance) {
@@ -84,7 +103,8 @@ function createJobsCoreRouter({
         date: date || new Date(),
         startTime: startTime || null,
         endTime: endTime || null,
-        bulkHiring: bulkHiring === true || bulkHiring === "true" || false,
+        numberOfDays: normalizedDays,
+        bulkHiring: wantsBulkHiring || false,
         requiredWorkers: parseInt(requiredWorkers) || 1,
         status: "pending",
         declinedBy: [],
@@ -148,12 +168,19 @@ function createJobsCoreRouter({
                 pendingJobTimeouts.delete(jobCheck._id.toString());
               }
               pendingJobExpirations.delete(jobCheck._id.toString());
+              await cancelDispatchState({ jobId: jobCheck._id, reason: "expired_http_post" });
             }
           } catch (e) {
             console.error("Error expiring HTTP posted job:", e);
           }
         }, EXPIRE_MS);
         pendingJobExpirations.set(newJob._id.toString(), expireId);
+        await scheduleDispatchState({
+          jobId: newJob._id,
+          type: "expire_offer",
+          runAt: new Date(Date.now() + EXPIRE_MS),
+          metadata: { source: "http_post" },
+        });
       } catch (e) {
         console.error("Error scheduling HTTP job expiry:", e);
       }

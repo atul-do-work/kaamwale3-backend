@@ -24,7 +24,7 @@ export default StyleSheet.create({
 
   // Grid Container
   gridContainer: {
-    marginBottom: 24,
+    marginBottom: 12,
   },
   gridRow: {
     flexDirection: 'row',
@@ -73,26 +73,8 @@ export default StyleSheet.create({
 
   // Summary Section
   summarySection: {
+    marginTop: -4,
     marginBottom: 24,
-  },
-  overallPreview: {
-    backgroundColor: '#e8eef7',
-    borderRadius: 12,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    marginBottom: 12,
-    borderLeftWidth: 3,
-    borderLeftColor: '#1a2f4d',
-  },
-  overallPreviewTitle: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: '#1a2f4d',
-  },
-  overallPreviewText: {
-    fontSize: 12,
-    color: '#475569',
-    marginTop: 2,
   },
   summaryCard: {
     borderRadius: 16,

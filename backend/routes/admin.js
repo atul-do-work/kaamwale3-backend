@@ -1,6 +1,8 @@
 const express = require('express');
 const router = express.Router();
 const bcrypt = require('bcrypt');
+const crypto = require('crypto');
+const mongoose = require('mongoose');
 const { authenticateToken } = require('../utils/auth');
 
 // Models
@@ -19,6 +21,8 @@ const PremiumSubscription = require('../models/PremiumSubscription');
 const ReconciliationRun = require('../models/ReconciliationRun');
 const District = require('../models/City'); // File is City.js, exports as "District" model for GeoJSON import
 const GigHistory = require('../models/GigHistory');
+const IncentiveLedger = require('../models/IncentiveLedger');
+const PayoutBatch = require('../models/PayoutBatch');
 
 // Middleware to check admin role
 const checkAdmin = (req, res, next) => {
@@ -34,6 +38,89 @@ const parsePagination = (req, defaultLimit = 100, maxLimit = 1000) => {
     const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
     const skip = (page - 1) * limit;
     return { limit, page, skip };
+};
+
+const toObjectIdOrNull = (value) => {
+    if (!value) return null;
+    return mongoose.Types.ObjectId.isValid(String(value)) ? new mongoose.Types.ObjectId(String(value)) : null;
+};
+
+const generateRef = (prefix) => `${prefix}_${Date.now()}_${crypto.randomBytes(3).toString('hex')}`;
+
+const safeText = (value, maxLen = 500) => String(value || '').trim().slice(0, maxLen);
+
+const adminAdjustments = new Map(); // in-memory maker-checker queue (can be moved to Mongo model later)
+const adminDisputes = new Map();
+const reportSchedules = new Map();
+
+const buildCsv = (rows = []) => {
+    if (!rows.length) return '';
+    const headers = Object.keys(rows[0]);
+    const escape = (v) => {
+        const text = String(v ?? '');
+        if (/[",\n]/.test(text)) return `"${text.replace(/"/g, '""')}"`;
+        return text;
+    };
+    const body = rows.map((r) => headers.map((h) => escape(r[h])).join(','));
+    return [headers.join(','), ...body].join('\n');
+};
+
+const getWeekRange = () => {
+    const now = new Date();
+    const day = now.getUTCDay() || 7; // Sun=7
+    const start = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+    start.setUTCDate(start.getUTCDate() - (day - 1));
+    const end = new Date(start);
+    end.setUTCDate(end.getUTCDate() + 7);
+    return { start, end };
+};
+
+const computeLeaderboardBreakdown = ({ avgRating, totalJobsPosted, daysActive, completionRate }) => {
+    const weights = {
+        rating: 0.5,
+        jobsPosted: 0.1667,
+        daysActive: 0.1667,
+        completionRate: 0.1667,
+    };
+    const normalizedRating = (Number(avgRating || 0) / 5) * 100;
+    const normalizedJobsPosted = Math.min(Number(totalJobsPosted || 0), 100);
+    const normalizedDaysActivePct = (Math.min(Number(daysActive || 0), 365) / 365) * 100;
+    const normalizedCompletionRate = Math.max(0, Math.min(Number(completionRate || 0), 100));
+    const weighted = {
+        rating: Number((weights.rating * normalizedRating).toFixed(2)),
+        jobsPosted: Number((weights.jobsPosted * normalizedJobsPosted).toFixed(2)),
+        daysActive: Number((weights.daysActive * normalizedDaysActivePct).toFixed(2)),
+        completionRate: Number((weights.completionRate * normalizedCompletionRate).toFixed(2)),
+    };
+    return {
+        weights,
+        normalized: {
+            rating: Number(normalizedRating.toFixed(2)),
+            jobsPosted: Number(normalizedJobsPosted.toFixed(2)),
+            daysActivePercent: Number(normalizedDaysActivePct.toFixed(2)),
+            completionRate: Number(normalizedCompletionRate.toFixed(2)),
+        },
+        weighted,
+        finalScore: Number((weighted.rating + weighted.jobsPosted + weighted.daysActive + weighted.completionRate).toFixed(2)),
+    };
+};
+
+const logAdminAudit = async ({ req, action, phone, description, before, after, metadata }) => {
+    await ActivityLog.create({
+        userId: req.user.id || req.user._id || 'admin',
+        phone: phone || (req.user.phone || 'admin'),
+        action: action || 'admin_action',
+        description: safeText(description || action || 'admin_action', 1000),
+        status: 'success',
+        metadata: {
+            actorPhone: req.user.phone || null,
+            actorRole: req.user.role || null,
+            before: before || null,
+            after: after || null,
+            ...(metadata || {}),
+        },
+        timestamp: new Date(),
+    });
 };
 
 const buildWorkerGigSummary = (jobs, phone) => {
@@ -665,6 +752,1034 @@ router.get('/wallets/summary', authenticateToken, checkAdmin, async (req, res) =
     } catch (error) {
         console.error('Wallets error:', error);
         res.status(500).json({ success: false, message: error.message });
+    }
+});
+
+// ============================
+// GLOBAL SEARCH - users/workers/jobs/tickets/wallets
+// ============================
+router.get('/search', authenticateToken, checkAdmin, async (req, res) => {
+    try {
+        const q = safeText(req.query.q || '', 80);
+        const { limit } = parsePagination(req, 20, 100);
+        if (!q) return res.status(400).json({ success: false, message: 'q is required' });
+
+        const regex = new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+        const maybeJobId = toObjectIdOrNull(q);
+
+        const [users, workers, wallets, jobs, tickets] = await Promise.all([
+            User.find({ $or: [{ phone: regex }, { name: regex }, ...(maybeJobId ? [{ _id: maybeJobId }] : [])] }).limit(limit).lean(),
+            Worker.find({ $or: [{ phone: regex }, { skills: regex }, ...(maybeJobId ? [{ _id: maybeJobId }] : [])] }).limit(limit).lean(),
+            Wallet.find({ $or: [{ phone: regex }, { userName: regex }] }).limit(limit).lean(),
+            Job.find({
+                $or: [
+                    ...(maybeJobId ? [{ _id: maybeJobId }] : []),
+                    { title: regex },
+                    { contractorPhone: regex },
+                    { contractorName: regex },
+                    { acceptedBy: regex },
+                    { 'acceptedWorkers.phone': regex },
+                ],
+            }).limit(limit).sort({ createdAt: -1 }).lean(),
+            SupportTicket.find({
+                $or: [{ ticketId: regex }, { ticketNumber: regex }, { reporterPhone: regex }, { subject: regex }],
+            }).limit(limit).sort({ createdAt: -1 }).lean(),
+        ]);
+
+        return res.json({
+            success: true,
+            query: q,
+            results: {
+                users: users.map((u) => ({ _id: u._id, phone: u.phone, name: u.name, role: u.role, city: u.city })),
+                workers: workers.map((w) => ({ _id: w._id, phone: w.phone, isAvailable: w.isAvailable, rating: w.rating, isBlocked: w.isBlocked })),
+                wallets: wallets.map((w) => ({ _id: w._id, phone: w.phone, balance: w.balance, availableBalance: w.availableBalance, pocketBalance: w.pocketBalance })),
+                jobs: jobs.map((j) => ({ _id: j._id, title: j.title, contractorPhone: j.contractorPhone, status: j.status, paymentStatus: j.paymentStatus })),
+                tickets: tickets.map((t) => ({ _id: t._id, ticketId: t.ticketId, status: t.status, priority: t.priority, reporterPhone: t.reporterPhone })),
+            },
+        });
+    } catch (error) {
+        console.error('Global search error:', error);
+        return res.status(500).json({ success: false, message: error.message });
+    }
+});
+
+// ============================
+// WORKER CONTROL - block/unblock/force offline/risk flags
+// ============================
+router.patch('/workers/:phone/control', authenticateToken, checkAdmin, async (req, res) => {
+    try {
+        const phone = String(req.params.phone || '').trim();
+        if (!isValidPhone(phone)) return res.status(400).json({ success: false, message: 'Valid phone required' });
+
+        const worker = await Worker.findOne({ phone });
+        if (!worker) return res.status(404).json({ success: false, message: 'Worker not found' });
+
+        const before = {
+            isAvailable: worker.isAvailable,
+            isBlocked: worker.isBlocked || false,
+            blockedReason: worker.blockedReason || '',
+            riskFlags: worker.riskFlags || [],
+        };
+
+        const {
+            block,
+            blockReason,
+            forceOffline,
+            forceOfflineReason,
+            addRiskFlags = [],
+            removeRiskFlags = [],
+        } = req.body || {};
+
+        if (typeof block === 'boolean') {
+            worker.isBlocked = block;
+            worker.blockedReason = block ? safeText(blockReason, 200) : '';
+        }
+
+        if (forceOffline === true) {
+            worker.isAvailable = false;
+            worker.forceOfflineAt = new Date();
+            worker.forceOfflineReason = safeText(forceOfflineReason, 200);
+            await User.updateOne({ phone }, { $set: { isAvailable: false } });
+        }
+
+        const currentFlags = new Set(Array.isArray(worker.riskFlags) ? worker.riskFlags : []);
+        for (const f of (Array.isArray(addRiskFlags) ? addRiskFlags : [])) currentFlags.add(safeText(f, 60));
+        for (const f of (Array.isArray(removeRiskFlags) ? removeRiskFlags : [])) currentFlags.delete(safeText(f, 60));
+        worker.riskFlags = Array.from(currentFlags).filter(Boolean);
+
+        await worker.save();
+
+        await logAdminAudit({
+            req,
+            action: 'admin_action',
+            phone,
+            description: 'Worker control update',
+            before,
+            after: {
+                isAvailable: worker.isAvailable,
+                isBlocked: worker.isBlocked,
+                blockedReason: worker.blockedReason,
+                riskFlags: worker.riskFlags,
+                forceOfflineAt: worker.forceOfflineAt,
+            },
+            metadata: { operation: 'worker_control' },
+        });
+
+        return res.json({ success: true, worker });
+    } catch (error) {
+        console.error('Worker control error:', error);
+        return res.status(500).json({ success: false, message: error.message });
+    }
+});
+
+// ============================
+// JOB TIMELINE - immutable events from JobEventLog
+// ============================
+router.get('/jobs/:jobId/timeline', authenticateToken, checkAdmin, async (req, res) => {
+    try {
+        const jobId = toObjectIdOrNull(req.params.jobId);
+        if (!jobId) return res.status(400).json({ success: false, message: 'Invalid jobId' });
+
+        const events = await JobEventLog.find({ jobId }).sort({ timestamp: -1 }).lean();
+        return res.json({ success: true, count: events.length, events });
+    } catch (error) {
+        console.error('Job timeline error:', error);
+        return res.status(500).json({ success: false, message: error.message });
+    }
+});
+
+// ============================
+// JOBS CONTROL CENTER - manual interventions
+// ============================
+router.post('/jobs/:jobId/reassign', authenticateToken, checkAdmin, async (req, res) => {
+    try {
+        const jobId = toObjectIdOrNull(req.params.jobId);
+        const toWorkerPhone = safeText(req.body?.toWorkerPhone, 20);
+        const reason = safeText(req.body?.reason || 'admin_reassign', 300);
+        if (!jobId || !isValidPhone(toWorkerPhone)) return res.status(400).json({ success: false, message: 'Invalid jobId or toWorkerPhone' });
+
+        const job = await Job.findById(jobId);
+        if (!job) return res.status(404).json({ success: false, message: 'Job not found' });
+
+        const before = { acceptedBy: job.acceptedBy, status: job.status };
+        job.acceptedBy = toWorkerPhone;
+        job.status = 'accepted';
+        job.acceptedAt = new Date();
+        await job.save();
+
+        await JobEventLog.create({
+            jobId: job._id,
+            eventType: 'admin_reassign',
+            actorType: 'admin',
+            actorPhone: req.user.phone || null,
+            oldState: before,
+            newState: { acceptedBy: job.acceptedBy, status: job.status },
+            source: 'admin_panel',
+            reasonText: reason,
+            metadata: { toWorkerPhone },
+        });
+
+        await logAdminAudit({ req, action: 'job_reassigned_admin', phone: job.contractorPhone, description: `Job reassigned to ${toWorkerPhone}`, before, after: { acceptedBy: toWorkerPhone, status: 'accepted' } });
+
+        return res.json({ success: true, job });
+    } catch (error) {
+        console.error('Job reassign error:', error);
+        return res.status(500).json({ success: false, message: error.message });
+    }
+});
+
+router.post('/jobs/:jobId/expire-now', authenticateToken, checkAdmin, async (req, res) => {
+    try {
+        const jobId = toObjectIdOrNull(req.params.jobId);
+        if (!jobId) return res.status(400).json({ success: false, message: 'Invalid jobId' });
+        const reason = safeText(req.body?.reason || 'admin_expire_now', 300);
+        const job = await Job.findById(jobId);
+        if (!job) return res.status(404).json({ success: false, message: 'Job not found' });
+
+        const before = { status: job.status, offerExpiresAt: job.offerExpiresAt };
+        job.status = 'expired';
+        job.isCancelled = true;
+        job.offerExpiresAt = new Date();
+        await job.save();
+
+        await JobEventLog.create({
+            jobId: job._id,
+            eventType: 'admin_expire_now',
+            actorType: 'admin',
+            actorPhone: req.user.phone || null,
+            oldState: before,
+            newState: { status: job.status, offerExpiresAt: job.offerExpiresAt },
+            source: 'admin_panel',
+            reasonText: reason,
+        });
+
+        await logAdminAudit({ req, action: 'job_expired_admin', phone: job.contractorPhone, description: 'Job expired manually', before, after: { status: job.status, offerExpiresAt: job.offerExpiresAt } });
+        return res.json({ success: true, job });
+    } catch (error) {
+        console.error('Expire now error:', error);
+        return res.status(500).json({ success: false, message: error.message });
+    }
+});
+
+router.post('/jobs/:jobId/reopen', authenticateToken, checkAdmin, async (req, res) => {
+    try {
+        const jobId = toObjectIdOrNull(req.params.jobId);
+        if (!jobId) return res.status(400).json({ success: false, message: 'Invalid jobId' });
+        const reason = safeText(req.body?.reason || 'admin_reopen', 300);
+
+        const job = await Job.findById(jobId);
+        if (!job) return res.status(404).json({ success: false, message: 'Job not found' });
+
+        const before = { status: job.status, isCancelled: job.isCancelled, acceptedBy: job.acceptedBy };
+        await Job.updateOne(
+            { _id: job._id },
+            {
+                $set: {
+                    status: 'posted',
+                    isCancelled: false,
+                    acceptedBy: '',
+                    acceptedAt: null,
+                    offerExpiresAt: new Date(Date.now() + 5 * 60 * 1000),
+                },
+            }
+        );
+        const updated = await Job.findById(job._id).lean();
+
+        await JobEventLog.create({
+            jobId: job._id,
+            eventType: 'admin_reopen',
+            actorType: 'admin',
+            actorPhone: req.user.phone || null,
+            oldState: before,
+            newState: { status: 'posted', isCancelled: false },
+            source: 'admin_panel',
+            reasonText: reason,
+        });
+
+        await logAdminAudit({ req, action: 'job_reopened_admin', phone: job.contractorPhone, description: 'Job reopened manually', before, after: { status: 'posted', isCancelled: false } });
+        return res.json({ success: true, job: updated });
+    } catch (error) {
+        console.error('Job reopen error:', error);
+        return res.status(500).json({ success: false, message: error.message });
+    }
+});
+
+router.post('/jobs/:jobId/manual-cancel', authenticateToken, checkAdmin, async (req, res) => {
+    try {
+        const jobId = toObjectIdOrNull(req.params.jobId);
+        if (!jobId) return res.status(400).json({ success: false, message: 'Invalid jobId' });
+        const reason = safeText(req.body?.reason || 'admin_manual_cancel', 300);
+
+        const job = await Job.findById(jobId);
+        if (!job) return res.status(404).json({ success: false, message: 'Job not found' });
+
+        const before = { status: job.status, isCancelled: job.isCancelled };
+        job.status = 'cancelled';
+        job.isCancelled = true;
+        await job.save();
+
+        await JobEventLog.create({
+            jobId: job._id,
+            eventType: 'admin_manual_cancel',
+            actorType: 'admin',
+            actorPhone: req.user.phone || null,
+            oldState: before,
+            newState: { status: job.status, isCancelled: job.isCancelled },
+            source: 'admin_panel',
+            reasonText: reason,
+        });
+
+        await logAdminAudit({ req, action: 'job_cancelled_admin', phone: job.contractorPhone, description: `Job cancelled manually: ${reason}`, before, after: { status: job.status, isCancelled: true } });
+        return res.json({ success: true, job });
+    } catch (error) {
+        console.error('Manual cancel error:', error);
+        return res.status(500).json({ success: false, message: error.message });
+    }
+});
+
+// ============================
+// BULK ATTENDANCE / PAYMENT ACTIONS
+// ============================
+router.post('/jobs/:jobId/bulk/attendance', authenticateToken, checkAdmin, async (req, res) => {
+    try {
+        const jobId = toObjectIdOrNull(req.params.jobId);
+        const workerPhone = safeText(req.body?.workerPhone, 20);
+        const attendanceStatus = safeText(req.body?.attendanceStatus, 20);
+        if (!jobId || !isValidPhone(workerPhone) || !['Present', 'Absent'].includes(attendanceStatus)) {
+            return res.status(400).json({ success: false, message: 'Invalid payload' });
+        }
+
+        const job = await Job.findById(jobId);
+        if (!job) return res.status(404).json({ success: false, message: 'Job not found' });
+        const before = (job.acceptedWorkers || []).find((w) => w.phone === workerPhone) || null;
+
+        await Job.updateOne(
+            { _id: job._id, 'acceptedWorkers.phone': workerPhone },
+            {
+                $set: {
+                    'acceptedWorkers.$.attendanceStatus': attendanceStatus,
+                    'acceptedWorkers.$.attendanceTime': new Date(),
+                },
+            }
+        );
+
+        const after = await Job.findOne({ _id: job._id, 'acceptedWorkers.phone': workerPhone }, { 'acceptedWorkers.$': 1 }).lean();
+
+        await JobEventLog.create({
+            jobId: job._id,
+            eventType: 'admin_bulk_attendance_marked',
+            actorType: 'admin',
+            actorPhone: req.user.phone || null,
+            oldState: before,
+            newState: after?.acceptedWorkers?.[0] || null,
+            source: 'admin_panel',
+            metadata: { workerPhone, attendanceStatus },
+        });
+
+        await logAdminAudit({ req, action: 'admin_action', phone: workerPhone, description: `Bulk attendance marked: ${attendanceStatus}`, before, after: after?.acceptedWorkers?.[0] || null, metadata: { operation: 'bulk_attendance', jobId: String(job._id) } });
+        return res.json({ success: true });
+    } catch (error) {
+        console.error('Bulk attendance error:', error);
+        return res.status(500).json({ success: false, message: error.message });
+    }
+});
+
+router.post('/jobs/:jobId/bulk/payment', authenticateToken, checkAdmin, async (req, res) => {
+    try {
+        const jobId = toObjectIdOrNull(req.params.jobId);
+        const workerPhone = safeText(req.body?.workerPhone, 20);
+        const idempotencyKey = safeText(req.body?.idempotencyKey || req.header('X-Idempotency-Key'), 120);
+        const paymentMode = safeText(req.body?.paymentMode || 'online', 30);
+        if (!jobId || !isValidPhone(workerPhone) || !idempotencyKey) {
+            return res.status(400).json({ success: false, message: 'jobId, workerPhone, idempotencyKey required' });
+        }
+
+        const job = await Job.findById(jobId).lean();
+        if (!job) return res.status(404).json({ success: false, message: 'Job not found' });
+        const acceptedWorker = (job.acceptedWorkers || []).find((w) => w.phone === workerPhone);
+        if (!acceptedWorker) return res.status(404).json({ success: false, message: 'Worker entry not found in bulk job' });
+        if (acceptedWorker.paymentStatus === 'Paid') return res.status(409).json({ success: false, message: 'Already paid' });
+
+        const workerWallet = await Wallet.findOne({ phone: workerPhone });
+        if (!workerWallet) return res.status(404).json({ success: false, message: 'Worker wallet not found' });
+
+        const duplicate = (workerWallet.transactions || []).find((t) => t.idempotencyKey === idempotencyKey && t.status === 'completed');
+        if (duplicate) return res.json({ success: true, idempotent: true, transaction: duplicate });
+
+        const amount = Number(job.amount || 0);
+        const opening = Number(workerWallet.availableBalance || workerWallet.balance || 0);
+        const closing = opening + amount;
+
+        workerWallet.availableBalance = closing;
+        workerWallet.balance = closing;
+        workerWallet.totalEarned = Number(workerWallet.totalEarned || 0) + amount;
+        workerWallet.transactions.push({
+            type: 'payment',
+            amount,
+            description: `Admin bulk payout for job ${job.title || ''}`.trim(),
+            jobId: job._id,
+            idempotencyKey,
+            status: 'completed',
+            openingBalance: opening,
+            closingBalance: closing,
+            source: 'admin',
+            provider: 'internal',
+            metadata: { workerPhone, paymentMode, actor: req.user.phone || 'admin' },
+        });
+        workerWallet.updateTotals();
+        await workerWallet.save();
+
+        await Job.updateOne(
+            { _id: job._id, 'acceptedWorkers.phone': workerPhone },
+            {
+                $set: {
+                    'acceptedWorkers.$.paymentStatus': 'Paid',
+                    'acceptedWorkers.$.paymentMode': paymentMode,
+                    'acceptedWorkers.$.paymentTime': new Date(),
+                },
+            }
+        );
+
+        await JobEventLog.create({
+            jobId: job._id,
+            eventType: 'admin_bulk_payment',
+            actorType: 'admin',
+            actorPhone: req.user.phone || null,
+            source: 'admin_panel',
+            idempotencyKey,
+            metadata: { workerPhone, amount, paymentMode },
+        });
+
+        await logAdminAudit({ req, action: 'job_payment_admin', phone: workerPhone, description: `Bulk payment marked paid`, before: acceptedWorker, after: { paymentStatus: 'Paid', paymentMode }, metadata: { idempotencyKey, jobId: String(job._id) } });
+
+        return res.json({ success: true, amount, workerPhone, idempotencyKey });
+    } catch (error) {
+        console.error('Bulk payment error:', error);
+        return res.status(500).json({ success: false, message: error.message });
+    }
+});
+
+// ============================
+// LEDGER + WALLET ADJUSTMENTS (maker-checker)
+// ============================
+router.get('/ledger', authenticateToken, checkAdmin, async (req, res) => {
+    try {
+        const { phone, type, from, to } = req.query || {};
+        const { limit } = parsePagination(req, 200, 1000);
+
+        const walletQuery = {};
+        if (phone) walletQuery.phone = String(phone).trim();
+        const wallets = await Wallet.find(walletQuery).select('phone transactions').limit(500).lean();
+
+        const fromDate = from ? new Date(from) : null;
+        const toDate = to ? new Date(to) : null;
+
+        const rows = [];
+        for (const w of wallets) {
+            for (const t of (w.transactions || [])) {
+                if (type && t.type !== type) continue;
+                const d = t.date ? new Date(t.date) : null;
+                if (fromDate && d && d < fromDate) continue;
+                if (toDate && d && d > toDate) continue;
+                rows.push({
+                    phone: w.phone,
+                    txType: t.type || '',
+                    amount: Number(t.amount || 0),
+                    status: t.status || '',
+                    date: d ? d.toISOString() : '',
+                    jobId: t.jobId || '',
+                    paymentId: t.paymentId || '',
+                    orderId: t.orderId || '',
+                    payoutId: t.payoutId || '',
+                    idempotencyKey: t.idempotencyKey || '',
+                    openingBalance: Number(t.openingBalance || 0),
+                    closingBalance: Number(t.closingBalance || 0),
+                    source: t.source || '',
+                    provider: t.provider || '',
+                    actor: t.metadata?.actor || '',
+                    reason: t.description || '',
+                });
+            }
+        }
+
+        rows.sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
+        return res.json({ success: true, count: Math.min(rows.length, limit), rows: rows.slice(0, limit) });
+    } catch (error) {
+        console.error('Ledger error:', error);
+        return res.status(500).json({ success: false, message: error.message });
+    }
+});
+
+router.post('/wallet-adjustments', authenticateToken, checkAdmin, async (req, res) => {
+    try {
+        const { phone, amount, mode = 'credit', reason } = req.body || {};
+        const normalizedPhone = String(phone || '').trim();
+        const normalizedAmount = Number(amount || 0);
+        const normalizedMode = String(mode).trim().toLowerCase();
+        if (!isValidPhone(normalizedPhone) || !Number.isFinite(normalizedAmount) || normalizedAmount <= 0 || !['credit', 'debit'].includes(normalizedMode)) {
+            return res.status(400).json({ success: false, message: 'Invalid payload' });
+        }
+
+        const id = generateRef('wadj');
+        adminAdjustments.set(id, {
+            id,
+            phone: normalizedPhone,
+            amount: normalizedAmount,
+            mode: normalizedMode,
+            reason: safeText(reason || 'manual_adjustment', 300),
+            status: 'pending_approval',
+            makerPhone: req.user.phone || 'admin',
+            checkerPhone: null,
+            createdAt: new Date().toISOString(),
+            approvedAt: null,
+            rejectedAt: null,
+        });
+
+        await logAdminAudit({ req, action: 'wallet_adjustment_requested', phone: normalizedPhone, description: `Wallet adjustment requested ${normalizedMode} ${normalizedAmount}`, before: null, after: adminAdjustments.get(id), metadata: { adjustmentId: id } });
+        return res.json({ success: true, adjustment: adminAdjustments.get(id) });
+    } catch (error) {
+        console.error('Wallet adjustment request error:', error);
+        return res.status(500).json({ success: false, message: error.message });
+    }
+});
+
+router.get('/wallet-adjustments', authenticateToken, checkAdmin, async (_req, res) => {
+    try {
+        const rows = Array.from(adminAdjustments.values()).sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+        return res.json({ success: true, count: rows.length, rows });
+    } catch (error) {
+        console.error('Wallet adjustments list error:', error);
+        return res.status(500).json({ success: false, message: error.message });
+    }
+});
+
+router.post('/wallet-adjustments/:id/approve', authenticateToken, checkAdmin, async (req, res) => {
+    try {
+        const row = adminAdjustments.get(req.params.id);
+        if (!row) return res.status(404).json({ success: false, message: 'Adjustment not found' });
+        if (row.status !== 'pending_approval') return res.status(409).json({ success: false, message: `Invalid status ${row.status}` });
+        if (row.makerPhone === (req.user.phone || 'admin')) return res.status(403).json({ success: false, message: 'Maker and checker must be different admin' });
+
+        const wallet = await Wallet.findOne({ phone: row.phone });
+        if (!wallet) return res.status(404).json({ success: false, message: 'Wallet not found' });
+
+        const opening = Number(wallet.availableBalance || wallet.balance || 0);
+        const delta = row.mode === 'debit' ? -Math.abs(row.amount) : Math.abs(row.amount);
+        const closing = opening + delta;
+        if (closing < 0) return res.status(409).json({ success: false, message: 'Insufficient balance for debit adjustment' });
+
+        wallet.availableBalance = closing;
+        wallet.balance = closing;
+        wallet.transactions.push({
+            type: row.mode === 'debit' ? 'withdraw' : 'deposit',
+            amount: Math.abs(row.amount),
+            description: `Admin adjustment (${row.mode}): ${row.reason}`,
+            idempotencyKey: row.id,
+            status: 'completed',
+            openingBalance: opening,
+            closingBalance: closing,
+            source: 'admin',
+            provider: 'internal',
+            metadata: { actor: req.user.phone || 'admin', checker: req.user.phone || 'admin', reason: row.reason },
+        });
+        wallet.updateTotals();
+        await wallet.save();
+
+        row.status = 'approved';
+        row.checkerPhone = req.user.phone || 'admin';
+        row.approvedAt = new Date().toISOString();
+        adminAdjustments.set(row.id, row);
+
+        await logAdminAudit({ req, action: 'wallet_adjustment_approved', phone: row.phone, description: `Wallet adjustment approved ${row.mode} ${row.amount}`, before: null, after: row, metadata: { adjustmentId: row.id } });
+        return res.json({ success: true, adjustment: row });
+    } catch (error) {
+        console.error('Wallet adjustment approve error:', error);
+        return res.status(500).json({ success: false, message: error.message });
+    }
+});
+
+router.post('/wallet-adjustments/:id/reject', authenticateToken, checkAdmin, async (req, res) => {
+    try {
+        const row = adminAdjustments.get(req.params.id);
+        if (!row) return res.status(404).json({ success: false, message: 'Adjustment not found' });
+        if (row.status !== 'pending_approval') return res.status(409).json({ success: false, message: `Invalid status ${row.status}` });
+
+        row.status = 'rejected';
+        row.checkerPhone = req.user.phone || 'admin';
+        row.rejectedAt = new Date().toISOString();
+        row.rejectReason = safeText(req.body?.reason || 'Rejected by checker', 200);
+        adminAdjustments.set(row.id, row);
+
+        await logAdminAudit({ req, action: 'wallet_adjustment_rejected', phone: row.phone, description: `Wallet adjustment rejected`, before: null, after: row, metadata: { adjustmentId: row.id } });
+        return res.json({ success: true, adjustment: row });
+    } catch (error) {
+        console.error('Wallet adjustment reject error:', error);
+        return res.status(500).json({ success: false, message: error.message });
+    }
+});
+
+// ============================
+// PAYMENT / REFUND / DISPUTE (admin controls)
+// ============================
+router.post('/finance/refund', authenticateToken, checkAdmin, async (req, res) => {
+    try {
+        const jobId = toObjectIdOrNull(req.body?.jobId);
+        const contractorPhone = safeText(req.body?.contractorPhone, 20);
+        const amount = Number(req.body?.amount || 0);
+        const idempotencyKey = safeText(req.body?.idempotencyKey || req.header('X-Idempotency-Key'), 120);
+        if (!jobId || !isValidPhone(contractorPhone) || !Number.isFinite(amount) || amount <= 0 || !idempotencyKey) {
+            return res.status(400).json({ success: false, message: 'Invalid payload' });
+        }
+
+        const wallet = await Wallet.findOne({ phone: contractorPhone });
+        if (!wallet) return res.status(404).json({ success: false, message: 'Contractor wallet not found' });
+        const duplicate = (wallet.transactions || []).find((t) => t.idempotencyKey === idempotencyKey && t.status === 'completed');
+        if (duplicate) return res.json({ success: true, idempotent: true, transaction: duplicate });
+
+        const opening = Number(wallet.availableBalance || wallet.balance || 0);
+        const closing = opening + amount;
+        wallet.availableBalance = closing;
+        wallet.balance = closing;
+        wallet.transactions.push({
+            type: 'refund',
+            amount,
+            description: `Admin refund for job ${jobId}`,
+            jobId,
+            idempotencyKey,
+            status: 'completed',
+            openingBalance: opening,
+            closingBalance: closing,
+            source: 'admin',
+            provider: 'internal',
+            metadata: { actor: req.user.phone || 'admin', reason: safeText(req.body?.reason || '', 200) },
+        });
+        wallet.updateTotals();
+        await wallet.save();
+
+        await logAdminAudit({ req, action: 'job_refund_admin', phone: contractorPhone, description: `Refund processed`, before: { balance: opening }, after: { balance: closing }, metadata: { jobId: String(jobId), idempotencyKey, amount } });
+        return res.json({ success: true, amount, contractorPhone, idempotencyKey });
+    } catch (error) {
+        console.error('Admin refund error:', error);
+        return res.status(500).json({ success: false, message: error.message });
+    }
+});
+
+router.post('/finance/disputes', authenticateToken, checkAdmin, async (req, res) => {
+    try {
+        const id = generateRef('disp');
+        const row = {
+            id,
+            jobId: safeText(req.body?.jobId, 40),
+            workerPhone: safeText(req.body?.workerPhone, 20),
+            contractorPhone: safeText(req.body?.contractorPhone, 20),
+            issueType: safeText(req.body?.issueType || 'payment_dispute', 80),
+            reason: safeText(req.body?.reason || '', 500),
+            status: 'open',
+            createdBy: req.user.phone || 'admin',
+            createdAt: new Date().toISOString(),
+            resolvedBy: null,
+            resolution: null,
+        };
+        adminDisputes.set(id, row);
+        await logAdminAudit({ req, action: 'job_dispute_admin', phone: row.contractorPhone || row.workerPhone, description: `Dispute created`, before: null, after: row, metadata: { disputeId: id } });
+        return res.json({ success: true, dispute: row });
+    } catch (error) {
+        console.error('Create dispute error:', error);
+        return res.status(500).json({ success: false, message: error.message });
+    }
+});
+
+router.patch('/finance/disputes/:id', authenticateToken, checkAdmin, async (req, res) => {
+    try {
+        const row = adminDisputes.get(req.params.id);
+        if (!row) return res.status(404).json({ success: false, message: 'Dispute not found' });
+
+        const status = safeText(req.body?.status || '', 40);
+        if (!['open', 'under_review', 'resolved', 'rejected'].includes(status)) {
+            return res.status(400).json({ success: false, message: 'Invalid status' });
+        }
+
+        const before = { ...row };
+        row.status = status;
+        row.resolution = safeText(req.body?.resolution || row.resolution || '', 500);
+        row.resolvedBy = req.user.phone || 'admin';
+        row.resolvedAt = new Date().toISOString();
+        adminDisputes.set(row.id, row);
+
+        await logAdminAudit({ req, action: 'job_dispute_admin', phone: row.contractorPhone || row.workerPhone, description: `Dispute ${row.id} set to ${status}`, before, after: row, metadata: { disputeId: row.id } });
+        return res.json({ success: true, dispute: row });
+    } catch (error) {
+        console.error('Update dispute error:', error);
+        return res.status(500).json({ success: false, message: error.message });
+    }
+});
+
+router.get('/finance/disputes', authenticateToken, checkAdmin, async (_req, res) => {
+    try {
+        const rows = Array.from(adminDisputes.values()).sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+        return res.json({ success: true, count: rows.length, rows });
+    } catch (error) {
+        console.error('List disputes error:', error);
+        return res.status(500).json({ success: false, message: error.message });
+    }
+});
+
+// ============================
+// PAYOUT QUEUE + STATE MACHINE
+// ============================
+router.get('/payouts/queue', authenticateToken, checkAdmin, async (req, res) => {
+    try {
+        const status = safeText(req.query.status || '', 40);
+        const query = status ? { status } : {};
+        const batches = await PayoutBatch.find(query).sort({ createdAt: -1 }).limit(200).lean();
+        return res.json({ success: true, count: batches.length, batches });
+    } catch (error) {
+        console.error('Payout queue error:', error);
+        return res.status(500).json({ success: false, message: error.message });
+    }
+});
+
+router.post('/payouts/batches', authenticateToken, checkAdmin, async (req, res) => {
+    try {
+        const { start, end } = req.body || {};
+        const week = getWeekRange();
+        const startDate = start ? new Date(start) : week.start;
+        const endDate = end ? new Date(end) : week.end;
+
+        const paidJobs = await Job.find({
+            paymentStatus: 'Paid',
+            paymentTime: { $gte: startDate, $lt: endDate },
+        }).lean();
+
+        const byWorker = new Map();
+        for (const j of paidJobs) {
+            const phone = safeText(j.acceptedBy, 20);
+            if (!isValidPhone(phone)) continue;
+            if (!byWorker.has(phone)) byWorker.set(phone, { workerPhone: phone, workerName: '', earningsAmount: 0, deductions: 0, netAmount: 0, status: 'pending' });
+            const row = byWorker.get(phone);
+            row.earningsAmount += Number(j.amount || 0);
+            row.netAmount += Number(j.amount || 0);
+        }
+
+        const now = new Date();
+        const year = now.getUTCFullYear();
+        const wk = Math.ceil((((now - new Date(Date.UTC(year, 0, 1))) / 86400000) + new Date(Date.UTC(year, 0, 1)).getUTCDay() + 1) / 7);
+        const batchId = generateRef(`PAYOUT_${year}_W${wk}`);
+
+        const batch = await PayoutBatch.create({
+            batchId,
+            payoutWeek: { year, week: wk, startDate, endDate },
+            status: 'pending',
+            totalAmount: Array.from(byWorker.values()).reduce((s, r) => s + Number(r.netAmount || 0), 0),
+            totalWorkers: byWorker.size,
+            workers: Array.from(byWorker.values()),
+            notes: safeText(req.body?.notes || '', 500),
+            processedBy: req.user.phone || 'admin',
+        });
+
+        await logAdminAudit({ req, action: 'payout_batch_created', phone: req.user.phone || 'admin', description: `Payout batch created ${batchId}`, before: null, after: { batchId, totalAmount: batch.totalAmount, totalWorkers: batch.totalWorkers }, metadata: { batchId } });
+        return res.json({ success: true, batch });
+    } catch (error) {
+        console.error('Create payout batch error:', error);
+        return res.status(500).json({ success: false, message: error.message });
+    }
+});
+
+router.patch('/payouts/:batchId/state', authenticateToken, checkAdmin, async (req, res) => {
+    try {
+        const batchId = String(req.params.batchId || '').trim();
+        const next = safeText(req.body?.status || '', 40);
+        const allowed = ['queued', 'pending', 'processing', 'success', 'completed', 'failed', 'retry'];
+        if (!allowed.includes(next)) return res.status(400).json({ success: false, message: 'Invalid status' });
+
+        const batch = await PayoutBatch.findOne({ batchId });
+        if (!batch) return res.status(404).json({ success: false, message: 'Batch not found' });
+        const before = { status: batch.status };
+
+        if (next === 'retry') {
+            batch.status = 'processing';
+            for (const w of batch.workers || []) {
+                if (w.status === 'failed') w.status = 'pending';
+            }
+        } else if (next === 'success') {
+            batch.status = 'completed';
+            batch.completedAt = new Date();
+            for (const w of batch.workers || []) {
+                if (w.status !== 'success') w.status = 'success';
+            }
+        } else {
+            batch.status = next === 'queued' ? 'pending' : next;
+            if (next === 'processing') batch.processedAt = new Date();
+        }
+        await batch.save();
+
+        await logAdminAudit({ req, action: 'payout_batch_state_changed', phone: req.user.phone || 'admin', description: `Batch ${batchId} -> ${batch.status}`, before, after: { status: batch.status }, metadata: { batchId } });
+        return res.json({ success: true, batch });
+    } catch (error) {
+        console.error('Payout state transition error:', error);
+        return res.status(500).json({ success: false, message: error.message });
+    }
+});
+
+// ============================
+// INCENTIVES + RATINGS + LEADERBOARD DEBUG
+// ============================
+router.get('/incentives/debug/:phone', authenticateToken, checkAdmin, async (req, res) => {
+    try {
+        const phone = String(req.params.phone || '').trim();
+        if (!isValidPhone(phone)) return res.status(400).json({ success: false, message: 'Invalid phone' });
+
+        const [worker, gigs, claims] = await Promise.all([
+            Worker.findOne({ phone }).lean(),
+            GigHistory.find({ workerPhone: phone }).sort({ eventTime: -1 }).limit(800).lean(),
+            IncentiveLedger.find({ phone }).sort({ createdAt: -1 }).lean(),
+        ]);
+        if (!worker) return res.status(404).json({ success: false, message: 'Worker not found' });
+
+        const streak = computeCurrentConsecutiveDays(gigs);
+        const totalHours = gigs.filter((g) => g.eventType === 'job_completed').reduce((s, g) => s + Number(g.hoursWorked || 0), 0);
+        const cancellations = gigs.filter((g) => g.eventType === 'job_declined_offer' || g.eventType === 'job_cancelled_by_worker').length;
+        const consecutiveDays = Number(worker.gigsData?.consecutiveDays || 0);
+
+        const eligible = {
+            '5days': consecutiveDays >= 5 && streak.cancellationsInStreak === 0,
+            '10days': consecutiveDays >= 10 && streak.cancellationsInStreak === 0,
+            '20days': consecutiveDays >= 20 && streak.cancellationsInStreak === 0,
+        };
+
+        return res.json({
+            success: true,
+            phone,
+            snapshot: worker.gigsData || {},
+            computed: {
+                totalHours,
+                cancellations,
+                consecutiveDays,
+                cancellationsInCurrentStreak: streak.cancellationsInStreak,
+                eligibility: eligible,
+                reasons: {
+                    minHoursRule: '8+ hours/day required for day to count',
+                    cancellationRule: 'Decline/cancel inside streak invalidates eligibility',
+                },
+            },
+            claims,
+        });
+    } catch (error) {
+        console.error('Incentive debug error:', error);
+        return res.status(500).json({ success: false, message: error.message });
+    }
+});
+
+router.get('/ratings/center', authenticateToken, checkAdmin, async (req, res) => {
+    try {
+        const { limit } = parsePagination(req, 100, 500);
+        const jobs = await Job.find({ status: 'completed' }).sort({ updatedAt: -1 }).limit(1500).lean();
+
+        const workerRatings = [];
+        const contractorRatings = [];
+        let bulkRatedWorkers = 0;
+        let bulkAcceptedWorkers = 0;
+
+        for (const j of jobs) {
+            if (j.rating?.stars) workerRatings.push({ jobId: j._id, stars: Number(j.rating.stars), workerPhone: j.acceptedBy || null, ratedAt: j.rating.ratedAt || j.updatedAt });
+            if (j.contractorRating?.stars) contractorRatings.push({ jobId: j._id, stars: Number(j.contractorRating.stars), contractorPhone: j.contractorPhone || null, ratedAt: j.contractorRating.ratedAt || j.updatedAt });
+            for (const w of (j.acceptedWorkers || [])) {
+                bulkAcceptedWorkers += 1;
+                if (w.rating?.stars) bulkRatedWorkers += 1;
+            }
+        }
+
+        const avgWorkerRating = workerRatings.length ? workerRatings.reduce((s, r) => s + r.stars, 0) / workerRatings.length : 0;
+        const avgContractorRating = contractorRatings.length ? contractorRatings.reduce((s, r) => s + r.stars, 0) / contractorRatings.length : 0;
+
+        return res.json({
+            success: true,
+            summary: {
+                workerRatingsCount: workerRatings.length,
+                contractorRatingsCount: contractorRatings.length,
+                avgWorkerRating: Number(avgWorkerRating.toFixed(2)),
+                avgContractorRating: Number(avgContractorRating.toFixed(2)),
+                bulkWorkerRatingCoverage: bulkAcceptedWorkers ? Number(((bulkRatedWorkers / bulkAcceptedWorkers) * 100).toFixed(2)) : 0,
+            },
+            workerRatings: workerRatings.slice(0, limit),
+            contractorRatings: contractorRatings.slice(0, limit),
+        });
+    } catch (error) {
+        console.error('Ratings center error:', error);
+        return res.status(500).json({ success: false, message: error.message });
+    }
+});
+
+router.get('/leaderboard/debug', authenticateToken, checkAdmin, async (req, res) => {
+    try {
+        const city = safeText(req.query.city || '', 120);
+        const state = safeText(req.query.state || '', 120);
+        const query = { role: 'contractor' };
+        if (city) query.city = new RegExp(`^${city}$`, 'i');
+        if (state) query.state = new RegExp(`^${state}$`, 'i');
+
+        const contractors = await User.find(query).select('phone name avgRating createdAt city state').limit(300).lean();
+        const rows = [];
+
+        for (const c of contractors) {
+            const jobs = await Job.find({ contractorPhone: c.phone }).select('status paymentStatus').lean();
+            const totalJobsPosted = jobs.length;
+            const completedJobs = jobs.filter((j) => j.status === 'completed').length;
+            const completionRate = totalJobsPosted ? (completedJobs / totalJobsPosted) * 100 : 0;
+            const daysActive = Math.max(1, Math.ceil((Date.now() - new Date(c.createdAt).getTime()) / 86400000));
+            const breakdown = computeLeaderboardBreakdown({
+                avgRating: Number(c.avgRating || 0),
+                totalJobsPosted,
+                daysActive,
+                completionRate,
+            });
+            rows.push({
+                contractorPhone: c.phone,
+                contractorName: c.name,
+                city: c.city || '',
+                state: c.state || '',
+                avgRating: Number(c.avgRating || 0),
+                totalJobsPosted,
+                completedJobs,
+                completionRate: Number(completionRate.toFixed(2)),
+                daysActive,
+                ...breakdown,
+            });
+        }
+
+        rows.sort((a, b) => b.finalScore - a.finalScore);
+        rows.forEach((r, i) => { r.rank = i + 1; });
+        return res.json({ success: true, count: rows.length, rows });
+    } catch (error) {
+        console.error('Leaderboard debug error:', error);
+        return res.status(500).json({ success: false, message: error.message });
+    }
+});
+
+// ============================
+// ANALYTICS + EXPORTS + SCHEDULED REPORT DEFINITIONS
+// ============================
+router.get('/analytics/funnel', authenticateToken, checkAdmin, async (req, res) => {
+    try {
+        const from = req.query.from ? new Date(req.query.from) : new Date(Date.now() - 30 * 86400000);
+        const to = req.query.to ? new Date(req.query.to) : new Date();
+        const city = safeText(req.query.city || '', 120);
+
+        const query = { createdAt: { $gte: from, $lte: to } };
+        const jobs = await Job.find(query).select('status paymentStatus isCancelled attendanceStatus contractorPhone createdAt').lean();
+        const contractorPhones = Array.from(new Set(jobs.map((j) => j.contractorPhone).filter(Boolean)));
+        const contractorUsers = await User.find({ phone: { $in: contractorPhones } }).select('phone city').lean();
+        const cityMap = new Map(contractorUsers.map((u) => [u.phone, (u.city || '').toLowerCase()]));
+        const normalizedCity = city.toLowerCase();
+        const filteredJobs = city ? jobs.filter((j) => cityMap.get(j.contractorPhone) === normalizedCity) : jobs;
+
+        const posted = filteredJobs.filter((j) => ['pending', 'posted', 'offered', 'accepted', 'in_progress', 'completed'].includes(j.status) && !j.isCancelled).length;
+        const accepted = filteredJobs.filter((j) => ['accepted', 'in_progress', 'completed'].includes(j.status)).length;
+        const present = filteredJobs.filter((j) => (j.attendanceStatus || '').toLowerCase() === 'present').length;
+        const paid = filteredJobs.filter((j) => j.paymentStatus === 'Paid').length;
+        const cancelled = filteredJobs.filter((j) => j.status === 'cancelled' || j.isCancelled === true).length;
+
+        return res.json({
+            success: true,
+            filters: { from, to, city: city || null },
+            metrics: { posted, accepted, present, paid, cancelled, totalJobs: filteredJobs.length },
+        });
+    } catch (error) {
+        console.error('Funnel analytics error:', error);
+        return res.status(500).json({ success: false, message: error.message });
+    }
+});
+
+router.get('/analytics/funnel/export.csv', authenticateToken, checkAdmin, async (req, res) => {
+    try {
+        const from = req.query.from ? new Date(req.query.from) : new Date(Date.now() - 30 * 86400000);
+        const to = req.query.to ? new Date(req.query.to) : new Date();
+        const jobs = await Job.find({ createdAt: { $gte: from, $lte: to } })
+            .select('_id title contractorPhone status paymentStatus attendanceStatus amount createdAt')
+            .sort({ createdAt: -1 })
+            .lean();
+
+        const rows = jobs.map((j) => ({
+            jobId: String(j._id),
+            title: j.title || '',
+            contractorPhone: j.contractorPhone || '',
+            status: j.status || '',
+            paymentStatus: j.paymentStatus || '',
+            attendanceStatus: j.attendanceStatus || '',
+            amount: Number(j.amount || 0),
+            createdAt: j.createdAt ? new Date(j.createdAt).toISOString() : '',
+        }));
+
+        res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+        res.setHeader('Content-Disposition', `attachment; filename=\"funnel_export_${Date.now()}.csv\"`);
+        return res.status(200).send(buildCsv(rows));
+    } catch (error) {
+        console.error('Funnel CSV export error:', error);
+        return res.status(500).json({ success: false, message: error.message });
+    }
+});
+
+router.get('/analytics/funnel/export.excel', authenticateToken, checkAdmin, async (req, res) => {
+    try {
+        const from = req.query.from ? new Date(req.query.from) : new Date(Date.now() - 30 * 86400000);
+        const to = req.query.to ? new Date(req.query.to) : new Date();
+        const jobs = await Job.find({ createdAt: { $gte: from, $lte: to } })
+            .select('_id title contractorPhone status paymentStatus attendanceStatus amount createdAt')
+            .sort({ createdAt: -1 })
+            .lean();
+
+        const rows = jobs.map((j) => ({
+            jobId: String(j._id),
+            title: j.title || '',
+            contractorPhone: j.contractorPhone || '',
+            status: j.status || '',
+            paymentStatus: j.paymentStatus || '',
+            attendanceStatus: j.attendanceStatus || '',
+            amount: Number(j.amount || 0),
+            createdAt: j.createdAt ? new Date(j.createdAt).toISOString() : '',
+        }));
+
+        // Excel-compatible format via TSV content.
+        const headers = rows.length ? Object.keys(rows[0]) : ['jobId', 'title', 'contractorPhone', 'status', 'paymentStatus', 'attendanceStatus', 'amount', 'createdAt'];
+        const lines = [headers.join('\t'), ...rows.map((r) => headers.map((h) => String(r[h] ?? '')).join('\t'))];
+        res.setHeader('Content-Type', 'application/vnd.ms-excel; charset=utf-8');
+        res.setHeader('Content-Disposition', `attachment; filename=\"funnel_export_${Date.now()}.xls\"`);
+        return res.status(200).send(lines.join('\n'));
+    } catch (error) {
+        console.error('Funnel Excel export error:', error);
+        return res.status(500).json({ success: false, message: error.message });
+    }
+});
+
+router.get('/analytics/report-schedules', authenticateToken, checkAdmin, async (_req, res) => {
+    try {
+        const rows = Array.from(reportSchedules.values()).sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+        return res.json({ success: true, count: rows.length, rows });
+    } catch (error) {
+        console.error('Report schedules list error:', error);
+        return res.status(500).json({ success: false, message: error.message });
+    }
+});
+
+router.post('/analytics/report-schedules', authenticateToken, checkAdmin, async (req, res) => {
+    try {
+        const id = generateRef('rpt');
+        const schedule = {
+            id,
+            name: safeText(req.body?.name || 'weekly-funnel-report', 120),
+            cadence: safeText(req.body?.cadence || 'weekly', 30),
+            recipients: Array.isArray(req.body?.recipients) ? req.body.recipients.map((e) => safeText(e, 120)).filter(Boolean) : [],
+            format: safeText(req.body?.format || 'csv', 20),
+            active: req.body?.active !== false,
+            createdAt: new Date().toISOString(),
+            createdBy: req.user.phone || 'admin',
+        };
+        reportSchedules.set(id, schedule);
+        await logAdminAudit({ req, action: 'admin_action', phone: req.user.phone || 'admin', description: 'Report schedule created', before: null, after: schedule, metadata: { scheduleId: id } });
+        return res.json({ success: true, schedule });
+    } catch (error) {
+        console.error('Create report schedule error:', error);
+        return res.status(500).json({ success: false, message: error.message });
     }
 });
 

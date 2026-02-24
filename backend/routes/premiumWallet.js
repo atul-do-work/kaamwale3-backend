@@ -1,5 +1,6 @@
 const express = require("express");
 const mongoose = require("mongoose");
+const crypto = require("crypto");
 const { authenticateToken } = require("../utils/auth");
 const { requireActivePremium, isPremiumEntitled } = require("../utils/premiumEntitlement");
 const User = require("../models/User");
@@ -22,11 +23,13 @@ function createPremiumWalletRouter({ io }) {
   }
 
   function makeSubscriptionId(userPhone) {
-    return `sub_${userPhone}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const suffix = crypto.randomUUID ? crypto.randomUUID() : crypto.randomBytes(16).toString("hex");
+    return `sub_${userPhone}_${Date.now()}_${suffix}`;
   }
 
   function makeInvoiceId(userPhone) {
-    return `inv_${userPhone}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const suffix = crypto.randomUUID ? crypto.randomUUID() : crypto.randomBytes(16).toString("hex");
+    return `inv_${userPhone}_${Date.now()}_${suffix}`;
   }
 
   router.post("/premium/subscribe", authenticateToken, async (req, res) => {
@@ -436,7 +439,7 @@ function createPremiumWalletRouter({ io }) {
     }
   });
 
-  router.get("/leaderboard", async (req, res) => {
+  router.get("/leaderboard", authenticateToken, requireActivePremium, async (req, res) => {
     try {
       const { limit = 10 } = req.query;
       const filter = { role: "contractor", points: { $gt: 0 } };

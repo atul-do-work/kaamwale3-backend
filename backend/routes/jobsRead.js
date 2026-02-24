@@ -9,7 +9,6 @@ function createJobsReadRouter({ authenticateToken, Job, getDistanceFromLatLonInK
       const latNum = Number(lat);
       const lonNum = Number(lon);
       const workerPhone = req.user.phone;
-      const workerName = req.user.name;
       const MAX_RADIUS_KM = 10;
       const maxDistanceMeters = MAX_RADIUS_KM * 1000;
 
@@ -31,7 +30,7 @@ function createJobsReadRouter({ authenticateToken, Job, getDistanceFromLatLonInK
       });
 
       if (hasActiveUnpaidJob) {
-        console.log(`Worker ${workerName} (${workerPhone}) has unpaid job - blocking new job offers`);
+        console.log(`Worker (${workerPhone}) has unpaid job - blocking new job offers`);
         return res.json([]);
       }
 
@@ -40,7 +39,8 @@ function createJobsReadRouter({ authenticateToken, Job, getDistanceFromLatLonInK
           { status: { $in: ["pending", "posted", "offered"] } },
           { isCancelled: { $ne: true } },
           { paymentStatus: { $ne: "Paid" } },
-          { declinedBy: { $ne: workerName } },
+          // Canonical decline identity is worker phone.
+          { declinedBy: { $nin: [workerPhone] } },
           {
             jobLocation: {
               $nearSphere: {

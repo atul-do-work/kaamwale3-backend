@@ -7,6 +7,7 @@ const CancellationLog = require("../models/CancellationLog");
 const ActivityLog = require("../models/ActivityLog");
 const { updateGigDataOnCompletion } = require("../utils/gigsDataTracker");
 const { createGigHistoryEvent } = require("./gigHistoryService");
+const { cancelDispatchState } = require("./dispatchStateService");
 
 const payInFlightLocks = new Map();
 const payIdempotencyResults = new Map();
@@ -72,7 +73,6 @@ async function markAttendance({ jobId, status, workerPhone, userPhone, deps }) {
   await emitJobUpdatedToUsers(job, [
     job.contractorName,
     job.contractorPhone,
-    ratingTargetPhone,
     job.acceptedBy || job.contractorName,
   ]);
   return { code: 200, body: { success: true, job } };
@@ -688,6 +688,7 @@ async function cancelJob({ jobId, reason, reasonDescription, userPhone, deps }) 
     clearTimeout(pendingJobExpirations.get(jobId));
     pendingJobExpirations.delete(jobId);
   }
+  await cancelDispatchState({ jobId, reason: "job_cancelled" });
 
   await ActivityLog.create({
     userId: userPhone,

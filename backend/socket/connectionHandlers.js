@@ -1,4 +1,5 @@
 function attachSocketConnectionHandlers(io, deps) {
+  const { scheduleDispatchState, cancelDispatchState } = require("../services/dispatchStateService");
   const {
     Job,
     connectedWorkers,
@@ -317,67 +318,21 @@ io.on("connection", (socket) => {
                   pendingJobTimeouts.delete(jobCheck._id.toString());
                 }
                 pendingJobExpirations.delete(jobCheck._id.toString());
+                await cancelDispatchState({ jobId: jobCheck._id, reason: "expired_socket_post" });
               }
             } catch (e) {
               console.error('Error expiring job (socket post):', e);
             }
           }, EXPIRE_MS);
           pendingJobExpirations.set(newJob._id.toString(), expireId);
+          await scheduleDispatchState({
+            jobId: newJob._id,
+            type: "expire_offer",
+            runAt: new Date(Date.now() + EXPIRE_MS),
+            metadata: { source: "socket_post" },
+          });
         } catch (e) {
           console.error('Error scheduling job expiry (socket post):', e);
-        }
-
-        // ✅ Set overall job expiry: expire offers after 30 minutes if no one accepts
-        try {
-          const EXPIRE_MS = (process.env.JOB_EXPIRE_MINUTES ? Number(process.env.JOB_EXPIRE_MINUTES) : 30) * 60 * 1000;
-          if (pendingJobExpirations.has(newJob._id.toString())) {
-            clearTimeout(pendingJobExpirations.get(newJob._id.toString()));
-            pendingJobExpirations.delete(newJob._id.toString());
-          }
-          const expireId = setTimeout(async () => {
-            try {
-              const jobCheck = await Job.findById(newJob._id);
-              if (!jobCheck) return;
-              // Expire only if still pending and no acceptances
-              const acceptedCount = jobCheck.bulkHiring ? (jobCheck.acceptedWorkers?.length || 0) : (jobCheck.acceptedBy ? 1 : 0);
-              if (jobCheck.status === 'pending' && acceptedCount === 0) {
-                const oldState = { status: jobCheck.status, paymentStatus: jobCheck.paymentStatus };
-                jobCheck.status = 'expired';
-                await jobCheck.save();
-                await logJobEvent({
-                  jobId: jobCheck._id,
-                  eventType: "job_expired",
-                  actorType: "system",
-                  source: "system",
-                  oldState,
-                  newState: { status: jobCheck.status, paymentStatus: jobCheck.paymentStatus },
-                });
-                const payload = { ...jobCheck.toObject(), _id: jobCheck._id.toString(), id: jobCheck._id.toString(), status: 'expired', expiredAt: new Date() };
-                const targetUsers = [
-                  jobCheck.contractorPhone,
-                  jobCheck.contractorName,
-                  jobCheck.acceptedBy,
-                  ...(Array.isArray(jobCheck.acceptedWorkers) ? jobCheck.acceptedWorkers.map((w) => w?.phone).filter(Boolean) : []),
-                ];
-                if (typeof emitJobCancelledToUsers === 'function') {
-                  await emitJobCancelledToUsers(payload, targetUsers);
-                } else {
-                  io.emit('jobCancelled', payload);
-                }
-                // Clear any retry timeouts
-                if (pendingJobTimeouts.has(jobCheck._id.toString())) {
-                  clearTimeout(pendingJobTimeouts.get(jobCheck._id.toString()));
-                  pendingJobTimeouts.delete(jobCheck._id.toString());
-                }
-                pendingJobExpirations.delete(jobCheck._id.toString());
-              }
-            } catch (e) {
-              console.error('Error expiring job:', e);
-            }
-          }, EXPIRE_MS);
-          pendingJobExpirations.set(newJob._id.toString(), expireId);
-        } catch (e) {
-          console.error('Error scheduling job expiry:', e);
         }
 
         // ✅ Update contractor's current location when posting job

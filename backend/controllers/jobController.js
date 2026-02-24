@@ -45,7 +45,7 @@ function postJob(req, res) {
 }
 
 function getNearbyJobs(req, res) {
-  const { lat, lon, workerName } = req.body;
+  const { lat, lon, workerPhone } = req.body;
   if (typeof lat !== "number" || typeof lon !== "number") {
     return res.status(400).json({ success: false, message: "lat and lon required (numbers)" });
   }
@@ -56,7 +56,7 @@ function getNearbyJobs(req, res) {
     .filter(job => {
       if (job.status !== "pending") return false;
       job.declinedBy = Array.isArray(job.declinedBy) ? job.declinedBy : [];
-      if (workerName && job.declinedBy.includes(workerName)) return false;
+      if (workerPhone && job.declinedBy.includes(workerPhone)) return false;
       if (typeof job.lat !== "number" || typeof job.lon !== "number") return false;
       const d = getDistanceFromLatLonInKm(lat, lon, job.lat, job.lon);
       return d <= 5;
@@ -73,15 +73,15 @@ function getNearbyJobs(req, res) {
 
 function acceptJob(req, res) {
   const jobId = parseInt(req.params.id);
-  const { workerName } = req.body;
-  if (!workerName) return res.status(400).json({ success: false, message: "workerName required" });
+  const { workerPhone } = req.body;
+  if (!workerPhone) return res.status(400).json({ success: false, message: "workerPhone required" });
 
   const jobs = readJobs();
   const job = jobs.find(j => j.id === jobId);
   if (!job) return res.status(404).json({ success: false, message: "Job not found" });
   if (job.status !== "pending") return res.status(400).json({ success: false, message: "Job not available" });
 
-  job.acceptedBy = workerName;
+  job.acceptedBy = workerPhone;
   job.status = "accepted";
   writeJobs(jobs);
   return res.json({ success: true, job });
@@ -89,14 +89,14 @@ function acceptJob(req, res) {
 
 function declineJob(req, res) {
   const jobId = parseInt(req.params.id);
-  const { workerName } = req.body;
-  if (!workerName) return res.status(400).json({ success: false, message: "workerName required" });
+  const { workerPhone } = req.body;
+  if (!workerPhone) return res.status(400).json({ success: false, message: "workerPhone required" });
 
   const jobs = readJobs();
   const job = jobs.find(j => j.id === jobId);
   if (!job) return res.status(404).json({ success: false, message: "Job not found" });
   job.declinedBy = Array.isArray(job.declinedBy) ? job.declinedBy : [];
-  if (!job.declinedBy.includes(workerName)) job.declinedBy.push(workerName);
+  if (!job.declinedBy.includes(workerPhone)) job.declinedBy.push(workerPhone);
   // keep status pending so other workers can receive it
   writeJobs(jobs);
   return res.json({ success: true, job });

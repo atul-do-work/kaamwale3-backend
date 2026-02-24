@@ -7,6 +7,7 @@ function startBackgroundSchedulers({
   startJobReconciliationScheduler,
   startPremiumReconciliationScheduler,
 }) {
+  const { cancelDispatchState } = require("../services/dispatchStateService");
   const startJobOfferCleanupScheduler = () => {
     setInterval(async () => {
       try {
@@ -32,6 +33,7 @@ function startBackgroundSchedulers({
             clearTimeout(pendingJobExpirations.get(jobId));
             pendingJobExpirations.delete(jobId);
           }
+          await cancelDispatchState({ jobId, reason: "cleanup_scheduler" });
         }
 
         console.log(`Job offer cleanup completed. Memory map size: ${pendingJobTimeouts.size}`);
@@ -53,4 +55,3 @@ function startBackgroundSchedulers({
 module.exports = {
   startBackgroundSchedulers,
 };
-

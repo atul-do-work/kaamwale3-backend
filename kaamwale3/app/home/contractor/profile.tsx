@@ -515,8 +515,8 @@ export default function ContractorProfile(): React.ReactElement {
   ];
 
   return (
-    <SafeAreaView edges={['top', 'left', 'right', 'bottom']} style={styles.container}>
-      <ScrollView contentContainerStyle={{ paddingBottom: 80 }}>
+    <SafeAreaView edges={['top', 'left', 'right']} style={styles.container}>
+      <ScrollView contentContainerStyle={{ paddingBottom: 16 }}>
       {/* Premium Header with Decorative Bubbles */}
       <LinearGradient colors={["#1a2f4d", "#2d5a8c"]} style={styles.headerGradient}>
         {/* ✅ Decorative Bubbles */}

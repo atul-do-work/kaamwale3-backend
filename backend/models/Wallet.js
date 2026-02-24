@@ -7,6 +7,19 @@ const walletSchema = new mongoose.Schema(
     availableBalance: { type: Number, default: 0 },
     pocketBalance: { type: Number, default: 0 },
     bankAccountId: { type: mongoose.Schema.Types.ObjectId, ref: 'BankAccount' },
+    upiId: { type: String, default: null },
+    upiMasked: { type: String, default: null },
+    upiIsVerified: { type: Boolean, default: false },
+    upiVerificationStatus: {
+      type: String,
+      enum: ['pending', 'verified', 'rejected', 'unlinked'],
+      default: 'unlinked',
+    },
+    preferredPayoutMethod: {
+      type: String,
+      enum: ['bank', 'upi', null],
+      default: null,
+    },
     transactions: [
       {
         type: {
@@ -43,12 +56,11 @@ walletSchema.index({ 'transactions.paymentId': 1 }, { unique: true, sparse: true
 walletSchema.index({ 'transactions.payoutId': 1 }, { sparse: true });
 walletSchema.index({ 'transactions.idempotencyKey': 1 }, { sparse: true });
 
-walletSchema.pre('save', function syncLegacyBalance(next) {
+walletSchema.pre('save', function syncLegacyBalance() {
   // Keep legacy balance aligned with withdrawable balance for older API consumers.
   if (!Number.isFinite(this.availableBalance)) this.availableBalance = Number(this.balance || 0);
   if (!Number.isFinite(this.pocketBalance)) this.pocketBalance = 0;
   this.balance = Number(this.availableBalance || 0);
-  next();
 });
 
 walletSchema.methods.updateTotals = function updateTotals() {

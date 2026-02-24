@@ -2,6 +2,7 @@ import React, { createContext, useContext, useEffect, useState, ReactNode } from
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { secureSet, secureGet, secureDelete } from '../utils/secureStore';
 import { socket } from '../utils/socket';
+import { API_BASE } from '../utils/config';
 
 type AuthContextType = {
   accessToken: string | null;
@@ -35,13 +36,16 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       if (user && user.phone === data.contractorPhone) {
         // Fetch fresh user data to get updated premium plan
         try {
-          const response = await fetch('http://192.168.1.1/user/profile', {
+          const response = await fetch(`${API_BASE}/users/profile`, {
             headers: { 'Authorization': `Bearer ${accessToken}` },
           }).catch(() => null);
           
           if (response?.ok) {
             const userData = await response.json();
-            await updateUserPremium(userData.premiumPlan);
+            const latestPremiumPlan = userData?.user?.premiumPlan || userData?.premiumPlan;
+            if (latestPremiumPlan) {
+              await updateUserPremium(latestPremiumPlan);
+            }
             console.log('✅ Premium status updated instantly');
           }
         } catch (err) {

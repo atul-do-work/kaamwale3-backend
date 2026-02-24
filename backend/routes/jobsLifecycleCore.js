@@ -1,5 +1,6 @@
 const express = require("express");
 const { createGigHistoryEvent } = require("../services/gigHistoryService");
+const { cancelDispatchState } = require("../services/dispatchStateService");
 
 function createJobsLifecycleCoreRouter({
   authenticateToken,
@@ -17,25 +18,70 @@ function createJobsLifecycleCoreRouter({
   offerJobToNextWorker,
 }) {
   const router = express.Router();
+  const declineInFlight = new Set();
+  const declineResultCache = new Map();
+  const DECLINE_IDEMPOTENCY_TTL_MS = 5 * 60 * 1000;
+  const acceptInFlight = new Set();
+  const acceptResultCache = new Map();
+  const ACCEPT_IDEMPOTENCY_TTL_MS = 5 * 60 * 1000;
 
   router.post("/jobs/accept/:id", authenticateToken, async (req, res) => {
     try {
       const jobId = req.params.id;
       const workerName = req.user.name;
       const workerPhone = req.user.phone;
+      const idempotencyKey =
+        String(req.header("X-Idempotency-Key") || req.body?.idempotencyKey || "")
+          .trim()
+          .slice(0, 120);
+      const acceptKey = idempotencyKey || `accept:${jobId}:${workerPhone}`;
+
+      const now = Date.now();
+      for (const [k, v] of acceptResultCache.entries()) {
+        if (!v || now - v.at > ACCEPT_IDEMPOTENCY_TTL_MS) acceptResultCache.delete(k);
+      }
+      const finish = (statusCode, body, cache = true) => {
+        acceptInFlight.delete(acceptKey);
+        if (cache) acceptResultCache.set(acceptKey, { at: Date.now(), statusCode, body });
+        return res.status(statusCode).json(body);
+      };
+      if (acceptResultCache.has(acceptKey)) {
+        const cached = acceptResultCache.get(acceptKey);
+        return res.status(cached.statusCode).json({ ...cached.body, idempotent: true });
+      }
+      if (acceptInFlight.has(acceptKey)) {
+        return res.status(202).json({
+          success: true,
+          message: "Accept request already processing",
+          idempotent: true,
+        });
+      }
+      acceptInFlight.add(acceptKey);
 
       const hasUnpaidJob = await Job.findOne({
-        $or: [
-          { acceptedBy: workerPhone, paymentStatus: { $ne: "Paid" } },
-          { "acceptedWorkers.phone": workerPhone, paymentStatus: { $ne: "Paid" } },
+        $and: [
+          {
+            $or: [
+              { acceptedBy: workerPhone, paymentStatus: { $ne: "Paid" } },
+              {
+                acceptedWorkers: {
+                  $elemMatch: {
+                    phone: workerPhone,
+                    paymentStatus: { $ne: "Paid" },
+                  },
+                },
+              },
+            ],
+          },
+          { status: { $nin: ["cancelled", "expired", "completed"] } },
         ],
       });
 
       if (hasUnpaidJob) {
-        return res.status(400).json({
+        return finish(400, {
           success: false,
           message: `You have an unpaid job (${hasUnpaidJob.title}). Complete or decline it first.`,
-        });
+        }, false);
       }
 
       let acceptedWorkerSnapshot = null;
@@ -63,21 +109,46 @@ function createJobsLifecycleCoreRouter({
 
       const job = await Job.findById(jobId);
       if (!job) {
-        return res.status(404).json({ success: false, message: "Job not found" });
+        return finish(404, { success: false, message: "Job not found" }, false);
       }
 
-      const hasUnpaidJobSingle = await Job.findOne({ acceptedBy: workerPhone, paymentStatus: { $ne: "Paid" } });
-      const hasUnpaidJobBulk = await Job.findOne({ "acceptedWorkers.phone": workerPhone, paymentStatus: { $ne: "Paid" } });
+      const hasUnpaidJobSingle = await Job.findOne({
+        acceptedBy: workerPhone,
+        paymentStatus: { $ne: "Paid" },
+        status: { $nin: ["cancelled", "expired", "completed"] },
+      });
+      const hasUnpaidJobBulk = await Job.findOne({
+        acceptedWorkers: {
+          $elemMatch: {
+            phone: workerPhone,
+            paymentStatus: { $ne: "Paid" },
+          },
+        },
+        status: { $nin: ["cancelled", "expired", "completed"] },
+      });
       if (hasUnpaidJobSingle || hasUnpaidJobBulk) {
-        return res.status(400).json({ success: false, message: "You have an unpaid job. Complete or decline it first." });
+        return finish(400, { success: false, message: "You have an unpaid job. Complete or decline it first." }, false);
       }
 
       if (job.bulkHiring) {
+        const alreadyAccepted = (job.acceptedWorkers || []).find((w) => w.phone === workerPhone);
+        if (alreadyAccepted) {
+          return finish(200, { success: true, message: "Job already accepted by you", job, idempotent: true });
+        }
+
+        // Atomic slot claim for bulk jobs: only add worker if current accepted count < requiredWorkers.
         const updated = await Job.findOneAndUpdate(
           {
             _id: jobId,
             bulkHiring: true,
+            status: { $in: ["pending", "posted", "offered", "accepted"] },
             "acceptedWorkers.phone": { $ne: workerPhone },
+            $expr: {
+              $lt: [
+                { $size: { $ifNull: ["$acceptedWorkers", []] } },
+                { $ifNull: ["$requiredWorkers", 1] },
+              ],
+            },
           },
           {
             $addToSet: { acceptedWorkers: acceptedWorkerSnapshot },
@@ -88,9 +159,9 @@ function createJobsLifecycleCoreRouter({
         if (!updated) {
           const checkJob = await Job.findById(jobId);
           if (checkJob && checkJob.acceptedWorkers?.find((w) => w.phone === workerPhone)) {
-            return res.status(400).json({ success: false, message: "You have already accepted this job" });
+            return finish(200, { success: true, message: "You have already accepted this job", job: checkJob, idempotent: true });
           }
-          return res.status(400).json({ success: false, message: "Could not accept job" });
+          return finish(400, { success: false, message: "Could not accept job (slots full or job not available)" }, false);
         }
 
         const bulkJob = updated;
@@ -164,6 +235,7 @@ function createJobsLifecycleCoreRouter({
               clearTimeout(pendingJobExpirations.get(jobId));
               pendingJobExpirations.delete(jobId);
             }
+            await cancelDispatchState({ jobId, reason: "accepted_bulk_finalized" });
           }
         }
 
@@ -185,9 +257,13 @@ function createJobsLifecycleCoreRouter({
         }
 
         const payload = { ...bulkJob.toObject(), _targetedUpdate: true, targetedFor: [bulkJob.contractorName] };
-        await emitJobUpdatedToUsers(payload, [bulkJob.contractorName]);
+        await emitJobUpdatedToUsers(payload, [bulkJob.contractorPhone, workerPhone, bulkJob.acceptedBy]);
 
-        return res.json({ success: true, message: "Job accepted successfully", job: bulkJob });
+        return finish(200, { success: true, message: "Job accepted successfully", job: bulkJob, idempotent: false });
+      }
+
+      if (job.acceptedBy === workerPhone) {
+        return finish(200, { success: true, message: "Job already accepted by you", job, idempotent: true });
       }
 
       const updated = await Job.findOneAndUpdate(
@@ -197,7 +273,11 @@ function createJobsLifecycleCoreRouter({
       );
 
       if (!updated) {
-        return res.status(400).json({ success: false, message: "Job already accepted or not found" });
+        const latest = await Job.findById(jobId);
+        if (latest && latest.acceptedBy === workerPhone) {
+          return finish(200, { success: true, message: "Job already accepted by you", job: latest, idempotent: true });
+        }
+        return finish(400, { success: false, message: "Job already accepted or not found" }, false);
       }
 
       await logJobEvent({
@@ -273,9 +353,9 @@ function createJobsLifecycleCoreRouter({
       const acceptPayload = {
         ...updated.toObject(),
         _targetedUpdate: true,
-        targetedFor: [updated.contractorName, workerName],
+        targetedFor: [updated.contractorPhone, workerPhone],
       };
-      await emitJobUpdatedToUsers(acceptPayload, [updated.contractorName, workerName]);
+      await emitJobUpdatedToUsers(acceptPayload, [updated.contractorPhone, workerPhone]);
 
       if (pendingJobTimeouts.has(jobId)) {
         clearTimeout(pendingJobTimeouts.get(jobId));
@@ -285,6 +365,7 @@ function createJobsLifecycleCoreRouter({
         clearTimeout(pendingJobExpirations.get(jobId));
         pendingJobExpirations.delete(jobId);
       }
+      await cancelDispatchState({ jobId, reason: "accepted_single" });
 
       try {
         const TRACK_MINUTES = Number(process.env.TRACK_MINUTES) || 10;
@@ -292,8 +373,16 @@ function createJobsLifecycleCoreRouter({
       } catch (e) {
         console.error("Error starting tracking for job", e);
       }
-      return res.json({ success: true, message: "Job accepted successfully", job: updated });
+      return finish(200, { success: true, message: "Job accepted successfully", job: updated, idempotent: false });
     } catch (err) {
+      try {
+        const fallbackPhone = req.user?.phone;
+        const fallbackKey =
+          String(req.header("X-Idempotency-Key") || req.body?.idempotencyKey || "")
+            .trim()
+            .slice(0, 120) || `accept:${req.params.id}:${fallbackPhone}`;
+        acceptInFlight.delete(fallbackKey);
+      } catch (_e) {}
       console.error("Accept error:", err);
       return res.status(500).json({ success: false, message: "Internal server error" });
     }
@@ -304,14 +393,53 @@ function createJobsLifecycleCoreRouter({
       const jobId = req.params.id;
       const workerName = req.user.name;
       const workerPhone = req.user.phone;
+      const idempotencyKey =
+        String(req.header("X-Idempotency-Key") || req.body?.idempotencyKey || "")
+          .trim()
+          .slice(0, 120);
+      const declineKey = idempotencyKey || `decline:${jobId}:${workerPhone}`;
+
+      // Cleanup stale idempotency cache entries.
+      const now = Date.now();
+      for (const [k, v] of declineResultCache.entries()) {
+        if (!v || now - v.at > DECLINE_IDEMPOTENCY_TTL_MS) declineResultCache.delete(k);
+      }
+
+      const finish = (statusCode, body, cache = true) => {
+        declineInFlight.delete(declineKey);
+        if (cache) declineResultCache.set(declineKey, { at: Date.now(), statusCode, body });
+        return res.status(statusCode).json(body);
+      };
+
+      if (declineResultCache.has(declineKey)) {
+        const cached = declineResultCache.get(declineKey);
+        return res.status(cached.statusCode).json({ ...cached.body, idempotent: true });
+      }
+      if (declineInFlight.has(declineKey)) {
+        return res.status(202).json({
+          success: true,
+          message: "Decline request already processing",
+          idempotent: true,
+        });
+      }
+      declineInFlight.add(declineKey);
 
       const job = await Job.findById(jobId);
       if (!job) {
-        return res.status(404).json({ success: false, message: "Job not found" });
+        return finish(404, { success: false, message: "Job not found" }, false);
       }
 
-      if (!job.declinedBy.includes(workerName)) {
-        job.declinedBy.push(workerName);
+      // Canonical identity for declines is phone.
+      job.declinedBy = Array.isArray(job.declinedBy) ? job.declinedBy : [];
+      const alreadyDeclined = job.declinedBy.includes(workerPhone);
+
+      // Idempotent return for repeated decline taps / retries.
+      if (alreadyDeclined && !(job.acceptedBy === workerPhone || (job.acceptedWorkers || []).some((w) => w.phone === workerPhone))) {
+        return finish(200, { success: true, message: "Job already declined", job, idempotent: true });
+      }
+
+      if (!job.declinedBy.includes(workerPhone)) {
+        job.declinedBy.push(workerPhone);
       }
 
       if (job.bulkHiring) {
@@ -391,14 +519,15 @@ function createJobsLifecycleCoreRouter({
         actorType: "worker",
         actorPhone: workerPhone,
         source: "app",
+        idempotencyKey: idempotencyKey || null,
         oldState: { status: job.status },
         newState: { status: job.status },
         reasonCode: "worker_declined",
         reasonText: "Worker declined job offer",
-        metadata: { declinedBy: workerName, bulkHiring: !!job.bulkHiring },
+        metadata: { declinedBy: workerPhone, bulkHiring: !!job.bulkHiring },
       });
 
-      await emitJobUpdatedToUsers(job, [job.contractorName, workerName]);
+      await emitJobUpdatedToUsers(job, [job.contractorName, workerPhone]);
 
       if (job.status === "pending") {
         try {
@@ -408,8 +537,14 @@ function createJobsLifecycleCoreRouter({
         }
       }
 
-      return res.json({ success: true, message: "Job declined successfully", job });
+      return finish(200, { success: true, message: "Job declined successfully", job, idempotent: false });
     } catch (err) {
+      // Safety clear for lock if an exception happens before finish().
+      try {
+        const workerPhone = req.user?.phone;
+        const keyFallback = String(req.header("X-Idempotency-Key") || req.body?.idempotencyKey || "").trim().slice(0, 120) || `decline:${req.params.id}:${workerPhone}`;
+        declineInFlight.delete(keyFallback);
+      } catch (_e) {}
       console.error("Decline error:", err);
       return res.status(500).json({ success: false, message: "Internal server error" });
     }

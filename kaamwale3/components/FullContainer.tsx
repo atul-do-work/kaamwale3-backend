@@ -142,11 +142,6 @@ export default function FullContainer({
         </View>
       </View>
 
-      <View style={styles.overallPreview}>
-        <Text style={styles.overallPreviewTitle}>Overall Statistics</Text>
-        <Text style={styles.overallPreviewText}>Scroll down for full details</Text>
-      </View>
-
       {/* Summary Section */}
       <View style={styles.summarySection}>
         <LinearGradient

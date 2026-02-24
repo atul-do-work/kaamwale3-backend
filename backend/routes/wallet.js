@@ -65,6 +65,34 @@ function appendAuditFields({
   };
 }
 
+function maskUpiId(upiId) {
+  if (!upiId || typeof upiId !== "string" || !upiId.includes("@")) return "****";
+  const [handle, provider] = upiId.split("@");
+  if (!handle || !provider) return "****";
+  const visible = handle.length <= 2 ? handle[0] || "*" : handle.slice(0, 2);
+  return `${visible}***@${provider}`;
+}
+
+const PAYOUT_ALLOWED_ROLES = new Set(["worker", "contractor"]);
+
+async function requirePayoutAccess(req, res) {
+  let role = String(req.user?.role || "").toLowerCase();
+  if (!role) {
+    const user = await User.findOne({ phone: req.user?.phone }).select("role").lean();
+    role = String(user?.role || "").toLowerCase();
+    if (role) req.user.role = role;
+  }
+  if (!PAYOUT_ALLOWED_ROLES.has(role)) {
+    res.status(403).json({
+      success: false,
+      message: "Payout methods are available only for worker/contractor accounts.",
+      role: role || "unknown",
+    });
+    return false;
+  }
+  return true;
+}
+
 // ========== GET ROUTES ==========
 
 // GET wallet
@@ -119,6 +147,7 @@ router.get("/transactions", authenticateToken, async (req, res) => {
 // ✅ GET bank account details
 router.get("/bank-account", authenticateToken, async (req, res) => {
   try {
+    if (!(await requirePayoutAccess(req, res))) return;
     const bankAccount = await BankAccount.findOne({ phone: req.user.phone });
     
     if (!bankAccount) {
@@ -418,6 +447,7 @@ router.post("/deposit/verify", authenticateToken, depositVerifyLimiter, async (r
 // ✅ ADD/UPDATE bank account
 router.post("/bank-account/add", authenticateToken, async (req, res) => {
   try {
+    if (!(await requirePayoutAccess(req, res))) return;
     const { accountHolderName, accountNumber, accountNumberConfirm, ifscCode, bankName, accountType } = req.body;
 
     // Validation
@@ -493,10 +523,83 @@ router.post("/bank-account/add", authenticateToken, async (req, res) => {
 
 // ========== WITHDRAWAL ROUTES ==========
 
+router.get("/payout-method", authenticateToken, async (req, res) => {
+  try {
+    if (!(await requirePayoutAccess(req, res))) return;
+
+    let wallet = await Wallet.findOne({ phone: req.user.phone }).select("preferredPayoutMethod upiId");
+    if (!wallet) {
+      wallet = new Wallet({ phone: req.user.phone, balance: 0 });
+      await wallet.save();
+    }
+
+    let method = wallet.preferredPayoutMethod;
+    if (!method) {
+      if (wallet.upiId) {
+        method = "upi";
+      } else {
+        method = "bank";
+      }
+    }
+
+    return res.json({ success: true, payoutMethod: method || "bank" });
+  } catch (err) {
+    console.error("Payout method fetch error:", err);
+    return res.status(500).json({ success: false, message: "Error fetching payout method" });
+  }
+});
+
+router.post("/payout-method", authenticateToken, async (req, res) => {
+  try {
+    if (!(await requirePayoutAccess(req, res))) return;
+    const method = String(req.body?.method || "").toLowerCase();
+    if (!["bank", "upi"].includes(method)) {
+      return res.status(400).json({ success: false, message: "Invalid payout method" });
+    }
+
+    if (method === "bank") {
+      const bankAccount = await BankAccount.findOne({ phone: req.user.phone }).select("_id").lean();
+      if (!bankAccount) {
+        return res.status(400).json({
+          success: false,
+          message: "Please add a bank account before selecting Bank payout.",
+          requiresBankAccount: true,
+        });
+      }
+    } else {
+      const walletUpi = await Wallet.findOne({ phone: req.user.phone }).select("upiId").lean();
+      if (!walletUpi?.upiId) {
+        return res.status(400).json({
+          success: false,
+          message: "Please add a UPI ID before selecting UPI payout.",
+          requiresUpi: true,
+        });
+      }
+    }
+
+    const wallet = await Wallet.findOneAndUpdate(
+      { phone: req.user.phone },
+      { $set: { preferredPayoutMethod: method } },
+      { new: true, upsert: true }
+    );
+
+    return res.json({
+      success: true,
+      payoutMethod: wallet.preferredPayoutMethod || method,
+      message: "Payout method updated",
+    });
+  } catch (err) {
+    console.error("Payout method update error:", err);
+    return res.status(500).json({ success: false, message: "Error updating payout method" });
+  }
+});
+
 // ✅ WITHDRAW to bank account (requires bank account)
 router.post("/withdraw", authenticateToken, withdrawLimiter, async (req, res) => {
   try {
-    const { amount } = req.body;
+    if (!(await requirePayoutAccess(req, res))) return;
+    const { amount, payoutMethod: payoutMethodInput } = req.body;
+    const payoutMethod = String(payoutMethodInput || "bank").toLowerCase();
     
     // 🔐 STEP 1: INPUT VALIDATION - Numeric type safety
     if (amount === undefined || amount === null) {
@@ -522,23 +625,53 @@ router.post("/withdraw", authenticateToken, withdrawLimiter, async (req, res) =>
       return res.status(400).json({ success: false, message: "Withdrawal amount exceeds limit" });
     }
 
-    // 🔐 STEP 3: Verify bank account
-    const bankAccount = await BankAccount.findOne({ phone: req.user.phone });
-    
-    if (!bankAccount) {
-      return res.status(400).json({ 
-        success: false, 
-        message: "Please add a bank account before withdrawing",
-        requiresBankAccount: true
-      });
+    if (!["bank", "upi"].includes(payoutMethod)) {
+      return res.status(400).json({ success: false, message: "Invalid payout method" });
     }
 
-    if (!bankAccount.isVerified) {
-      return res.status(400).json({ 
-        success: false, 
-        message: `Bank account verification status: ${bankAccount.verificationStatus}. Please wait for verification.`,
-        verificationStatus: bankAccount.verificationStatus
-      });
+    // 🔐 STEP 3: Verify selected payout method
+    let bankAccount = null;
+    let upiDetails = null;
+
+    if (payoutMethod === "bank") {
+      bankAccount = await BankAccount.findOne({ phone: req.user.phone });
+      if (!bankAccount) {
+        return res.status(400).json({
+          success: false,
+          message: "Please add a bank account before withdrawing",
+          requiresBankAccount: true,
+        });
+      }
+
+      if (!bankAccount.isVerified) {
+        return res.status(400).json({
+          success: false,
+          message: `Bank account verification status: ${bankAccount.verificationStatus}. Please wait for verification.`,
+          verificationStatus: bankAccount.verificationStatus
+        });
+      }
+    } else {
+      const walletForUpi = await Wallet.findOne({ phone: req.user.phone }).select(
+        "upiId upiMasked upiIsVerified upiVerificationStatus"
+      );
+      if (!walletForUpi?.upiId) {
+        return res.status(400).json({
+          success: false,
+          message: "Please add a UPI ID before withdrawing",
+          requiresUpi: true,
+        });
+      }
+      if (!walletForUpi.upiIsVerified) {
+        return res.status(400).json({
+          success: false,
+          message: `UPI verification status: ${walletForUpi.upiVerificationStatus}. Please wait for verification.`,
+          verificationStatus: walletForUpi.upiVerificationStatus,
+          requiresUpiVerification: true,
+        });
+      }
+      upiDetails = {
+        maskedUpiId: walletForUpi.upiMasked || maskUpiId(walletForUpi.upiId),
+      };
     }
 
     // 🔐 STEP 4: ATOMIC OPERATION - Prevent race condition
@@ -570,10 +703,16 @@ router.post("/withdraw", authenticateToken, withdrawLimiter, async (req, res) =>
             openingBalance,
             closingBalance,
             status: "initiated", // pending until payout callback
-            description: `Withdrawal to bank account ${bankAccount.maskedAccount}`,
+            description:
+              payoutMethod === "bank"
+                ? `Withdrawal to bank account ${bankAccount.maskedAccount}`
+                : `Withdrawal to UPI ${upiDetails.maskedUpiId}`,
             source: "app",
             provider: "razorpay",
-            metadata: { bankMasked: bankAccount.maskedAccount },
+            metadata:
+              payoutMethod === "bank"
+                ? { payoutMethod: "bank", bankMasked: bankAccount.maskedAccount }
+                : { payoutMethod: "upi", upiMasked: upiDetails.maskedUpiId },
           })
         }
       },
@@ -592,16 +731,19 @@ router.post("/withdraw", authenticateToken, withdrawLimiter, async (req, res) =>
       status: 'initiated',
       walletTransactionId: latestTransaction?._id || null,
       provider: 'razorpay',
-      bankSnapshot: {
-        accountHolderName: bankAccount.accountHolderName,
-        maskedAccount: bankAccount.maskedAccount,
-        ifscCode: bankAccount.ifscCode,
-        bankName: bankAccount.bankName,
-        accountType: bankAccount.accountType,
-      },
+      bankSnapshot:
+        payoutMethod === "bank"
+          ? {
+              accountHolderName: bankAccount.accountHolderName,
+              maskedAccount: bankAccount.maskedAccount,
+              ifscCode: bankAccount.ifscCode,
+              bankName: bankAccount.bankName,
+              accountType: bankAccount.accountType,
+            }
+          : undefined,
     });
 
-    console.log(`✅ Withdrawal initiated: ${req.user.phone}, Amount: ₹${withdrawAmount}, Account: ${bankAccount.maskedAccount}`);
+    console.log(`✅ Withdrawal initiated: ${req.user.phone}, Amount: ₹${withdrawAmount}, Method: ${payoutMethod}`);
 
     // ✅ EMIT WALLET UPDATE to specific user only (via Socket.IO room)
     const io = req.app.get('io');
@@ -613,7 +755,10 @@ router.post("/withdraw", authenticateToken, withdrawLimiter, async (req, res) =>
         pocketBalance: Number(wallet.pocketBalance || 0),
         type: 'withdraw',
         amount: withdrawAmount,
-        message: `Withdrawal initiated: ₹${withdrawAmount} to ${bankAccount.bankName}`
+        message:
+          payoutMethod === "bank"
+            ? `Withdrawal initiated: ₹${withdrawAmount} to ${bankAccount.bankName}`
+            : `Withdrawal initiated: ₹${withdrawAmount} to ${upiDetails.maskedUpiId}`
       });
       console.log(`📤 Emitted walletUpdated for withdrawal to ${req.user.phone}`);
     }
@@ -628,14 +773,88 @@ router.post("/withdraw", authenticateToken, withdrawLimiter, async (req, res) =>
       availableBalance: Number(wallet.availableBalance || wallet.balance || 0),
       pocketBalance: Number(wallet.pocketBalance || 0),
       withdrawalAmount: withdrawAmount,
-      bankAccount: bankAccount.maskedAccount,
-      accountName: bankAccount.accountHolderName,
+      payoutMethod,
+      bankAccount: bankAccount?.maskedAccount || null,
+      upiId: upiDetails?.maskedUpiId || null,
+      accountName: bankAccount?.accountHolderName || null,
       withdrawalId: withdrawal._id,
       status: withdrawal.status,
     });
   } catch (err) {
     console.error('Withdraw error:', err);
     res.status(500).json({ success: false, message: "Error processing withdrawal" });
+  }
+});
+
+// ADD/UPDATE UPI payout method
+router.post("/upi/add", authenticateToken, async (req, res) => {
+  try {
+    if (!(await requirePayoutAccess(req, res))) return;
+    const rawUpiId = String(req.body?.upiId || "").trim().toLowerCase();
+    const upiRegex = /^[a-zA-Z0-9._-]{2,256}@[a-zA-Z]{2,64}$/;
+
+    if (!rawUpiId) {
+      return res.status(400).json({ success: false, message: "UPI ID is required" });
+    }
+    if (!upiRegex.test(rawUpiId)) {
+      return res.status(400).json({ success: false, message: "Invalid UPI ID format" });
+    }
+
+    let wallet = await Wallet.findOne({ phone: req.user.phone });
+    if (!wallet) {
+      wallet = new Wallet({ phone: req.user.phone, balance: 0 });
+    }
+
+    wallet.upiId = rawUpiId;
+    wallet.upiMasked = maskUpiId(rawUpiId);
+    wallet.upiIsVerified = true;
+    wallet.upiVerificationStatus = "verified";
+    await wallet.save();
+
+    return res.json({
+      success: true,
+      message: "UPI ID saved successfully.",
+      upi: {
+        maskedUpiId: wallet.upiMasked,
+        isVerified: wallet.upiIsVerified,
+        verificationStatus: wallet.upiVerificationStatus,
+      },
+    });
+  } catch (err) {
+    console.error("UPI add error:", err);
+    return res.status(500).json({ success: false, message: "Failed to save UPI ID" });
+  }
+});
+
+// GET UPI payout details
+router.get("/upi", authenticateToken, async (req, res) => {
+  try {
+    if (!(await requirePayoutAccess(req, res))) return;
+    let wallet = await Wallet.findOne({ phone: req.user.phone });
+    if (!wallet) {
+      wallet = new Wallet({ phone: req.user.phone, balance: 0 });
+      await wallet.save();
+    }
+
+    if (!wallet.upiId) {
+      return res.json({
+        success: true,
+        upi: null,
+        message: "No UPI ID linked",
+      });
+    }
+
+    return res.json({
+      success: true,
+      upi: {
+        maskedUpiId: wallet.upiMasked || maskUpiId(wallet.upiId),
+        isVerified: Boolean(wallet.upiIsVerified),
+        verificationStatus: wallet.upiVerificationStatus || "pending",
+      },
+    });
+  } catch (err) {
+    console.error("UPI fetch error:", err);
+    return res.status(500).json({ success: false, message: "Error fetching UPI details" });
   }
 });
 

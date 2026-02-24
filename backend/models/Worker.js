@@ -7,6 +7,11 @@ const workerSchema = new mongoose.Schema({
   rating: { type: Number, default: 5 },
   isAvailable: { type: Boolean, default: true },
   socketId: { type: String, default: "" },
+  isBlocked: { type: Boolean, default: false },
+  blockedReason: { type: String, default: "" },
+  riskFlags: { type: [String], default: [] },
+  forceOfflineAt: { type: Date, default: null },
+  forceOfflineReason: { type: String, default: "" },
 
   location: {
     type: { type: String, enum: ["Point"], default: "Point" },

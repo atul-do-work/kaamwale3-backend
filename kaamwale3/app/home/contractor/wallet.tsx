@@ -24,13 +24,12 @@ import { socket } from "../../../utils/socket";
 import { useLanguage } from "../../../context/LanguageContext";
 import { useAuth } from "../../../context/AuthContext";
 import api from "../../../utils/api";
+import ReferralModal from "../../../components/ReferralModal";
 
 // Wallet cards data
 const walletCards = [
-  { id: 1, title: "Payout", amount: 0, date: "3 Nov - 9 Nov", icon: null },
-  { id: 2, title: "Deductions", amount: null, date: "3 Nov - 9 Nov", icon: "attach-money" },
-  { id: 3, title: "Payout", amount: 0, date: "3 Nov - 9 Nov", icon: "payments" },
-  { id: 4, title: "Payout", amount: null, date: "3 Nov - 9 Nov", icon: "account-balance-wallet" },
+  { id: 1, title: "Wallet Summary", amount: 0, date: "This Week", icon: null },
+  { id: 2, title: "Transactions", amount: null, date: "This Week", icon: "account-balance-wallet" },
 ];
 
 interface Job {
@@ -106,7 +105,8 @@ export default function ContractorWalletAttendance() {
 
   // ✅ Pagination state for attendance cards
   const [displayedCount, setDisplayedCount] = useState(5); // Show 5 cards initially
-  const [walletDisplayedCount, setWalletDisplayedCount] = useState(4); // Show 2x2 cards initially
+  const [walletDisplayedCount] = useState(2);
+  const [referralModalVisible, setReferralModalVisible] = useState(false);
 
   // ✅ Razorpay deposit states
   const [depositModalVisible, setDepositModalVisible] = useState(false);
@@ -117,8 +117,13 @@ export default function ContractorWalletAttendance() {
 
   // ✅ Bank account states
   const [bankAccount, setBankAccount] = useState<any>(null);
+  const [upiAccount, setUpiAccount] = useState<any>(null);
+  const [payoutMethod, setPayoutMethod] = useState<"bank" | "upi">("bank");
+  const [showPayoutMethodModal, setShowPayoutMethodModal] = useState(false);
   const [showAddBank, setShowAddBank] = useState(false);
+  const [showAddUpi, setShowAddUpi] = useState(false);
   const [showBankInfo, setShowBankInfo] = useState(true);
+  const [showUpiInfo, setShowUpiInfo] = useState(true);
   const [bankDetails, setBankDetails] = useState({
     accountHolderName: "",
     accountNumber: "",
@@ -127,6 +132,7 @@ export default function ContractorWalletAttendance() {
     bankName: "",
     accountType: "savings"
   });
+  const [upiIdInput, setUpiIdInput] = useState("");
 
   const showAppModal = (
     _variant: AppModalVariant,
@@ -152,6 +158,8 @@ export default function ContractorWalletAttendance() {
       return () => {
         // When this component loses focus, close all modals
         setShowAddBank(false);
+        setShowAddUpi(false);
+        setShowPayoutMethodModal(false);
         setShowDepositInput(false);
         setShowWithdrawInput(false);
         setDepositModalVisible(false);
@@ -176,6 +184,7 @@ export default function ContractorWalletAttendance() {
         if (accessToken) {
           fetchWallet(accessToken);
           fetchBankAccount();
+          fetchUpiAccount();
         }
       } catch (err) {
         console.error('Failed to load user or token', err);
@@ -312,13 +321,14 @@ export default function ContractorWalletAttendance() {
 
       if (data.success) {
         showAppModal("success", t('success'), t('paymentSuccessful'));
-        // ✅ DON'T update state optimistically - let backend emit jobUpdated
-        // Backend will broadcast updated job with paymentStatus, triggering fetchJobs
+        // Keep UI responsive even if socket update is delayed.
+        await fetchJobs();
       } else {
         showAppModal("error", t('error'), data.message || t('paymentFailed'));
       }
     } catch (err) {
       console.error("Payment failed:", err);
+      showAppModal("error", t('error'), t('paymentFailed'));
     }
   };
 
@@ -456,8 +466,8 @@ export default function ContractorWalletAttendance() {
       // Check response success flag
       if (verifyData.success) {
         showAppModal("success", t('success'), t('paymentSuccessful') + "! " + t('paymentSuccessful'));
-        // ✅ DON'T update state optimistically - let backend emit jobUpdated + walletUpdated
-        // This ensures UI reflects authoritative backend state, not optimistic guess
+        // Keep UI responsive even if socket update is delayed.
+        await fetchJobs();
         setCurrentPaymentJobId(null);
         setCurrentPaymentWorkerPhone(null);
       } else {
@@ -536,6 +546,17 @@ export default function ContractorWalletAttendance() {
     }
   };
 
+  const fetchUpiAccount = async () => {
+    try {
+      const res = await api.get(`/wallet/upi`);
+      if (res.data.success) {
+        setUpiAccount(res.data.upi || null);
+      }
+    } catch (err) {
+      console.error("Error fetching UPI details:", err);
+    }
+  };
+
   // ✅ Add/Update bank account
   const handleAddBankAccount = async () => {
     // Validation
@@ -589,6 +610,34 @@ export default function ContractorWalletAttendance() {
       }
     } catch (err: any) {
       showAppModal("error", t('error'), err.response?.data?.message || t('failedAddBank'));
+    }
+  };
+
+  const handleAddUpiId = async () => {
+    const candidate = upiIdInput.trim().toLowerCase();
+    const upiRegex = /^[a-zA-Z0-9._-]{2,256}@[a-zA-Z]{2,64}$/;
+
+    if (!candidate) {
+      showAppModal("error", "Error", "Please enter a UPI ID");
+      return;
+    }
+    if (!upiRegex.test(candidate)) {
+      showAppModal("error", "Error", "Please enter a valid UPI ID (example: name@bank)");
+      return;
+    }
+
+    try {
+      const res = await api.post(`/wallet/upi/add`, { upiId: candidate });
+      if (res.data.success) {
+        setUpiAccount(res.data.upi || null);
+        setUpiIdInput("");
+        setShowAddUpi(false);
+        setPayoutMethod("upi");
+        setShowUpiInfo(true);
+        showAppModal("success", "Success", res.data.message || "UPI ID saved successfully");
+      }
+    } catch (err: any) {
+      showAppModal("error", "Error", err.response?.data?.message || "Failed to save UPI ID");
     }
   };
 
@@ -795,22 +844,28 @@ export default function ContractorWalletAttendance() {
       return;
     }
 
-    // Check if bank account is linked
-    if (!bankAccount) {
-      showAlert(
-        "Bank Account Required",
-        "Please add your bank account details before withdrawing",
-        [
-          { text: "Cancel", onPress: () => {} },
-          { text: "Add Bank Account", onPress: () => setShowAddBank(true) }
-        ]
-      );
+    if (payoutMethod === "bank" && !bankAccount) {
+      setShowPayoutMethodModal(true);
+      return;
+    }
+    if (payoutMethod === "bank" && bankAccount && !bankAccount.isVerified) {
+      showAlert("Bank Verification Pending", `Status: ${bankAccount.verificationStatus || "pending"}`);
+      return;
+    }
+
+    if (payoutMethod === "upi" && !upiAccount) {
+      setShowPayoutMethodModal(true);
+      return;
+    }
+    if (payoutMethod === "upi" && upiAccount && !upiAccount.isVerified) {
+      showAlert("UPI Verification Pending", `Status: ${upiAccount.verificationStatus || "pending"}`);
       return;
     }
 
     try {
       const res = await api.post(`/wallet/withdraw`, {
-        amount: Number(withdrawAmount)
+        amount: Number(withdrawAmount),
+        payoutMethod,
       });
 
       if (res.data.success) {
@@ -821,7 +876,16 @@ export default function ContractorWalletAttendance() {
         
       }
     } catch (err: any) {
-      const errorMsg = err.response?.data?.message || t('withdrawFailed');
+      const response = err.response?.data;
+      const errorMsg = response?.message || t('withdrawFailed');
+      if (response?.requiresBankAccount) {
+        setShowPayoutMethodModal(true);
+        return;
+      }
+      if (response?.requiresUpi) {
+        setShowPayoutMethodModal(true);
+        return;
+      }
       showAlert(t('error'), errorMsg);
     }
   };
@@ -932,6 +996,16 @@ export default function ContractorWalletAttendance() {
     setDisplayedCount(5);
   }, [jobs]);
 
+  useEffect(() => {
+    if (upiAccount?.isVerified) {
+      setPayoutMethod("upi");
+      return;
+    }
+    if (bankAccount) {
+      setPayoutMethod("bank");
+    }
+  }, [bankAccount, upiAccount]);
+
   return (
     <View
       style={{
@@ -985,6 +1059,10 @@ export default function ContractorWalletAttendance() {
             <TouchableOpacity
               style={[styles.actionButton, { backgroundColor: "#2ecc71", flex: 1, marginLeft: 5 }]}
               onPress={() => {
+                if (!bankAccount && !upiAccount) {
+                  setShowPayoutMethodModal(true);
+                  return;
+                }
                 setShowWithdrawInput(!showWithdrawInput);
                 setShowDepositInput(false);
               }}
@@ -1025,22 +1103,69 @@ export default function ContractorWalletAttendance() {
           )}
 
           {showWithdrawInput && (
-            <View style={styles.buttonRow}>
-              <TextInput
-                placeholder="Enter withdraw amount"
-                style={styles.input}
-                value={withdrawAmount}
-                onChangeText={setWithdrawAmount}
-                keyboardType="numeric"
-              />
+            <View>
               <TouchableOpacity
-                style={[styles.actionButton, { backgroundColor: "#2ecc71" }]}
-                onPress={confirmWithdraw}
+                style={{
+                  marginHorizontal: 16,
+                  marginBottom: 10,
+                  paddingVertical: 10,
+                  paddingHorizontal: 12,
+                  borderRadius: 8,
+                  borderWidth: 1,
+                  borderColor: "#d1d5db",
+                  backgroundColor: "#fff",
+                  flexDirection: "row",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                }}
+                onPress={() => setShowPayoutMethodModal(true)}
               >
-                <Text style={styles.buttonText}>Submit</Text>
+                <Text style={{ color: "#111827", fontWeight: "600" }}>
+                  Payout Method: {payoutMethod === "bank" ? "Bank Account" : "UPI"}
+                </Text>
+                <Text style={{ color: "#1a2f4d", fontWeight: "700" }}>Change</Text>
               </TouchableOpacity>
+              <View style={styles.buttonRow}>
+                <TextInput
+                  placeholder="Enter withdraw amount"
+                  style={styles.input}
+                  value={withdrawAmount}
+                  onChangeText={setWithdrawAmount}
+                  keyboardType="numeric"
+                />
+                <TouchableOpacity
+                  style={[styles.actionButton, { backgroundColor: "#2ecc71" }]}
+                  onPress={confirmWithdraw}
+                >
+                  <Text style={styles.buttonText}>Submit</Text>
+                </TouchableOpacity>
+              </View>
             </View>
           )}
+
+          <TouchableOpacity
+            style={{
+              marginHorizontal: 16,
+              marginTop: 12,
+              marginBottom: 12,
+              backgroundColor: "#6C63FF",
+              borderRadius: 10,
+              paddingVertical: 14,
+              paddingHorizontal: 14,
+              flexDirection: "row",
+              alignItems: "center",
+              justifyContent: "space-between",
+            }}
+            onPress={() => setReferralModalVisible(true)}
+          >
+            <View style={{ flexDirection: "row", alignItems: "center" }}>
+              <MaterialIcons name="card-giftcard" size={20} color="#fff" />
+              <Text style={{ color: "#fff", fontSize: 15, fontWeight: "700", marginLeft: 10 }}>
+                Refer & Earn
+              </Text>
+            </View>
+            <MaterialIcons name="arrow-forward" size={20} color="#fff" />
+          </TouchableOpacity>
 
           {/* Cards */}
           <View style={styles.cardsRow}>
@@ -1060,21 +1185,6 @@ export default function ContractorWalletAttendance() {
               </TouchableOpacity>
             ))}
           </View>
-          {walletDisplayedCount < walletCards.length && (
-            <TouchableOpacity
-              style={{
-                marginHorizontal: 16,
-                marginBottom: 20,
-                paddingVertical: 12,
-                backgroundColor: "#1a2f4d",
-                borderRadius: 8,
-                alignItems: "center"
-              }}
-              onPress={() => setWalletDisplayedCount(prev => prev + 4)}
-            >
-              <Text style={{ color: "#fff", fontSize: 14, fontWeight: "600" }}>See More</Text>
-            </TouchableOpacity>
-          )}
         </ScrollView>
       )}
 
@@ -1260,6 +1370,97 @@ export default function ContractorWalletAttendance() {
         </SafeAreaView>
       </Modal>
 
+      {/* Payout Method Selection Modal */}
+      <Modal visible={showPayoutMethodModal && activeTab === "Wallet"} transparent animationType="fade">
+        <View style={{ flex: 1, justifyContent: "center", alignItems: "center", backgroundColor: "rgba(0,0,0,0.4)" }}>
+          <TouchableOpacity
+            activeOpacity={1}
+            onPress={() => setShowPayoutMethodModal(false)}
+            style={{ position: "absolute", top: 0, left: 0, right: 0, bottom: 0 }}
+          />
+          <View style={{ width: "90%", backgroundColor: "#fff", borderRadius: 12, padding: 16 }}>
+            <Text style={{ fontSize: 16, fontWeight: "700", color: "#111827", marginBottom: 12 }}>
+              Select Payout Method
+            </Text>
+
+            <TouchableOpacity
+              style={{
+                padding: 12,
+                borderRadius: 8,
+                borderWidth: 1,
+                borderColor: payoutMethod === "bank" ? "#1a2f4d" : "#e5e7eb",
+                marginBottom: 8,
+              }}
+              onPress={() => {
+                setPayoutMethod("bank");
+                setShowPayoutMethodModal(false);
+                if (!bankAccount) setShowAddBank(true);
+              }}
+            >
+              <Text style={{ fontWeight: "700", color: "#111827" }}>Bank Account</Text>
+              <Text style={{ color: "#6b7280", marginTop: 2 }}>
+                {bankAccount?.maskedAccount
+                  ? `Linked: ${bankAccount.maskedAccount}${bankAccount?.isVerified ? " (Verified)" : " (Pending)"}`
+                  : "No bank account linked"}
+              </Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={{
+                padding: 12,
+                borderRadius: 8,
+                borderWidth: 1,
+                borderColor: payoutMethod === "upi" ? "#1a2f4d" : "#e5e7eb",
+              }}
+              onPress={() => {
+                setPayoutMethod("upi");
+                setShowPayoutMethodModal(false);
+                if (!upiAccount) setShowAddUpi(true);
+              }}
+            >
+              <Text style={{ fontWeight: "700", color: "#111827" }}>UPI ID</Text>
+              <Text style={{ color: "#6b7280", marginTop: 2 }}>
+                {upiAccount?.maskedUpiId
+                  ? `Linked: ${upiAccount.maskedUpiId}${upiAccount?.isVerified ? " (Verified)" : " (Pending)"}`
+                  : "No UPI ID linked"}
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* UPI Modal */}
+      <Modal visible={showAddUpi && activeTab === "Wallet"} transparent animationType="slide">
+        <SafeAreaView edges={['top', 'left', 'right', 'bottom']} style={{ flex: 1, backgroundColor: "#fff" }}>
+          <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingTop: 12, paddingHorizontal: 16, paddingBottom: 12, borderBottomWidth: 1, borderBottomColor: "#EEE" }}>
+            <Text style={{ fontSize: 18, fontWeight: "700", color: "#333" }}>Add UPI ID</Text>
+            <TouchableOpacity onPress={() => setShowAddUpi(false)}>
+              <MaterialIcons name="close" size={28} color="#333" />
+            </TouchableOpacity>
+          </View>
+          <View style={{ padding: 16 }}>
+            <Text style={{ fontSize: 14, fontWeight: "600", color: "#333", marginBottom: 8 }}>UPI ID *</Text>
+            <TextInput
+              style={{ borderWidth: 1, borderColor: "#DDD", borderRadius: 8, padding: 12, marginBottom: 8, fontSize: 14 }}
+              placeholder="example@bank"
+              autoCapitalize="none"
+              autoCorrect={false}
+              value={upiIdInput}
+              onChangeText={setUpiIdInput}
+            />
+            <Text style={{ fontSize: 12, color: "#666", marginBottom: 18 }}>
+              Withdrawals will be sent to this UPI ID.
+            </Text>
+            <TouchableOpacity
+              style={{ backgroundColor: "#1a2f4d", padding: 14, borderRadius: 8, alignItems: "center" }}
+              onPress={handleAddUpiId}
+            >
+              <Text style={{ color: "#fff", fontWeight: "700", fontSize: 15 }}>Save UPI ID</Text>
+            </TouchableOpacity>
+          </View>
+        </SafeAreaView>
+      </Modal>
+
       {/* ✅ Bank Account Modal */}
       {/* ✅ Bank Account Modal - Only visible in Wallet tab */}
       <Modal visible={showAddBank && activeTab === "Wallet"} transparent animationType="slide">
@@ -1390,6 +1591,26 @@ export default function ContractorWalletAttendance() {
         </View>
       )}
 
+      {upiAccount && showUpiInfo && (
+        <View style={{ padding: 16, backgroundColor: "#f5f3ff", marginTop: 10, marginHorizontal: 16, borderRadius: 8, borderLeftWidth: 4, borderLeftColor: "#6d28d9" }}>
+          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+            <Text style={{ fontSize: 14, fontWeight: "600", color: "#333" }}>UPI Payout</Text>
+            <TouchableOpacity onPress={() => setShowUpiInfo(false)}>
+              <MaterialIcons name="close" size={20} color="#333" />
+            </TouchableOpacity>
+          </View>
+          <Text style={{ fontSize: 12, color: "#666", marginBottom: 4 }}>{upiAccount.maskedUpiId}</Text>
+          <Text style={{ fontSize: 11, color: upiAccount.isVerified ? "#27ae60" : "#f39c12" }}>
+            {upiAccount.isVerified ? "✅ Verified" : `⏳ ${upiAccount.verificationStatus}`}
+          </Text>
+          <View style={{ marginTop: 12, flexDirection: 'row', justifyContent: 'flex-end' }}>
+            <TouchableOpacity onPress={() => setShowAddUpi(true)}>
+              <Text style={{ color: "#6d28d9", fontWeight: "600" }}>Change</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      )}
+
       {/* ✅ Pay Options Modal - Moved outside FlatList for safety & performance */}
       <Modal visible={payOptionsTarget !== null} transparent animationType="fade">
         <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: 'rgba(0,0,0,0.4)' }}>
@@ -1421,6 +1642,13 @@ export default function ContractorWalletAttendance() {
           </View>
         </View>
       </Modal>
+
+      <ReferralModal
+        visible={referralModalVisible}
+        onClose={() => setReferralModalVisible(false)}
+        workerName={contractorName || "Contractor"}
+        workerPhone={authUser?.phone || ""}
+      />
     </View>
   );
 }

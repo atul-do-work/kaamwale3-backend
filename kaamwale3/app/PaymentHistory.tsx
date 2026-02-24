@@ -60,6 +60,36 @@ export default function PaymentHistoryScreen(): React.ReactElement {
     refund: { icon: "undo", color: "#4ECDC4", label: "Refunded" },
   };
 
+  const formatTransactionDate = (raw: string): string => {
+    if (!raw) return "-";
+
+    const direct = new Date(raw);
+    if (!Number.isNaN(direct.getTime())) {
+      return direct.toLocaleDateString("en-IN");
+    }
+
+    // Backend may send: DD/MM/YYYY HH:MM:SS AM/PM
+    const match = raw.match(
+      /^(\d{1,2})\/(\d{1,2})\/(\d{4})(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(AM|PM)?)?$/i
+    );
+    if (!match) return raw;
+
+    const day = Number(match[1]);
+    const month = Number(match[2]) - 1;
+    const year = Number(match[3]);
+    let hour = Number(match[4] || 0);
+    const minute = Number(match[5] || 0);
+    const second = Number(match[6] || 0);
+    const meridiem = (match[7] || "").toUpperCase();
+
+    if (meridiem === "PM" && hour < 12) hour += 12;
+    if (meridiem === "AM" && hour === 12) hour = 0;
+
+    const parsed = new Date(year, month, day, hour, minute, second);
+    if (Number.isNaN(parsed.getTime())) return raw;
+    return parsed.toLocaleDateString("en-IN");
+  };
+
   // ✅ Fix: Memoize filtered & reversed transactions (avoid mutating state)
   const filteredTransactions = useMemo(() => {
     return [...transactions]
@@ -120,7 +150,7 @@ export default function PaymentHistoryScreen(): React.ReactElement {
                 <Text style={styles.description}>{transaction.description}</Text>
                 {/* ✅ Fix: Format date properly */}
                 <Text style={styles.date}>
-                  {new Date(transaction.date).toLocaleDateString()}
+                  {formatTransactionDate(transaction.date)}
                 </Text>
               </View>
 

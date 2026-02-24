@@ -27,13 +27,16 @@ export default function PremiumPlansModal({
   const [subscribing, setSubscribing] = useState(false);
   const [subscribingPlanId, setSubscribingPlanId] = useState<string | null>(null);
   const [error, setError] = useState("");
+  const [plansLoading, setPlansLoading] = React.useState(false);
   const [walletBalance, setWalletBalance] = React.useState(0);
+  const [plans, setPlans] = React.useState<Array<{ id: string; name: string; price: number; features: string[]; popular?: boolean }>>([]);
   const subscribeInFlightRef = useRef(false);
 
   // Fetch wallet balance when modal opens
   React.useEffect(() => {
     if (visible) {
       fetchWalletBalance();
+      fetchPlans();
     }
   }, [visible]);
 
@@ -49,22 +52,24 @@ export default function PremiumPlansModal({
     }
   };
 
-  const plans = [
-    {
-      id: "basic",
-      name: "Basic",
-      price: 399,
-      features: ["Bulk Hiring", "24/7 Instant", "Leaderboard"],
-      popular: false,
-    },
-    {
-      id: "pro",
-      name: "Pro",
-      price: 699,
-      features: ["Bulk Hiring", "24/7 Instant", "Leaderboard", "Custom Add-ons"],
-      popular: true,
-    },
-  ];
+  const fetchPlans = async () => {
+    try {
+      setPlansLoading(true);
+      const res = await api.get(`/premium/plans`);
+      const data = res.data;
+      if (data?.success && Array.isArray(data.plans) && data.plans.length > 0) {
+        setPlans(data.plans);
+        return;
+      }
+      setPlans([]);
+      setError("No premium plans available right now. Please try again.");
+    } catch (err) {
+      setPlans([]);
+      setError("Unable to load premium plans. Please check connection and retry.");
+    } finally {
+      setPlansLoading(false);
+    }
+  };
 
   const handleSubscribe = async (planId: string) => {
     if (subscribeInFlightRef.current || subscribing) return;
@@ -147,6 +152,33 @@ export default function PremiumPlansModal({
           ) : null}
 
           <ScrollView style={{ paddingHorizontal: 15 }}>
+            {plansLoading ? (
+              <View style={{ paddingVertical: 24, alignItems: "center" }}>
+                <ActivityIndicator size="small" color="#2E8B57" />
+                <Text style={{ marginTop: 10, color: "#666", fontSize: 13 }}>Loading plans...</Text>
+              </View>
+            ) : null}
+
+            {!plansLoading && plans.length === 0 ? (
+              <View style={{ paddingVertical: 16 }}>
+                <Text style={{ color: "#666", textAlign: "center", marginBottom: 10 }}>
+                  No plans to show right now.
+                </Text>
+                <TouchableOpacity
+                  onPress={fetchPlans}
+                  style={{
+                    alignSelf: "center",
+                    backgroundColor: "#2E8B57",
+                    paddingHorizontal: 14,
+                    paddingVertical: 8,
+                    borderRadius: 6,
+                  }}
+                >
+                  <Text style={{ color: "#fff", fontWeight: "700" }}>Retry</Text>
+                </TouchableOpacity>
+              </View>
+            ) : null}
+
             {plans.map((plan) => (
               <LinearGradient
                 key={plan.id}
@@ -214,12 +246,12 @@ export default function PremiumPlansModal({
 
                   <TouchableOpacity
                     onPress={() => handleSubscribe(plan.id)}
-                    disabled={subscribing}
+                    disabled={subscribing || plansLoading}
                     style={{
                       backgroundColor: plan.popular ? "#FFD700" : "#2E8B57",
                       paddingVertical: 10,
                       borderRadius: 6,
-                      opacity: subscribing ? 0.6 : 1,
+                      opacity: subscribing || plansLoading ? 0.6 : 1,
                     }}
                   >
                     {subscribing && subscribingPlanId === plan.id ? (

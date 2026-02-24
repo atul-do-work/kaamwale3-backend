@@ -568,6 +568,14 @@ router.get('/city/:cityName', authenticateToken, async (req, res) => {
   try {
     const { cityName } = req.params;
     const { state } = req.query;
+    const user = await User.findById(req.user.id).select('premiumPlan');
+    if (!isPremiumActive(user)) {
+      return res.status(403).json({
+        success: false,
+        message: 'Leaderboard feature requires an active premium plan',
+        upgradePlanUrl: '/premium/plans',
+      });
+    }
 
     let leaderboard;
 

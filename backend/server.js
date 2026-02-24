@@ -26,6 +26,7 @@ const {
 } = require("./services/realtimeDispatchService");
 const { createJobEventLogger } = require("./services/jobEventService");
 const { createJobDispatchHelpers } = require("./services/jobDispatchService");
+const { startDispatchStateProcessor } = require("./services/dispatchStateService");
 
 
 // ---------------- MODELS ----------------
@@ -166,6 +167,16 @@ mountAppRoutes({
   offerJobToNextWorker,
   sendNotificationToUserPhone,
   port: PORT,
+});
+
+startDispatchStateProcessor({
+  Job,
+  io,
+  emitJobCancelledToUsers,
+  logJobEvent,
+  offerJobToNextWorker,
+  pendingJobTimeouts,
+  pendingJobExpirations,
 });
 
 

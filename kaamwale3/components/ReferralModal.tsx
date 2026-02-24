@@ -11,6 +11,7 @@ import {
   ScrollView,
   ActivityIndicator,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
 import * as Clipboard from 'expo-clipboard';
 
@@ -119,8 +120,9 @@ export default function ReferralModal({
     <Modal visible={visible} transparent animationType="fade">
       {/* Backdrop */}
       <View style={styles.backdrop}>
-        {/* Modal Container */}
-        <View style={styles.container}>
+        <SafeAreaView style={styles.safeArea} edges={['bottom']}>
+          {/* Modal Container */}
+          <View style={styles.container}>
           {/* Header */}
           <View style={styles.header}>
             <Text style={styles.title}>🎁 Refer & Earn</Text>
@@ -236,13 +238,17 @@ export default function ReferralModal({
               <Text style={styles.closeButtonText}>Close</Text>
             </TouchableOpacity>
           </View>
-        </View>
+          </View>
+        </SafeAreaView>
       </View>
     </Modal>
   );
 }
 
 const styles = StyleSheet.create({
+  safeArea: {
+    width: '100%',
+  },
   backdrop: {
     flex: 1,
     backgroundColor: 'rgba(0, 0, 0, 0.5)',
