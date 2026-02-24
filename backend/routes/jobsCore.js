@@ -14,6 +14,7 @@ function createJobsCoreRouter({
   pendingJobExpirations,
   updateContractorStats,
   offerJobToNextWorker,
+  emitJobCancelledToUsers,
 }) {
   const router = express.Router();
 
@@ -124,13 +125,24 @@ function createJobsCoreRouter({
                 oldState,
                 newState: { status: jobCheck.status, paymentStatus: jobCheck.paymentStatus },
               });
-              io.emit("jobCancelled", {
+              const payload = {
                 ...jobCheck.toObject(),
                 _id: jobCheck._id.toString(),
                 id: jobCheck._id.toString(),
                 status: "expired",
                 expiredAt: new Date(),
-              });
+              };
+              const targetUsers = [
+                jobCheck.contractorPhone,
+                jobCheck.contractorName,
+                jobCheck.acceptedBy,
+                ...(Array.isArray(jobCheck.acceptedWorkers) ? jobCheck.acceptedWorkers.map((w) => w?.phone).filter(Boolean) : []),
+              ];
+              if (typeof emitJobCancelledToUsers === "function") {
+                await emitJobCancelledToUsers(payload, targetUsers);
+              } else {
+                io.emit("jobCancelled", payload);
+              }
               if (pendingJobTimeouts.has(jobCheck._id.toString())) {
                 clearTimeout(pendingJobTimeouts.get(jobCheck._id.toString()));
                 pendingJobTimeouts.delete(jobCheck._id.toString());
@@ -182,4 +194,3 @@ function createJobsCoreRouter({
 module.exports = {
   createJobsCoreRouter,
 };
-

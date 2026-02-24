@@ -8,6 +8,24 @@ const ActivityLog = require("../models/ActivityLog");
 const { updateGigDataOnCompletion } = require("../utils/gigsDataTracker");
 const { createGigHistoryEvent } = require("./gigHistoryService");
 
+const payInFlightLocks = new Map();
+const payIdempotencyResults = new Map();
+const IDEMPOTENCY_TTL_MS = 5 * 60 * 1000;
+
+function getPayKey({ jobId, workerPhone, mode, idempotencyKey }) {
+  const target = `${jobId}:${workerPhone || "single"}:${String(mode || "cash").toLowerCase()}`;
+  return `${target}:${idempotencyKey || ""}`;
+}
+
+function cleanupIdempotencyCache() {
+  const now = Date.now();
+  for (const [key, value] of payIdempotencyResults.entries()) {
+    if (!value || value.expiresAt <= now) {
+      payIdempotencyResults.delete(key);
+    }
+  }
+}
+
 async function markAttendance({ jobId, status, workerPhone, userPhone, deps }) {
   const { trackingJobs, emitJobUpdatedToUsers, logJobEvent } = deps;
   const job = await Job.findById(jobId);
@@ -51,25 +69,54 @@ async function markAttendance({ jobId, status, workerPhone, userPhone, deps }) {
   });
 
   if (trackingJobs.has(jobId)) trackingJobs.delete(jobId);
-  await emitJobUpdatedToUsers(job, [job.contractorName, job.acceptedBy || job.contractorName]);
+  await emitJobUpdatedToUsers(job, [
+    job.contractorName,
+    job.contractorPhone,
+    ratingTargetPhone,
+    job.acceptedBy || job.contractorName,
+  ]);
   return { code: 200, body: { success: true, job } };
 }
 
-async function payJob({ jobId, mode, workerPhone, userPhone, userName, deps }) {
+async function payJob({ jobId, mode, workerPhone, idempotencyKey, userPhone, userName, deps }) {
+  cleanupIdempotencyCache();
+  const idemKey = idempotencyKey ? getPayKey({ jobId, workerPhone, mode, idempotencyKey }) : null;
+  if (idemKey && payIdempotencyResults.has(idemKey)) {
+    return payIdempotencyResults.get(idemKey).result;
+  }
+
+  const lockKey = `${jobId}:${workerPhone || "single"}`;
+  if (payInFlightLocks.has(lockKey)) {
+    return { code: 409, body: { success: false, message: "Payment already processing for this job/worker. Please wait." } };
+  }
+  payInFlightLocks.set(lockKey, true);
+
+  const finalize = (result) => {
+    payInFlightLocks.delete(lockKey);
+    if (idemKey) {
+      payIdempotencyResults.set(idemKey, {
+        result,
+        expiresAt: Date.now() + IDEMPOTENCY_TTL_MS,
+      });
+    }
+    return result;
+  };
+
+  try {
   const { updateContractorStats, emitJobUpdatedToUsers, logJobEvent } = deps;
   const job = await Job.findById(jobId);
-  if (!job) return { code: 404, body: { message: "Job not found" } };
+  if (!job) return finalize({ code: 404, body: { message: "Job not found" } });
 
   if (job.bulkHiring && workerPhone) {
     const target = (job.acceptedWorkers || []).find((w) => w.phone === workerPhone);
     if (!target) {
-      return { code: 404, body: { success: false, message: "Worker not found on this bulk job" } };
+      return finalize({ code: 404, body: { success: false, message: "Worker not found on this bulk job" } });
     }
     if (target.attendanceStatus !== "Present") {
-      return { code: 400, body: { success: false, message: "Payment allowed only for PRESENT workers" } };
+      return finalize({ code: 400, body: { success: false, message: "Payment allowed only for PRESENT workers" } });
     }
     if (target.paymentStatus === "Paid") {
-      return { code: 400, body: { success: false, message: "This worker is already paid for this job" } };
+      return finalize({ code: 400, body: { success: false, message: "This worker is already paid for this job" } });
     }
 
     const oldState = { status: job.status, paymentStatus: job.paymentStatus, paymentMode: job.paymentMode };
@@ -163,11 +210,11 @@ async function payJob({ jobId, mode, workerPhone, userPhone, userName, deps }) {
 
     await updateContractorStats(userPhone);
     await emitJobUpdatedToUsers(job, [job.contractorName, workerPhone, job.acceptedBy || job.contractorName]);
-    return { code: 200, body: { success: true, message: "Payment successful", job, workerPhone } };
+    return finalize({ code: 200, body: { success: true, message: "Payment successful", job, workerPhone } });
   }
 
   if (job.attendanceStatus !== "Present") {
-    return { code: 400, body: { success: false, message: "Payment allowed only for PRESENT workers" } };
+    return finalize({ code: 400, body: { success: false, message: "Payment allowed only for PRESENT workers" } });
   }
 
   const oldState = { status: job.status, paymentStatus: job.paymentStatus, paymentMode: job.paymentMode };
@@ -311,10 +358,14 @@ async function payJob({ jobId, mode, workerPhone, userPhone, userName, deps }) {
   }
 
   await emitJobUpdatedToUsers(job, [job.contractorName, job.acceptedBy || job.contractorName]);
-  return { code: 200, body: { success: true, message: "Payment successful", job } };
+  return finalize({ code: 200, body: { success: true, message: "Payment successful", job } });
+  } catch (err) {
+    payInFlightLocks.delete(lockKey);
+    throw err;
+  }
 }
 
-async function rateJob({ jobId, stars, feedback, userPhone, userName, deps }) {
+async function rateJob({ jobId, stars, feedback, workerPhone, userPhone, userName, deps }) {
   const { emitJobUpdatedToUsers } = deps;
   if (!stars || stars < 1 || stars > 5) {
     return { code: 400, body: { message: "Rating must be between 1 and 5 stars" } };
@@ -323,39 +374,81 @@ async function rateJob({ jobId, stars, feedback, userPhone, userName, deps }) {
   const job = await Job.findById(jobId);
   if (!job) return { code: 404, body: { message: "Job not found" } };
 
-  if (job.paymentStatus !== "Paid") {
-    return { code: 400, body: { message: "Can only rate jobs that have been paid" } };
-  }
-  if (job.attendanceStatus !== "Present") {
-    return { code: 400, body: { message: "Can only rate workers marked as Present" } };
-  }
+  const isBulkTarget = job.bulkHiring && workerPhone;
+  let ratingTargetPhone = workerPhone || job.acceptedWorker?.phone || job.acceptedBy;
 
-  job.rating = {
-    stars: parseInt(stars, 10),
-    feedback: feedback || "",
-    ratedAt: new Date(),
-    ratedBy: userPhone || job.contractorName,
-  };
+  if (isBulkTarget) {
+    const target = (job.acceptedWorkers || []).find((w) => w.phone === workerPhone);
+    if (!target) {
+      return { code: 404, body: { success: false, message: "Worker not found on this bulk job" } };
+    }
+    if (target.paymentStatus !== "Paid") {
+      return { code: 400, body: { success: false, message: "Can only rate workers that have been paid" } };
+    }
+    if (target.attendanceStatus !== "Present") {
+      return { code: 400, body: { success: false, message: "Can only rate workers marked as Present" } };
+    }
+    if (target.rating?.stars) {
+      return { code: 400, body: { success: false, message: "This worker is already rated for this job" } };
+    }
+    target.rating = {
+      stars: parseInt(stars, 10),
+      feedback: feedback || "",
+      ratedAt: new Date(),
+      ratedBy: userPhone || job.contractorName,
+    };
+  } else {
+    if (job.paymentStatus !== "Paid") {
+      return { code: 400, body: { message: "Can only rate jobs that have been paid" } };
+    }
+    if (job.attendanceStatus !== "Present") {
+      return { code: 400, body: { message: "Can only rate workers marked as Present" } };
+    }
+    if (job.rating?.stars) {
+      return { code: 400, body: { success: false, message: "Worker already rated for this job" } };
+    }
+
+    job.rating = {
+      stars: parseInt(stars, 10),
+      feedback: feedback || "",
+      ratedAt: new Date(),
+      ratedBy: userPhone || job.contractorName,
+    };
+  }
   await job.save();
 
   try {
-    if (job.acceptedWorker && job.acceptedWorker.phone) {
-      const workerPhone = job.acceptedWorker.phone;
+    if (ratingTargetPhone) {
       const ratedJobs = await Job.find({
-        $or: [{ "acceptedWorker.phone": workerPhone }, { acceptedBy: workerPhone }],
-        paymentStatus: "Paid",
-        "rating.stars": { $exists: true, $ne: null },
-      });
+        $or: [
+          { $and: [{ $or: [{ "acceptedWorker.phone": ratingTargetPhone }, { acceptedBy: ratingTargetPhone }] }, { "rating.stars": { $exists: true, $ne: null } }] },
+          { acceptedWorkers: { $elemMatch: { phone: ratingTargetPhone, "rating.stars": { $exists: true, $ne: null } } } },
+        ],
+      }).lean();
 
-      if (ratedJobs.length > 0) {
-        const totalStars = ratedJobs.reduce((sum, j) => sum + (j.rating?.stars || 0), 0);
-        const averageRating = totalStars / ratedJobs.length;
+      let totalStars = 0;
+      let totalReviews = 0;
+      for (const rated of ratedJobs) {
+        if ((rated.acceptedBy === ratingTargetPhone || rated.acceptedWorker?.phone === ratingTargetPhone) && rated.rating?.stars) {
+          totalStars += rated.rating.stars;
+          totalReviews += 1;
+        }
+        for (const w of rated.acceptedWorkers || []) {
+          if (w?.phone === ratingTargetPhone && w?.rating?.stars) {
+            totalStars += w.rating.stars;
+            totalReviews += 1;
+          }
+        }
+      }
+
+      if (totalReviews > 0) {
+        const averageRating = totalStars / totalReviews;
         await WorkerModel.findOneAndUpdate(
-          { phone: workerPhone },
+          { phone: ratingTargetPhone },
           {
             $set: {
               "performanceMetrics.averageRating": Math.round(averageRating * 10) / 10,
-              "performanceMetrics.totalReviews": ratedJobs.length,
+              "performanceMetrics.totalReviews": totalReviews,
               rating: Math.round(averageRating * 10) / 10,
             },
           },
@@ -368,10 +461,10 @@ async function rateJob({ jobId, stars, feedback, userPhone, userName, deps }) {
   }
 
   try {
-    if (job.acceptedWorker && job.acceptedWorker.phone) {
+    if (ratingTargetPhone) {
       const ratingText = `${stars} star${stars > 1 ? "s" : ""}`;
       await NotificationHistory.create({
-        recipientPhone: job.acceptedWorker.phone,
+        recipientPhone: ratingTargetPhone,
         senderPhone: userPhone,
         senderName: userName || job.contractorName || "Contractor",
         type: "rating_received",
@@ -484,6 +577,7 @@ async function cancelJob({ jobId, reason, reasonDescription, userPhone, deps }) 
     pendingJobTimeouts,
     pendingJobExpirations,
     logJobEvent,
+    emitJobCancelledToUsers,
   } = deps;
 
   if (!reason) {
@@ -574,7 +668,17 @@ async function cancelJob({ jobId, reason, reasonDescription, userPhone, deps }) 
     cancelledBy,
     cancelledAt: new Date(),
   };
-  io.emit("jobCancelled", cancellationPayload);
+  const targetUsers = [
+    job.contractorPhone,
+    job.contractorName,
+    job.acceptedBy,
+    ...(Array.isArray(job.acceptedWorkers) ? job.acceptedWorkers.map((w) => w?.phone).filter(Boolean) : []),
+  ];
+  if (typeof emitJobCancelledToUsers === "function") {
+    await emitJobCancelledToUsers(cancellationPayload, targetUsers);
+  } else {
+    io.emit("jobCancelled", cancellationPayload);
+  }
 
   if (pendingJobTimeouts.has(jobId)) {
     clearTimeout(pendingJobTimeouts.get(jobId));

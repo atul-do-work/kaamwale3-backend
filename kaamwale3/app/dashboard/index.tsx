@@ -456,7 +456,7 @@ export default function DashboardScreen() {
       const authPhone = authUser?.phone;
       const myJobs = data.filter((j) => {
         const isMineByPhone = !!authPhone && j.contractorPhone === authPhone;
-        const isMineByName = j.contractorName === name;
+        const isMineByName = !authPhone && j.contractorName === name;
         const isCancelled = j.isCancelled === true || String(j.status || '').toLowerCase() === 'cancelled';
         return (isMineByPhone || isMineByName) && !isCancelled;
       });

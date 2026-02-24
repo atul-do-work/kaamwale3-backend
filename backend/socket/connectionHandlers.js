@@ -11,6 +11,7 @@ function attachSocketConnectionHandlers(io, deps) {
     pendingJobExpirations,
     offerJobToNextWorker,
     emitJobUpdatedToUsers,
+    emitJobCancelledToUsers,
     trackingJobs,
     sendNotificationToUserPhone,
   } = deps;
@@ -299,7 +300,18 @@ io.on("connection", (socket) => {
                   oldState,
                   newState: { status: jobCheck.status, paymentStatus: jobCheck.paymentStatus },
                 });
-                io.emit('jobCancelled', { ...jobCheck.toObject(), _id: jobCheck._id.toString(), id: jobCheck._id.toString(), status: 'expired', expiredAt: new Date() });
+                const payload = { ...jobCheck.toObject(), _id: jobCheck._id.toString(), id: jobCheck._id.toString(), status: 'expired', expiredAt: new Date() };
+                const targetUsers = [
+                  jobCheck.contractorPhone,
+                  jobCheck.contractorName,
+                  jobCheck.acceptedBy,
+                  ...(Array.isArray(jobCheck.acceptedWorkers) ? jobCheck.acceptedWorkers.map((w) => w?.phone).filter(Boolean) : []),
+                ];
+                if (typeof emitJobCancelledToUsers === 'function') {
+                  await emitJobCancelledToUsers(payload, targetUsers);
+                } else {
+                  io.emit('jobCancelled', payload);
+                }
                 if (pendingJobTimeouts.has(jobCheck._id.toString())) {
                   clearTimeout(pendingJobTimeouts.get(jobCheck._id.toString()));
                   pendingJobTimeouts.delete(jobCheck._id.toString());
@@ -340,7 +352,18 @@ io.on("connection", (socket) => {
                   oldState,
                   newState: { status: jobCheck.status, paymentStatus: jobCheck.paymentStatus },
                 });
-                io.emit('jobCancelled', { ...jobCheck.toObject(), _id: jobCheck._id.toString(), id: jobCheck._id.toString(), status: 'expired', expiredAt: new Date() });
+                const payload = { ...jobCheck.toObject(), _id: jobCheck._id.toString(), id: jobCheck._id.toString(), status: 'expired', expiredAt: new Date() };
+                const targetUsers = [
+                  jobCheck.contractorPhone,
+                  jobCheck.contractorName,
+                  jobCheck.acceptedBy,
+                  ...(Array.isArray(jobCheck.acceptedWorkers) ? jobCheck.acceptedWorkers.map((w) => w?.phone).filter(Boolean) : []),
+                ];
+                if (typeof emitJobCancelledToUsers === 'function') {
+                  await emitJobCancelledToUsers(payload, targetUsers);
+                } else {
+                  io.emit('jobCancelled', payload);
+                }
                 // Clear any retry timeouts
                 if (pendingJobTimeouts.has(jobCheck._id.toString())) {
                   clearTimeout(pendingJobTimeouts.get(jobCheck._id.toString()));

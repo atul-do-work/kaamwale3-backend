@@ -49,6 +49,11 @@ interface Job {
     acceptedAt?: string;
     attendanceStatus?: "Present" | "Absent" | null;
     paymentStatus?: "Paid" | null;
+    rating?: {
+      stars: number;
+      feedback: string;
+      ratedAt: string;
+    };
   }>;
   contractorName: string;
   status: string;
@@ -192,8 +197,10 @@ export default function ContractorWalletAttendance() {
       const attendanceStatuses = new Set(["offered", "accepted", "in_progress", "completed"]);
       const myJobs = data
         .filter(j => {
+          const isMineByPhone = !!authUser?.phone && (j as any).contractorPhone === authUser.phone;
+          const isMineByName = !authUser?.phone && j.contractorName === contractorName;
           const hasAnyAcceptedWorker = !!j.acceptedBy || (Array.isArray(j.acceptedWorkers) && j.acceptedWorkers.length > 0);
-          return j.contractorName === contractorName && attendanceStatuses.has(j.status) && hasAnyAcceptedWorker;
+          return (isMineByPhone || isMineByName) && attendanceStatuses.has(j.status) && hasAnyAcceptedWorker;
         })
         .sort((a, b) => {
           const aTime = new Date((a as any).timestamp || (a as any).updatedAt || (a as any).createdAt || 0).getTime();
@@ -217,6 +224,7 @@ export default function ContractorWalletAttendance() {
               isBulkWorkerEntry: true,
               attendanceStatus: w.attendanceStatus ?? null,
               paymentStatus: w.paymentStatus ?? null,
+              rating: w.rating ?? undefined,
             }));
         }
 
@@ -239,7 +247,7 @@ export default function ContractorWalletAttendance() {
     } finally {
       setLoading(false);
     }
-  }, [contractorName, accessToken]);
+  }, [contractorName, accessToken, authUser?.phone]);
 
   // SOCKET LISTENER FOR REALTIME UPDATES
   useEffect(() => {
@@ -283,11 +291,23 @@ export default function ContractorWalletAttendance() {
     }
   };
 
+  const buildPaymentIdempotencyKey = (jobId: string, workerPhone?: string, mode: string = "Cash") => {
+    return `pay:${jobId}:${workerPhone || "single"}:${String(mode).toLowerCase()}`;
+  };
+
   // PAY WORKER
   // Pay worker - supports mode: "Cash" | "Online" (keeps existing logic)
   const payWorker = async (jobId: string, mode: string = "Cash", workerPhone?: string) => {
     try {
-      const res = await api.post(`/jobs/pay/${jobId}`, { mode, workerPhone });
+      const res = await api.post(
+        `/jobs/pay/${jobId}`,
+        { mode, workerPhone, idempotencyKey: buildPaymentIdempotencyKey(jobId, workerPhone, mode) },
+        {
+          headers: {
+            "X-Idempotency-Key": buildPaymentIdempotencyKey(jobId, workerPhone, mode),
+          },
+        }
+      );
       const data = res.data;
 
       if (data.success) {
@@ -462,9 +482,11 @@ export default function ContractorWalletAttendance() {
 
     setSubmittingRating(true);
     try {
-      const res = await api.post(`/jobs/rate/${selectedJobForRating._id}`, {
+      const targetJobId = selectedJobForRating.rootJobId || selectedJobForRating._id;
+      const res = await api.post(`/jobs/rate/${targetJobId}`, {
         stars: ratingStars,
         feedback: ratingFeedback,
+        workerPhone: selectedJobForRating.workerPhone || selectedJobForRating.acceptedBy,
       });
 
       const data = res.data;
@@ -857,7 +879,7 @@ export default function ContractorWalletAttendance() {
             </TouchableOpacity>
           )}
 
-          {item.paymentStatus === "Paid" && !item.rating && !item.isBulkWorkerEntry && (
+          {item.paymentStatus === "Paid" && !item.rating && (
             <TouchableOpacity
               style={{
                 marginTop: 15,

@@ -39,6 +39,7 @@ function mountAppRoutes({
   logJobEvent,
   updateContractorStats,
   emitJobUpdatedToUsers,
+  emitJobCancelledToUsers,
   checkJobMatchesForWorker,
   offerJobToNextWorker,
   sendNotificationToUserPhone,
@@ -52,6 +53,7 @@ function mountAppRoutes({
       pendingJobTimeouts,
       pendingJobExpirations,
       emitJobUpdatedToUsers,
+      emitJobCancelledToUsers,
       logJobEvent,
       updateContractorStats,
     })
@@ -99,6 +101,7 @@ function mountAppRoutes({
       pendingJobExpirations,
       updateContractorStats,
       offerJobToNextWorker,
+      emitJobCancelledToUsers,
     })
   );
   app.use(
@@ -117,6 +120,7 @@ function mountAppRoutes({
       pendingJobExpirations,
       trackingJobs,
       offerJobToNextWorker,
+      emitJobCancelledToUsers,
     })
   );
 }

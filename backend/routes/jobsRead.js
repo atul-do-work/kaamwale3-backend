@@ -6,37 +6,71 @@ function createJobsReadRouter({ authenticateToken, Job, getDistanceFromLatLonInK
   router.post("/jobs/nearby", authenticateToken, async (req, res) => {
     try {
       const { lat, lon, workerType } = req.body;
+      const latNum = Number(lat);
+      const lonNum = Number(lon);
       const workerPhone = req.user.phone;
       const workerName = req.user.name;
       const MAX_RADIUS_KM = 10;
+      const maxDistanceMeters = MAX_RADIUS_KM * 1000;
 
-      let jobs = await Job.find();
+      if (!Number.isFinite(latNum) || !Number.isFinite(lonNum)) {
+        return res.status(400).json({ success: false, message: "Valid lat/lon required" });
+      }
 
-      const hasActiveUnpaidJob = jobs.some(
-        (job) => (job.acceptedBy === workerPhone || job.acceptedWorkers?.some((w) => w.phone === workerPhone)) && job.paymentStatus !== "Paid"
-      );
+      const hasActiveUnpaidJob = await Job.exists({
+        $and: [
+          {
+            $or: [
+              { acceptedBy: workerPhone },
+              { "acceptedWorkers.phone": workerPhone },
+            ],
+          },
+          { paymentStatus: { $ne: "Paid" } },
+          { status: { $nin: ["cancelled", "expired"] } },
+        ],
+      });
 
       if (hasActiveUnpaidJob) {
         console.log(`Worker ${workerName} (${workerPhone}) has unpaid job - blocking new job offers`);
         return res.json([]);
       }
 
-      const availableJobs = jobs.filter(
-        (j) =>
-          j.status !== "accepted" &&
-          (!workerType || j.workerType?.toLowerCase() === workerType?.toLowerCase()) &&
-          !(j.declinedBy && j.declinedBy.includes(workerName))
-      );
+      const nearbyQuery = {
+        $and: [
+          { status: { $in: ["pending", "posted", "offered"] } },
+          { isCancelled: { $ne: true } },
+          { paymentStatus: { $ne: "Paid" } },
+          { declinedBy: { $ne: workerName } },
+          {
+            jobLocation: {
+              $nearSphere: {
+                $geometry: { type: "Point", coordinates: [lonNum, latNum] },
+                $maxDistance: maxDistanceMeters,
+              },
+            },
+          },
+        ],
+      };
+
+      if (workerType) {
+        nearbyQuery.$and.push({ workerType: { $regex: `^${String(workerType).trim()}$`, $options: "i" } });
+      }
+
+      const availableJobs = await Job.find(nearbyQuery).lean();
 
       const jobsWithDistance = [];
       for (const j of availableJobs) {
-        const distanceToJob = getDistanceFromLatLonInKm(lat, lon, j.lat, j.lon);
+        const jobLat = Number.isFinite(j.lat) ? j.lat : (Array.isArray(j.jobLocation?.coordinates) ? j.jobLocation.coordinates[1] : null);
+        const jobLon = Number.isFinite(j.lon) ? j.lon : (Array.isArray(j.jobLocation?.coordinates) ? j.jobLocation.coordinates[0] : null);
+        if (!Number.isFinite(jobLat) || !Number.isFinite(jobLon)) continue;
+
+        const distanceToJob = getDistanceFromLatLonInKm(latNum, lonNum, jobLat, jobLon);
 
         if (distanceToJob > MAX_RADIUS_KM) continue;
 
         const distanceToContractor = distanceToJob;
         jobsWithDistance.push({
-          ...j.toObject ? j.toObject() : j,
+          ...j,
           distanceToJob,
           distanceToContractor,
         });
@@ -62,7 +96,12 @@ function createJobsReadRouter({ authenticateToken, Job, getDistanceFromLatLonInK
 
       let jobs;
       if (userRole === "contractor") {
-        jobs = await Job.find({ contractorName: req.user.name });
+        jobs = await Job.find({
+          $or: [
+            { contractorPhone: req.user.phone },
+            { contractorName: req.user.name },
+          ],
+        });
       } else {
         return res.json([]);
       }

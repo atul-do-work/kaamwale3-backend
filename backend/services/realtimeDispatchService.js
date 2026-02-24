@@ -43,11 +43,11 @@ function createUpdateContractorStats({ Job, ContractorStats }) {
   };
 }
 
-function createEmitJobUpdatedToUsers({ io, connectedWorkers }) {
-  return async function emitJobUpdatedToUsers(job, userIdentifiers = []) {
+function createEmitEventToUsers({ io, connectedWorkers }, eventName) {
+  return async function emitEventToUsers(payload, userIdentifiers = []) {
     try {
       if (!userIdentifiers || userIdentifiers.length === 0) {
-        io.emit("jobUpdated", job);
+        io.emit(eventName, payload);
         return;
       }
 
@@ -59,7 +59,7 @@ function createEmitJobUpdatedToUsers({ io, connectedWorkers }) {
         if (ids.includes(worker.name?.toString()) || ids.includes(worker.phone?.toString())) {
           const targetSocket = io.sockets.sockets.get(socketId);
           if (targetSocket) {
-            targetSocket.emit("jobUpdated", job);
+            targetSocket.emit(eventName, payload);
             sentSockets.add(socketId);
           }
         }
@@ -71,7 +71,7 @@ function createEmitJobUpdatedToUsers({ io, connectedWorkers }) {
         try {
           const user = socket.data?.user;
           if (user && (ids.includes(user.name?.toString()) || ids.includes(user.phone?.toString()))) {
-            socket.emit("jobUpdated", job);
+            socket.emit(eventName, payload);
             sentSockets.add(socketId);
           }
         } catch (e) {
@@ -79,18 +79,26 @@ function createEmitJobUpdatedToUsers({ io, connectedWorkers }) {
         }
       }
     } catch (e) {
-      console.error("Error emitting targeted jobUpdated:", e);
+      console.error(`Error emitting targeted ${eventName}:`, e);
       try {
-        io.emit("jobUpdated", job);
+        io.emit(eventName, payload);
       } catch (err) {
-        console.error("Fallback broadcast failed", err);
+        console.error(`Fallback broadcast failed for ${eventName}`, err);
       }
     }
   };
 }
 
+function createEmitJobUpdatedToUsers({ io, connectedWorkers }) {
+  return createEmitEventToUsers({ io, connectedWorkers }, "jobUpdated");
+}
+
+function createEmitJobCancelledToUsers({ io, connectedWorkers }) {
+  return createEmitEventToUsers({ io, connectedWorkers }, "jobCancelled");
+}
+
 module.exports = {
   createUpdateContractorStats,
   createEmitJobUpdatedToUsers,
+  createEmitJobCancelledToUsers,
 };
-

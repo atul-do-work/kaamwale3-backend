@@ -70,6 +70,12 @@ const jobSchema = new mongoose.Schema(
         paymentStatus: { type: String, enum: PAYMENT_STATUS, default: "Pending" },
         paymentMode: String,
         paymentTime: Date,
+        rating: {
+          stars: { type: Number, min: 1, max: 5 },
+          feedback: String,
+          ratedAt: Date,
+          ratedBy: String,
+        },
         skills: [String],
         location: {
           type: { type: String, enum: ['Point'], default: 'Point' },

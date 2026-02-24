@@ -19,7 +19,11 @@ const { setupBaseApp } = require("./bootstrap/baseApp");
 const { registerCoreRoutes } = require("./bootstrap/coreRoutes");
 const { startBackgroundSchedulers } = require("./bootstrap/schedulers");
 const { mountAppRoutes } = require("./bootstrap/appRoutes");
-const { createUpdateContractorStats, createEmitJobUpdatedToUsers } = require("./services/realtimeDispatchService");
+const {
+  createUpdateContractorStats,
+  createEmitJobUpdatedToUsers,
+  createEmitJobCancelledToUsers,
+} = require("./services/realtimeDispatchService");
 const { createJobEventLogger } = require("./services/jobEventService");
 const { createJobDispatchHelpers } = require("./services/jobDispatchService");
 
@@ -80,6 +84,7 @@ const pendingJobExpirations = new Map();
 
 const updateContractorStats = createUpdateContractorStats({ Job, ContractorStats });
 const emitJobUpdatedToUsers = createEmitJobUpdatedToUsers({ io, connectedWorkers });
+const emitJobCancelledToUsers = createEmitJobCancelledToUsers({ io, connectedWorkers });
 
 const logJobEvent = createJobEventLogger({ JobEventLog });
 const { checkJobMatchesForWorker, offerJobToNextWorker } = createJobDispatchHelpers({
@@ -118,6 +123,7 @@ attachSocketConnectionHandlers(io, {
   pendingJobExpirations,
   offerJobToNextWorker,
   emitJobUpdatedToUsers,
+  emitJobCancelledToUsers,
   trackingJobs,
   sendNotificationToUserPhone,
 });
@@ -155,6 +161,7 @@ mountAppRoutes({
   logJobEvent,
   updateContractorStats,
   emitJobUpdatedToUsers,
+  emitJobCancelledToUsers,
   checkJobMatchesForWorker,
   offerJobToNextWorker,
   sendNotificationToUserPhone,
