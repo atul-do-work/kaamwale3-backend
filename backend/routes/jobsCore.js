@@ -4,6 +4,12 @@ const { scheduleDispatchState, cancelDispatchState } = require("../services/disp
 const { isPremiumEntitled } = require("../utils/premiumEntitlement");
 const { getPlanEntitlements } = require("../config/premiumEntitlements");
 
+function getIdempotencyKey(req) {
+  const fromHeader = (req.headers["x-idempotency-key"] || "").toString().trim();
+  const fromBody = (req.body?.idempotencyKey || "").toString().trim();
+  return fromHeader || fromBody || null;
+}
+
 function createJobsCoreRouter({
   authenticateToken,
   fileUpload,
@@ -44,9 +50,29 @@ function createJobsCoreRouter({
   router.post("/jobs/post", authenticateToken, async (req, res) => {
     try {
       const { title, description, workerType, amount, lat, lon, date, imageUrl, startTime, endTime, bulkHiring, requiredWorkers, numberOfDays } = req.body;
+      const idempotencyKey = getIdempotencyKey(req);
+      const walletIdempotencyKey = idempotencyKey ? `${req.user.phone}:${idempotencyKey}` : null;
 
       if (!title || !lat || !lon || lat === 0 || lon === 0) {
         return res.status(400).json({ success: false, message: "Missing required fields: title, lat, lon must be provided and non-zero" });
+      }
+
+      if (idempotencyKey) {
+        const existingJob = await Job.findOne({ contractorPhone: req.user.phone, idempotencyKey }).sort({ createdAt: -1 });
+        if (existingJob) {
+          let currentWallet = await Wallet.findOne({ phone: req.user.phone });
+          if (!currentWallet) {
+            currentWallet = new Wallet({ phone: req.user.phone, balance: 0, availableBalance: 0, pocketBalance: 0 });
+            await currentWallet.save();
+          }
+          return res.json({
+            success: true,
+            idempotent: true,
+            message: "Job post already processed for this idempotency key",
+            job: existingJob,
+            wallet: currentWallet,
+          });
+        }
       }
 
       const userRecord = await User.findOne({ phone: req.user.phone }).select("premiumPlan");
@@ -82,10 +108,15 @@ function createJobsCoreRouter({
       const legacyBalance = Number(wallet.balance || 0);
       const spendableBalance = isContractor ? pocketBalance : legacyBalance;
 
+      const walletQuery = isContractor
+        ? { phone: req.user.phone, pocketBalance: { $gte: requiredBalance } }
+        : { phone: req.user.phone, balance: { $gte: requiredBalance } };
+      if (walletIdempotencyKey) {
+        walletQuery["transactions.idempotencyKey"] = { $ne: walletIdempotencyKey };
+      }
+
       const chargedWallet = await Wallet.findOneAndUpdate(
-        isContractor
-          ? { phone: req.user.phone, pocketBalance: { $gte: requiredBalance } }
-          : { phone: req.user.phone, balance: { $gte: requiredBalance } },
+        walletQuery,
         {
           $inc: isContractor ? { pocketBalance: -requiredBalance } : { balance: -requiredBalance },
           $push: {
@@ -93,6 +124,7 @@ function createJobsCoreRouter({
               type: "job_post_fee",
               amount: requiredBalance,
               workersCount,
+              idempotencyKey: walletIdempotencyKey || undefined,
               date: new Date(),
               metadata: { deductedFrom: isContractor ? "pocketBalance" : "balance" },
             },
@@ -124,6 +156,7 @@ function createJobsCoreRouter({
         numberOfDays: normalizedDays,
         bulkHiring: wantsBulkHiring || false,
         requiredWorkers: parseInt(requiredWorkers) || 1,
+        idempotencyKey: idempotencyKey || undefined,
         status: "pending",
         declinedBy: [],
         offerExpiresAt: new Date(Date.now() + 60 * 1000),
@@ -137,7 +170,7 @@ function createJobsCoreRouter({
         actorPhone: req.user.phone,
         source: "app",
         newState: { status: newJob.status, paymentStatus: newJob.paymentStatus },
-        metadata: { title: newJob.title, amount: newJob.amount, bulkHiring: !!newJob.bulkHiring },
+        metadata: { title: newJob.title, amount: newJob.amount, bulkHiring: !!newJob.bulkHiring, idempotencyKey: idempotencyKey || null },
       });
 
       try {
@@ -228,6 +261,17 @@ function createJobsCoreRouter({
         message: "Job posted. Searching for nearby workers...",
       });
     } catch (err) {
+      if (err && err.code === 11000 && err.keyPattern && err.keyPattern.contractorPhone && err.keyPattern.idempotencyKey) {
+        const existingJob = await Job.findOne({ contractorPhone: req.user.phone, idempotencyKey: getIdempotencyKey(req) }).sort({ createdAt: -1 });
+        const currentWallet = await Wallet.findOne({ phone: req.user.phone });
+        return res.json({
+          success: true,
+          idempotent: true,
+          message: "Job post already processed for this idempotency key",
+          job: existingJob,
+          wallet: currentWallet,
+        });
+      }
       console.error(err);
       return res.status(500).json({ success: false, message: "Internal server error" });
     }

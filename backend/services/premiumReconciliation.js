@@ -1,5 +1,6 @@
 const Wallet = require("../models/Wallet");
 const User = require("../models/User");
+const ActivityLog = require("../models/ActivityLog");
 const PremiumSubscription = require("../models/PremiumSubscription");
 const ReconciliationRun = require("../models/ReconciliationRun");
 const { sendOpsAlert } = require("../utils/opsAlert");
@@ -97,6 +98,60 @@ async function runPremiumReconciliation() {
           issue: "active_subscription_user_entitlement_missing",
         });
       }
+    }
+
+    // Reconcile premium lifecycle state transitions and record audit events.
+    const premiumUsers = await User.find({
+      "premiumPlan.type": { $ne: "free" },
+    }).select("phone premiumPlan");
+
+    for (const user of premiumUsers) {
+      const plan = user.premiumPlan || {};
+      const previousStatus = String(plan.status || "inactive").toLowerCase();
+      const expiryDate = plan.expiryDate ? new Date(plan.expiryDate) : null;
+      const graceUntil = plan.graceUntil ? new Date(plan.graceUntil) : null;
+
+      let nextStatus = previousStatus;
+      if (graceUntil && graceUntil > now && (!expiryDate || expiryDate <= now)) {
+        nextStatus = "grace";
+      } else if (expiryDate && expiryDate > now) {
+        nextStatus = "active";
+      } else {
+        nextStatus = "expired";
+      }
+
+      if (nextStatus === previousStatus) continue;
+
+      user.premiumPlan.status = nextStatus;
+      await user.save();
+
+      const transitionAction =
+        nextStatus === "active"
+          ? "premium_activated"
+          : nextStatus === "grace"
+            ? "premium_grace_started"
+            : "premium_expired";
+      const transitionDescription =
+        nextStatus === "active"
+          ? "Premium activated during reconciliation"
+          : nextStatus === "grace"
+            ? "Premium moved to grace period"
+            : "Premium expired";
+
+      await ActivityLog.create({
+        userId: user.phone,
+        phone: user.phone,
+        action: transitionAction,
+        description: transitionDescription,
+        status: "success",
+        metadata: {
+          previousStatus,
+          nextStatus,
+          expiryDate: plan.expiryDate || null,
+          graceUntil: plan.graceUntil || null,
+          source: "premium_reconciliation",
+        },
+      });
     }
 
     run.summary = {

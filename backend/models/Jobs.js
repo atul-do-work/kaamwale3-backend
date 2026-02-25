@@ -59,6 +59,7 @@ const jobSchema = new mongoose.Schema(
     },
     bulkHiring: { type: Boolean, default: false },
     requiredWorkers: { type: Number, default: 1 },
+    idempotencyKey: { type: String },
     acceptedWorkers: [
       {
         phone: String,
@@ -116,6 +117,7 @@ const jobSchema = new mongoose.Schema(
 
 jobSchema.index({ status: 1, createdAt: -1 });
 jobSchema.index({ contractorPhone: 1, createdAt: -1 });
+jobSchema.index({ contractorPhone: 1, idempotencyKey: 1 }, { unique: true, sparse: true });
 jobSchema.index({ acceptedBy: 1, createdAt: -1 });
 jobSchema.index({ jobLocation: '2dsphere' });
 

@@ -12,6 +12,7 @@ import { SERVER_URL } from "../../../utils/config";
 import { useFocusEffect } from '@react-navigation/native';
 import { useRouter } from "expo-router";  // ⭐ ADDED
 import { useLanguage } from "../../../context/LanguageContext";
+import { useAuth } from "../../../context/AuthContext";
 
 interface JobPayload {
   title: string;
@@ -25,6 +26,7 @@ interface JobPayload {
   numberOfDays?: number;
   bulkHiring?: boolean;
   requiredWorkers?: number;
+  idempotencyKey?: string;
 }
 
 const JOB_TITLES = ['Construction', 'Renovation', 'Other'];
@@ -36,6 +38,7 @@ const MAP_STYLE_URL = `https://api.maptiler.com/maps/streets-v2/style.json?key=$
 
 export default function PostJobScreen() {
   const { t } = useLanguage();
+  const { accessToken } = useAuth();
   const [title, setTitle] = useState('');
   const [mainSkill, setMainSkill] = useState('');
   const [workerType, setWorkerType] = useState('');
@@ -49,7 +52,6 @@ export default function PostJobScreen() {
   const [contractorName, setContractorName] = useState('Contractor');
   const [token, setToken] = useState<string | null>(null);
   const [walletBalance, setWalletBalance] = useState<number>(0);
-  const [currentUserPhone, setCurrentUserPhone] = useState<string | null>(null);
   const previousUserPhoneRef = useRef<string | null>(null); // ✅ Track previous user to detect changes
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
   const [selectedLocation, setSelectedLocation] = useState<{ lat: number; lon: number; placeName?: string } | null>(null);
@@ -99,7 +101,7 @@ export default function PostJobScreen() {
       (async () => {
         try {
           const userStr = await AsyncStorage.getItem("user");
-          const storedToken = await AsyncStorage.getItem("token");
+          const storedToken = accessToken || await AsyncStorage.getItem("accessToken") || await AsyncStorage.getItem("token");
           
           // ✅ Safer: Parse user with try/catch to handle corrupted storage
           let user = null;
@@ -111,13 +113,12 @@ export default function PostJobScreen() {
           const userPhone = user?.phone ?? null;
           
           // Load token
-          if (storedToken) setToken(storedToken);
+          setToken(storedToken || null);
           
           // Check for user changes
           if (userPhone && userPhone !== previousUserPhoneRef.current) {
             console.log(`👤 Postjobs: Contractor changed from ${previousUserPhoneRef.current} to ${userPhone}, resetting wallet`);
             previousUserPhoneRef.current = userPhone;
-            setCurrentUserPhone(userPhone);
             setWalletBalance(0);
             setHasPremium(false);
             setBulkHiringEnabled(false);
@@ -126,7 +127,6 @@ export default function PostJobScreen() {
           } else if (!userPhone && previousUserPhoneRef.current !== null) {
             console.log(`👤 Postjobs: User logged out, resetting wallet`);
             previousUserPhoneRef.current = null;
-            setCurrentUserPhone(null);
             setWalletBalance(0);
             setHasPremium(false);
             setBulkHiringEnabled(false);
@@ -168,11 +168,11 @@ export default function PostJobScreen() {
           console.error("Failed to load user/token in postjobs", err);
         }
       })();
-    }, [])
+    }, [accessToken])
   );
 
   // Fetch wallet balance
-  const fetchWallet = async () => {
+  const fetchWallet = React.useCallback(async () => {
     if (!token) return;
     try {
       const res = await fetch(`${SERVER_URL}/wallet`, {
@@ -185,13 +185,20 @@ export default function PostJobScreen() {
     } catch (err) {
       console.error("Failed to fetch wallet", err);
     }
-  };
+  }, [token]);
+
+  // Also refresh immediately when token becomes available (not only on focus cycles).
+  useEffect(() => {
+    if (token) {
+      fetchWallet();
+    }
+  }, [token, fetchWallet]);
 
   // Fetch wallet whenever screen is focused
   useFocusEffect(
     React.useCallback(() => {
       if (token) fetchWallet();
-    }, [token])
+    }, [token, fetchWallet])
   );
 
   // Handle price change with validation
@@ -409,6 +416,7 @@ export default function PostJobScreen() {
     // Format times as HH:MM AM/PM
     const startTimeStr = formatTime12Hour(startTime);
     const endTimeStr = formatTime12Hour(endTime);
+    const idempotencyKey = `job:${Date.now()}:${Math.random().toString(36).slice(2, 10)}`;
 
     try {
       // STEP 1: Upload image if provided (optional)
@@ -471,6 +479,7 @@ export default function PostJobScreen() {
         numberOfDays: isMultiDayAllowed ? numberOfDays : 1,
         bulkHiring: isBulkAllowed ? bulkHiringEnabled : false,
         requiredWorkers: isBulkAllowed && bulkHiringEnabled ? requiredWorkers : 1,
+        idempotencyKey,
       };
 
       const res = await fetch(`${SERVER_URL}/jobs/post`, {
@@ -478,6 +487,7 @@ export default function PostJobScreen() {
         headers: {
           "Content-Type": "application/json",
           Authorization: `Bearer ${token}`,
+          "x-idempotency-key": idempotencyKey,
         },
         body: JSON.stringify(payload),
       });

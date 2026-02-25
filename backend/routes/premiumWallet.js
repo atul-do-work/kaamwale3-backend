@@ -267,6 +267,19 @@ function createPremiumWalletRouter({ io }) {
                 source: "wallet",
               },
             },
+            {
+              userId: req.user.phone,
+              phone: req.user.phone,
+              action: "premium_activated",
+              description: `Premium activated (${planId})`,
+              status: "success",
+              metadata: {
+                planType: planId,
+                subscriptionId: createdSub.subscriptionId,
+                premiumTxnId: createdSub.premiumTxnId,
+                expiryDate,
+              },
+            },
           ],
           { session }
         );
@@ -432,6 +445,17 @@ function createPremiumWalletRouter({ io }) {
           ],
           { session }
         );
+      });
+
+      io.to(req.user.phone).emit("premiumSubscriptionUpdate", {
+        contractorPhone: req.user.phone,
+        contractorName: req.user.name,
+        planType: "free",
+        subscriptionId: null,
+        expiryDate: null,
+        status: "inactive",
+        eventType: "premium_cancelled",
+        timestamp: new Date(),
       });
 
       return res.json({ success: true, message: "Premium plan cancelled" });

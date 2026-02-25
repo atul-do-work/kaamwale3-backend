@@ -19,9 +19,10 @@ export default function ContractorHome() {
   const router = useRouter();
   const { t } = useLanguage();
   const { accessToken, user: authUser } = useAuth();
+  const currentUserPhone = authUser?.phone || null;
   const [premiumModalVisible, setPremiumModalVisible] = React.useState(false);
   const [hasPremium, setHasPremium] = React.useState(false);
-  const [userName, setUserName] = React.useState('You');
+  const [premiumStatusLoading, setPremiumStatusLoading] = React.useState(true);
   const [userProfilePhoto, setUserProfilePhoto] = React.useState(profile);
   const [leaderboard, setLeaderboard] = React.useState<any[]>([]);
   const [leaderboardExpanded, setLeaderboardExpanded] = React.useState(false);
@@ -67,7 +68,8 @@ export default function ContractorHome() {
         
         if (leaderboardData.leaderboard && Array.isArray(leaderboardData.leaderboard)) {
           const formattedLeaderboard = leaderboardData.leaderboard.map((contractor: any) => ({
-            id: contractor.phone || contractor._id || 'unknown', // ✅ Use phone as ID, fall back to _id
+            id: contractor.phone || contractor._id || 'unknown',
+            phone: contractor.phone || contractor._id || 'unknown', // ✅ Use phone as ID, fall back to _id
             name: contractor.name || 'Unknown',
             points: contractor.score || 0,
             profile: contractor.profilePhoto ? contractor.profilePhoto : null,
@@ -96,15 +98,22 @@ export default function ContractorHome() {
   const sortedLeaderboard = React.useMemo(() => {
     return [...leaderboard].sort((a, b) => {
       // Current user always on top
-      if (a.name === userName) return -1;
-      if (b.name === userName) return 1;
+      const aIsCurrent = Boolean(currentUserPhone && (a.id === currentUserPhone || a.phone === currentUserPhone));
+      const bIsCurrent = Boolean(currentUserPhone && (b.id === currentUserPhone || b.phone === currentUserPhone));
+      if (aIsCurrent) return -1;
+      if (bIsCurrent) return 1;
       // Then sort by rank
       return (a.rank || 999) - (b.rank || 999);
     });
-  }, [leaderboard, userName]);
+  }, [leaderboard, currentUserPhone]);
 
   const fetchPremiumStatus = React.useCallback(async (): Promise<boolean> => {
-    if (!accessToken) return false;
+    if (!accessToken) {
+      setHasPremium(false);
+      setPremiumStatusLoading(false);
+      return false;
+    }
+    setPremiumStatusLoading(true);
     try {
       const response = await fetch(`${SERVER_URL}/premium/status`, {
         headers: { Authorization: `Bearer ${accessToken}` },
@@ -117,7 +126,20 @@ export default function ContractorHome() {
       console.warn('Could not fetch premium status:', (err as Error).message);
       setHasPremium(false);
       return false;
+    } finally {
+      setPremiumStatusLoading(false);
     }
+  }, [accessToken]);
+
+  useEffect(() => {
+    if (!accessToken) {
+      setPremiumStatusLoading(false);
+      setHasPremium(false);
+      setLeaderboard([]);
+      return;
+    }
+    // Prevent locked-banner flicker while status request is in-flight.
+    setPremiumStatusLoading(true);
   }, [accessToken]);
   const topCards = [
     { id: 1, icon: 'work', amount: postedCount.toString(), label: t('jobsPosted') },
@@ -214,7 +236,6 @@ export default function ContractorHome() {
 
             if (authUser) {
               currentUser = authUser;
-              setUserName(currentUser.name || 'You');
               if (currentUser.profilePhoto) {
                 setUserProfilePhoto({ uri: currentUser.profilePhoto });
               }
@@ -256,6 +277,7 @@ export default function ContractorHome() {
 
                   const formattedLeaderboard = boardData.map((contractor: any) => ({
                     id: contractor.contractorId || contractor._id || contractor.phone,
+                    phone: contractor.phone || contractor.contractorPhone || contractor.contractorId || contractor._id,
                     name: contractor.name,
                     points: contractor.score || contractor.points || 0,
                     profile: contractor.profilePhoto ? contractor.profilePhoto : null,
@@ -280,6 +302,7 @@ export default function ContractorHome() {
                     if (leaderboardData.leaderboard && Array.isArray(leaderboardData.leaderboard)) {
                       const formattedLeaderboard = leaderboardData.leaderboard.map((contractor: any) => ({
                         id: contractor.contractorId || contractor._id || contractor.phone,
+                    phone: contractor.phone || contractor.contractorPhone || contractor.contractorId || contractor._id,
                         name: contractor.name,
                         points: contractor.score || 0,
                         profile: contractor.profilePhoto ? contractor.profilePhoto : null,
@@ -435,6 +458,9 @@ export default function ContractorHome() {
         console.warn('No access token available');
         return;
       }
+      console.log(`Premium plan selected: ${planId}`);
+      // Optimistic UI so contractor sees premium section immediately after successful payment.
+      setHasPremium(true);
       
       // ✅ Fetch updated user data from backend and save to AsyncStorage with premium plan info
       try {
@@ -456,8 +482,13 @@ export default function ContractorHome() {
       // Close modal
       setPremiumModalVisible(false);
       
-      // Set premium status immediately
-      await fetchPremiumStatus();
+      // Confirm premium status from backend (source of truth)
+      const isActive = await fetchPremiumStatus();
+      if (!isActive) {
+        setHasPremium(false);
+        setLeaderboard([]);
+        return;
+      }
       
       // ✅ FETCH FRESH LEADERBOARD FROM NEW DISTRICT ENDPOINT AFTER PREMIUM PURCHASE
       try {
@@ -478,6 +509,7 @@ export default function ContractorHome() {
         
         if (!leaderboardRes.ok) {
           console.warn(`⚠️ Leaderboard fetch failed with status ${leaderboardRes.status}`);
+          setLeaderboard([]);
           return;
         }
         
@@ -486,6 +518,7 @@ export default function ContractorHome() {
         if (leaderboardData.leaderboard && Array.isArray(leaderboardData.leaderboard)) {
           const formattedLeaderboard = leaderboardData.leaderboard.map((contractor: any) => ({
             id: contractor.phone,
+            phone: contractor.phone,
             name: contractor.name,
             points: contractor.score || 0,
             profile: contractor.profilePhoto ? { uri: contractor.profilePhoto } : userProfilePhoto,
@@ -607,7 +640,7 @@ export default function ContractorHome() {
           {/* Leaderboard Header with Title and Expand Button */}
           <View style={styles.leaderboardHeader}>
             <Text style={styles.leaderboardTitle}>🏆 Leadership Board</Text>
-            {hasPremium && (
+            {!premiumStatusLoading && hasPremium && (
               <TouchableOpacity 
                 onPress={() => setLeaderboardExpanded(!leaderboardExpanded)}
                 style={styles.expandButton}
@@ -622,7 +655,18 @@ export default function ContractorHome() {
           </View>
 
           {/* Premium Unlock Banner - only show if user doesn't have premium */}
-          {!hasPremium && (
+          {premiumStatusLoading && (
+            <View style={styles.premiumBanner}>
+              <Text style={styles.premiumBannerTitle}>Checking premium status...</Text>
+              <View style={{ marginTop: 10, gap: 8 }}>
+                <View style={{ height: 14, borderRadius: 6, backgroundColor: '#d6dbe1' }} />
+                <View style={{ height: 14, borderRadius: 6, backgroundColor: '#e4e7eb', width: '88%' }} />
+                <View style={{ height: 14, borderRadius: 6, backgroundColor: '#eef0f3', width: '70%' }} />
+              </View>
+            </View>
+          )}
+
+          {!premiumStatusLoading && !hasPremium && (
             <View style={styles.premiumBanner}>
               <MaterialIcons name="lock" size={32} color="#1f3a5f" />
               <Text style={styles.premiumBannerTitle}>Unlock Leadership Board</Text>
@@ -634,7 +678,7 @@ export default function ContractorHome() {
           )}
 
           {/* Leaderboard cards - Current user on top - Only render if premium */}
-          {hasPremium && sortedLeaderboard.length > 0 ? (
+          {!premiumStatusLoading && hasPremium && sortedLeaderboard.length > 0 ? (
             <FlatList
               data={sortedLeaderboard}
               keyExtractor={(person) => person.id}
@@ -647,7 +691,9 @@ export default function ContractorHome() {
               windowSize={5}
               removeClippedSubviews={true}
               renderItem={({ item: person, index }) => {
-                const isCurrentUser = person.name === userName;
+                const isCurrentUser = Boolean(
+                  currentUserPhone && (person.id === currentUserPhone || person.phone === currentUserPhone)
+                );
                 // ✅ No need to .find() - rank is already set correctly after sorting
                 const displayRank = isCurrentUser ? person.rank : person.rank || index + 1;
                 
@@ -807,6 +853,7 @@ export default function ContractorHome() {
     </SafeAreaView>
   );
 }
+
 
 
 

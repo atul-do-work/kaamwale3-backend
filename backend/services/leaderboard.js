@@ -13,6 +13,7 @@
 
 const express = require('express');
 const { authenticateToken } = require('../utils/auth');
+const { isPremiumEntitled } = require('../utils/premiumEntitlement');
 const User = require('../models/User');
 const Job = require('../models/Jobs');
 const CityLeaderboard = require('../models/CityLeaderboard');
@@ -119,19 +120,6 @@ function getDaysActive(createdAtDate) {
   const diffTime = Math.abs(now - created);
   const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
   return Math.min(diffDays, 365); // Cap at 365 days for fair comparison
-}
-
-/**
- * Check if user has active premium plan
- */
-function isPremiumActive(user) {
-  if (!user || !user.premiumPlan) return false;
-  
-  const { type, expiryDate } = user.premiumPlan;
-  if (!type || type === 'free') return false;
-  
-  // Check if premium hasn't expired
-  return expiryDate && new Date() < new Date(expiryDate);
 }
 
 // ========================================
@@ -400,7 +388,7 @@ router.get('/my-city', authenticateToken, async (req, res) => {
     const user = await User.findById(req.user.id);
 
     // ✅ Check premium status
-    if (!isPremiumActive(user)) {
+    if (!isPremiumEntitled(user)) {
       return res.status(403).json({
         success: false,
         message: 'Leaderboard feature requires an active premium plan',
@@ -478,7 +466,7 @@ router.get('/city', authenticateToken, async (req, res) => {
   try {
     // ✅ Check premium status
     const user = await User.findById(req.user.id);
-    if (!isPremiumActive(user)) {
+    if (!isPremiumEntitled(user)) {
       return res.status(403).json({
         success: false,
         message: 'Leaderboard feature requires an active premium plan',
@@ -569,7 +557,7 @@ router.get('/city/:cityName', authenticateToken, async (req, res) => {
     const { cityName } = req.params;
     const { state } = req.query;
     const user = await User.findById(req.user.id).select('premiumPlan');
-    if (!isPremiumActive(user)) {
+    if (!isPremiumEntitled(user)) {
       return res.status(403).json({
         success: false,
         message: 'Leaderboard feature requires an active premium plan',
@@ -680,7 +668,7 @@ router.put('/update-location', authenticateToken, async (req, res) => {
     );
 
     // ✅ Return leaderboard only if user has premium
-    const hasPremium = isPremiumActive(user);
+    const hasPremium = isPremiumEntitled(user);
 
     if (!hasPremium) {
       return res.json({
@@ -811,7 +799,7 @@ router.get('/contractors/by-district', authenticateToken, async (req, res) => {
   try {
     // ✅ Check premium status
     const user = await User.findById(req.user.id);
-    if (!isPremiumActive(user)) {
+    if (!isPremiumEntitled(user)) {
       return res.status(403).json({
         success: false,
         message: 'Leaderboard feature requires an active premium plan',
@@ -934,9 +922,26 @@ router.get('/contractors/by-district', authenticateToken, async (req, res) => {
               0,
             ],
           },
-          // Completion rate (assume 100% if jobs exist)
+          completedJobs: {
+            $size: {
+              $filter: {
+                input: '$jobs',
+                as: 'job',
+                cond: { $eq: ['$$job.status', 'completed'] },
+              },
+            },
+          },
           completionRate: {
-            $cond: [{ $gt: [{ $size: '$jobs' }, 0] }, 100, 0],
+            $cond: [
+              { $gt: [{ $size: '$jobs' }, 0] },
+              {
+                $multiply: [
+                  { $divide: ['$completedJobs', { $size: '$jobs' }] },
+                  100,
+                ],
+              },
+              0,
+            ],
           },
         },
       },
@@ -978,8 +983,13 @@ router.get('/contractors/by-district', authenticateToken, async (req, res) => {
       {
         $project: {
           _id: 0,
+          contractorId: '$_id',
+          phone: '$phone',
           name: 1,
           points: '$score',
+          totalJobsPosted: '$jobCount',
+          completedJobs: '$completedJobs',
+          completionRate: { $round: ['$completionRate', 2] },
           tier: {
             $cond: [
               { $gte: ['$score', 80] },
@@ -1010,9 +1020,7 @@ router.get('/contractors/by-district', authenticateToken, async (req, res) => {
     }));
 
     // Add current user's rank if they're in the leaderboard
-    const currentUserRank = rankedLeaderboard.find(
-      (item) => item.name === req.user.name || item.name === (req.user.phone)
-    );
+    const currentUserRank = rankedLeaderboard.find((item) => item.phone === req.user.phone);
 
     // Return leaderboard with standardized format
     res.json({
@@ -1036,9 +1044,14 @@ router.get('/contractors/by-district', authenticateToken, async (req, res) => {
             state: district.state,
             totalContractors: rankedLeaderboard.length,
             leaderboard: rankedLeaderboard.map(c => ({
+              contractorId: c.contractorId,
+              phone: c.phone,
               rank: c.rank,
               name: c.name,
               points: c.points,
+              totalJobsPosted: c.totalJobsPosted,
+              completedJobs: c.completedJobs,
+              completionRate: c.completionRate,
               tier: c.tier,
             })),
             calculatedAt: new Date(),
@@ -1083,3 +1096,4 @@ module.exports = {
   WEIGHTS,
   TIER_THRESHOLDS,
 };
+

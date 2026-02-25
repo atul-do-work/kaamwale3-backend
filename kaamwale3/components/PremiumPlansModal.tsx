@@ -15,7 +15,7 @@ import api from "../utils/api";
 interface PremiumPlansModalProps {
   visible: boolean;
   onClose: () => void;
-  onPlanSelected: (planId: string) => void;
+  onPlanSelected: (planId: string) => void | Promise<void>;
 }
 
 export default function PremiumPlansModal({
@@ -92,7 +92,7 @@ export default function PremiumPlansModal({
           console.log("Premium activated instantly:", data.premiumPlan);
         }
 
-        onPlanSelected(planId);
+        await onPlanSelected(planId);
         onClose();
       } else {
         setError(data.message || "Subscription failed");
