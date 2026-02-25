@@ -1286,15 +1286,15 @@
                     </div>
 
                     <div style="background:#f9fafb;padding:14px;border-radius:10px;border:1px solid #e5e7eb;">
-                        <h4>Wallet Adjustments (Maker-Checker)</h4>
+                        <h4>Wallet Adjustments (Instant Apply)</h4>
                         <input id="opsAdjPhone" class="search-box" placeholder="Phone" style="width:100%;margin-bottom:8px;">
                         <input id="opsAdjAmount" class="search-box" placeholder="Amount" style="width:100%;margin-bottom:8px;">
                         <input id="opsAdjReason" class="search-box" placeholder="Reason" style="width:100%;margin-bottom:8px;">
                         <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
-                            <button class="btn-small btn-approve" onclick="opsCreateAdjustment('credit')">Request Credit</button>
-                            <button class="btn-small btn-reject" onclick="opsCreateAdjustment('debit')">Request Debit</button>
+                            <button class="btn-small btn-approve" onclick="opsCreateAdjustment('credit')">Apply Credit</button>
+                            <button class="btn-small btn-reject" onclick="opsCreateAdjustment('debit')">Apply Debit</button>
                         </div>
-                        <button class="btn-small btn-view" style="margin-top:8px;" onclick="opsLoadAdjustments()">Refresh Queue</button>
+                        <button class="btn-small btn-view" style="margin-top:8px;" onclick="opsLoadAdjustments()">Refresh History</button>
                         <div id="opsAdjOut" style="margin-top:10px;max-height:220px;overflow:auto;background:#f1f5f9;padding:8px;border-radius:8px;font-size:12px;"></div>
                     </div>
                 </div>
@@ -2937,35 +2937,9 @@
                 wrap.innerHTML = (data.rows || []).map((r) => `
                     <div style="padding:8px;margin-bottom:8px;border:1px solid #cbd5e1;border-radius:8px;">
                         <div><strong>${r.id}</strong> | ${r.phone} | ${r.mode} ₹${r.amount} | ${r.status}</div>
-                        <div style="margin-top:6px;display:flex;gap:8px;">
-                            ${r.status === 'pending_approval' ? `
-                                <button class="btn-small btn-approve" onclick="opsApproveAdjustment('${r.id}')">Approve</button>
-                                <button class="btn-small btn-reject" onclick="opsRejectAdjustment('${r.id}')">Reject</button>
-                            ` : ''}
-                        </div>
+                        
                     </div>
                 `).join('') || '<p>No adjustments</p>';
-            } catch (err) {
-                alert(err.message);
-            }
-        }
-
-        async function opsApproveAdjustment(id) {
-            try {
-                await adminApi(`/admin/wallet-adjustments/${encodeURIComponent(id)}/approve`, { method: 'POST' });
-                await opsLoadAdjustments();
-            } catch (err) {
-                alert(err.message);
-            }
-        }
-
-        async function opsRejectAdjustment(id) {
-            try {
-                await adminApi(`/admin/wallet-adjustments/${encodeURIComponent(id)}/reject`, {
-                    method: 'POST',
-                    body: JSON.stringify({ reason: 'Rejected from ops console' }),
-                });
-                await opsLoadAdjustments();
             } catch (err) {
                 alert(err.message);
             }
@@ -3191,14 +3165,11 @@
                     <div class="table-wrapper"><table>
                         <thead><tr><th>ID</th><th>Phone</th><th>Mode</th><th>Amount</th><th>Status</th><th>Actions</th></tr></thead>
                         <tbody>
-                            ${rows.map((r) => `<tr><td>${escapeHtml(r.id)}</td><td>${escapeHtml(r.phone)}</td><td>${escapeHtml(r.mode)}</td><td>${escapeHtml(r.amount)}</td><td>${escapeHtml(r.status)}</td><td>${r.status === 'pending_approval' ? `<button class="btn-small btn-approve" onclick="opsApproveAdjustment('${escapeHtml(r.id)}')">Approve</button> <button class="btn-small btn-reject" onclick="opsRejectAdjustment('${escapeHtml(r.id)}')">Reject</button>` : '-'}</td></tr>`).join('')}
+                            ${rows.map((r) => `<tr><td>${escapeHtml(r.id)}</td><td>${escapeHtml(r.phone)}</td><td>${escapeHtml(r.mode)}</td><td>${escapeHtml(r.amount)}</td><td>${escapeHtml(r.status)}</td><td>-</td></tr>`).join('')}
                         </tbody>
                     </table></div>`;
             } catch (err) { alert(err.message); }
         }
-
-        async function opsApproveAdjustment(id) { try { await adminApi(`/admin/wallet-adjustments/${encodeURIComponent(id)}/approve`, { method: 'POST' }); await opsLoadAdjustments(); } catch (err) { alert(err.message); } }
-        async function opsRejectAdjustment(id) { try { await adminApi(`/admin/wallet-adjustments/${encodeURIComponent(id)}/reject`, { method: 'POST', body: JSON.stringify({ reason: 'Rejected from ops console' }) }); await opsLoadAdjustments(); } catch (err) { alert(err.message); } }
 
         async function opsCreatePayoutBatch() { try { await adminApi('/admin/payouts/batches', { method: 'POST', body: JSON.stringify({}) }); await opsLoadPayoutQueue(); } catch (err) { alert(err.message); } }
         async function opsRunWeeklySettlement() {
@@ -3283,5 +3254,7 @@
     </script>
 </body>
 </html>
+
+
 
 

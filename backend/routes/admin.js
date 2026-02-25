@@ -51,7 +51,7 @@ const generateRef = (prefix) => `${prefix}_${Date.now()}_${crypto.randomBytes(3)
 
 const safeText = (value, maxLen = 500) => String(value || '').trim().slice(0, maxLen);
 
-const adminAdjustments = new Map(); // in-memory maker-checker queue (can be moved to Mongo model later)
+const adminAdjustments = new Map(); // in-memory adjustment history (move to Mongo for production durability)
 const adminDisputes = new Map();
 const reportSchedules = new Map();
 
@@ -1222,25 +1222,59 @@ router.post('/wallet-adjustments', authenticateToken, checkAdmin, async (req, re
             return res.status(400).json({ success: false, message: 'Invalid payload' });
         }
 
+        const wallet = await Wallet.findOne({ phone: normalizedPhone });
+        if (!wallet) return res.status(404).json({ success: false, message: 'Wallet not found' });
+
+        const opening = Number(wallet.availableBalance ?? wallet.balance ?? 0);
+        const delta = normalizedMode === 'debit' ? -Math.abs(normalizedAmount) : Math.abs(normalizedAmount);
+        const closing = opening + delta;
+        if (closing < 0) return res.status(409).json({ success: false, message: 'Insufficient balance for debit adjustment' });
+
         const id = generateRef('wadj');
-        adminAdjustments.set(id, {
+        const row = {
             id,
             phone: normalizedPhone,
             amount: normalizedAmount,
             mode: normalizedMode,
             reason: safeText(reason || 'manual_adjustment', 300),
-            status: 'pending_approval',
+            status: 'approved',
             makerPhone: req.user.phone || 'admin',
-            checkerPhone: null,
+            checkerPhone: req.user.phone || 'admin',
             createdAt: new Date().toISOString(),
-            approvedAt: null,
+            approvedAt: new Date().toISOString(),
             rejectedAt: null,
-        });
+        };
 
-        await logAdminAudit({ req, action: 'wallet_adjustment_requested', phone: normalizedPhone, description: `Wallet adjustment requested ${normalizedMode} ${normalizedAmount}`, before: null, after: adminAdjustments.get(id), metadata: { adjustmentId: id } });
-        return res.json({ success: true, adjustment: adminAdjustments.get(id) });
+        wallet.availableBalance = closing;
+        wallet.balance = closing;
+        wallet.transactions.push({
+            type: normalizedMode === 'debit' ? 'withdraw' : 'deposit',
+            amount: Math.abs(normalizedAmount),
+            description: `Admin adjustment (${normalizedMode}): ${row.reason}`,
+            idempotencyKey: id,
+            status: 'completed',
+            openingBalance: opening,
+            closingBalance: closing,
+            source: 'admin',
+            provider: 'internal',
+            metadata: { actor: req.user.phone || 'admin', checker: req.user.phone || 'admin', reason: row.reason },
+        });
+        wallet.updateTotals();
+        await wallet.save();
+        adminAdjustments.set(id, row);
+
+        await logAdminAudit({
+            req,
+            action: 'wallet_adjustment_approved',
+            phone: normalizedPhone,
+            description: `Wallet adjustment applied ${normalizedMode} ${normalizedAmount}`,
+            before: { balance: opening },
+            after: { balance: closing, adjustment: row },
+            metadata: { adjustmentId: id },
+        });
+        return res.json({ success: true, adjustment: row });
     } catch (error) {
-        console.error('Wallet adjustment request error:', error);
+        console.error('Wallet adjustment apply error:', error);
         return res.status(500).json({ success: false, message: error.message });
     }
 });
@@ -1256,68 +1290,11 @@ router.get('/wallet-adjustments', authenticateToken, checkAdmin, async (_req, re
 });
 
 router.post('/wallet-adjustments/:id/approve', authenticateToken, checkAdmin, async (req, res) => {
-    try {
-        const row = adminAdjustments.get(req.params.id);
-        if (!row) return res.status(404).json({ success: false, message: 'Adjustment not found' });
-        if (row.status !== 'pending_approval') return res.status(409).json({ success: false, message: `Invalid status ${row.status}` });
-        if (row.makerPhone === (req.user.phone || 'admin')) return res.status(403).json({ success: false, message: 'Maker and checker must be different admin' });
-
-        const wallet = await Wallet.findOne({ phone: row.phone });
-        if (!wallet) return res.status(404).json({ success: false, message: 'Wallet not found' });
-
-        const opening = Number(wallet.availableBalance || wallet.balance || 0);
-        const delta = row.mode === 'debit' ? -Math.abs(row.amount) : Math.abs(row.amount);
-        const closing = opening + delta;
-        if (closing < 0) return res.status(409).json({ success: false, message: 'Insufficient balance for debit adjustment' });
-
-        wallet.availableBalance = closing;
-        wallet.balance = closing;
-        wallet.transactions.push({
-            type: row.mode === 'debit' ? 'withdraw' : 'deposit',
-            amount: Math.abs(row.amount),
-            description: `Admin adjustment (${row.mode}): ${row.reason}`,
-            idempotencyKey: row.id,
-            status: 'completed',
-            openingBalance: opening,
-            closingBalance: closing,
-            source: 'admin',
-            provider: 'internal',
-            metadata: { actor: req.user.phone || 'admin', checker: req.user.phone || 'admin', reason: row.reason },
-        });
-        wallet.updateTotals();
-        await wallet.save();
-
-        row.status = 'approved';
-        row.checkerPhone = req.user.phone || 'admin';
-        row.approvedAt = new Date().toISOString();
-        adminAdjustments.set(row.id, row);
-
-        await logAdminAudit({ req, action: 'wallet_adjustment_approved', phone: row.phone, description: `Wallet adjustment approved ${row.mode} ${row.amount}`, before: null, after: row, metadata: { adjustmentId: row.id } });
-        return res.json({ success: true, adjustment: row });
-    } catch (error) {
-        console.error('Wallet adjustment approve error:', error);
-        return res.status(500).json({ success: false, message: error.message });
-    }
+    return res.status(410).json({ success: false, message: 'Approval step removed. Adjustment is applied immediately on create.' });
 });
 
 router.post('/wallet-adjustments/:id/reject', authenticateToken, checkAdmin, async (req, res) => {
-    try {
-        const row = adminAdjustments.get(req.params.id);
-        if (!row) return res.status(404).json({ success: false, message: 'Adjustment not found' });
-        if (row.status !== 'pending_approval') return res.status(409).json({ success: false, message: `Invalid status ${row.status}` });
-
-        row.status = 'rejected';
-        row.checkerPhone = req.user.phone || 'admin';
-        row.rejectedAt = new Date().toISOString();
-        row.rejectReason = safeText(req.body?.reason || 'Rejected by checker', 200);
-        adminAdjustments.set(row.id, row);
-
-        await logAdminAudit({ req, action: 'wallet_adjustment_rejected', phone: row.phone, description: `Wallet adjustment rejected`, before: null, after: row, metadata: { adjustmentId: row.id } });
-        return res.json({ success: true, adjustment: row });
-    } catch (error) {
-        console.error('Wallet adjustment reject error:', error);
-        return res.status(500).json({ success: false, message: error.message });
-    }
+    return res.status(410).json({ success: false, message: 'Reject step removed. Adjustment is applied immediately on create.' });
 });
 
 // ============================

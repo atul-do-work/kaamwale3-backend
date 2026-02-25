@@ -84,7 +84,11 @@ export default function PostJobScreen() {
     const raw =
       typeof payload === "number"
         ? payload
-        : payload?.balance ?? payload?.wallet?.balance ?? 0;
+        : payload?.pocketBalance ??
+          payload?.wallet?.pocketBalance ??
+          payload?.balance ??
+          payload?.wallet?.balance ??
+          0;
     const num = Number(raw);
     return Number.isFinite(num) ? num : 0;
   };
@@ -359,7 +363,7 @@ export default function PostJobScreen() {
     if (walletBalance < requiredBalance) {
       return Alert.alert(
         "Insufficient Balance",
-        `You need ₹${requiredBalance} in your wallet to post this job for ${workersCount} worker(s).\n\nPlease deposit money first.`,
+        `You need ₹${requiredBalance} in your pocket balance to post this job for ${workersCount} worker(s).\n\nPlease deposit money first.`,
         [
           {
             text: "Deposit Now",
@@ -502,7 +506,7 @@ export default function PostJobScreen() {
       <View style={styles.container}>
         <Text style={styles.header}>Post a New Job</Text>
 
-        <Text style={styles.walletText}>Wallet Balance: ₹{Number(walletBalance) || 0}</Text>
+        <Text style={styles.walletText}>Pocket Balance: ₹{Number(walletBalance) || 0}</Text>
 
         {/* ✅ Show Posting Fee Transparently */}
         <View style={styles.feeDisplay}>
@@ -1122,3 +1126,4 @@ const styles = StyleSheet.create({
     fontSize: 15,
   },
 });
+
