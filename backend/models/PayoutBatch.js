@@ -45,7 +45,6 @@ const payoutBatchSchema = new mongoose.Schema({
   processedBy: String // Admin who initiated the payout
 }, { timestamps: true });
 
-payoutBatchSchema.index({ batchId: 1 });
 payoutBatchSchema.index({ 'payoutWeek.year': 1, 'payoutWeek.week': 1 });
 payoutBatchSchema.index({ status: 1 });
 

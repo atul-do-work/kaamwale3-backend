@@ -58,6 +58,7 @@ const {
   startWalletReconciliationScheduler,
   startJobReconciliationScheduler,
   startPremiumReconciliationScheduler,
+  startWeeklyWalletSettlementScheduler,
 } = registerCoreRoutes(app);
 
 
@@ -182,12 +183,14 @@ startDispatchStateProcessor({
 
 startBackgroundSchedulers({
   Job,
+  io,
   pendingJobTimeouts,
   pendingJobExpirations,
   startLeaderboardScheduler,
   startWalletReconciliationScheduler,
   startJobReconciliationScheduler,
   startPremiumReconciliationScheduler,
+  startWeeklyWalletSettlementScheduler,
 });
 
 // ---------------- START SERVER ----------------

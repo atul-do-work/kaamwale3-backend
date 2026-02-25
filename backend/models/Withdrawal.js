@@ -23,6 +23,8 @@ const withdrawalSchema = new mongoose.Schema(
       enum: ['available', 'pocket'],
       default: 'available',
     },
+    deductedFromAvailable: { type: Number, default: 0 },
+    deductedFromPocket: { type: Number, default: 0 },
     bankSnapshot: {
       accountHolderName: String,
       maskedAccount: String,

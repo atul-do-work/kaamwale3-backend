@@ -235,20 +235,48 @@ io.on("connection", (socket) => {
         try {
           let wallet = await Wallet.findOne({ phone: user.phone });
           if (!wallet) {
-            wallet = new Wallet({ phone: user.phone });
+            wallet = new Wallet({ phone: user.phone, balance: 0, availableBalance: 0, pocketBalance: 0 });
             await wallet.save();
           }
-          if (wallet.balance < 25) {
-            socket.emit('error', { success: false, message: 'Insufficient balance to post job' });
+
+          const isContractor = String(user?.role || "").toLowerCase() === "contractor";
+          const requiredBalance = 25;
+          const spendable = isContractor
+            ? Number(wallet.pocketBalance || 0)
+            : Number(wallet.balance || 0);
+
+          const chargedWallet = await Wallet.findOneAndUpdate(
+            isContractor
+              ? { phone: user.phone, pocketBalance: { $gte: requiredBalance } }
+              : { phone: user.phone, balance: { $gte: requiredBalance } },
+            {
+              $inc: isContractor ? { pocketBalance: -requiredBalance } : { balance: -requiredBalance },
+              $push: {
+                transactions: {
+                  type: "job_post_fee",
+                  amount: requiredBalance,
+                  date: new Date(),
+                  metadata: { deductedFrom: isContractor ? "pocketBalance" : "balance", source: "postJobSocket" },
+                },
+              },
+            },
+            { new: true }
+          );
+
+          if (!chargedWallet) {
+            socket.emit("error", {
+              success: false,
+              message: `Insufficient balance to post job. Required ₹${requiredBalance}, current ₹${spendable}`,
+            });
             return;
           }
-
-          // Deduct posting fee
-          wallet.balance -= 25;
-          wallet.transactions.push({ type: 'job_post_fee', amount: 25, date: new Date() });
-          await wallet.save();
         } catch (werr) {
           console.error('Error ensuring wallet for socket job post:', werr);
+          socket.emit("error", {
+            success: false,
+            message: "Unable to validate wallet balance. Please retry.",
+          });
+          return;
         }
 
         const newJob = new Job({

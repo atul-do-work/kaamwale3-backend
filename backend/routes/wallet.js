@@ -73,6 +73,68 @@ function maskUpiId(upiId) {
   return `${visible}***@${provider}`;
 }
 
+const PAYOUT_CYCLE_ANCHOR_ISO = process.env.PAYOUT_CYCLE_ANCHOR_ISO || "2025-02-25T00:00:00+05:30";
+const PAYOUT_CYCLE_MS = 7 * 24 * 60 * 60 * 1000;
+
+function getWeekBounds(now = new Date()) {
+  const anchor = new Date(PAYOUT_CYCLE_ANCHOR_ISO);
+  if (Number.isNaN(anchor.getTime())) {
+    const fallbackStart = new Date(now);
+    const day = fallbackStart.getDay(); // 0=Sun
+    const diff = day === 0 ? -6 : 1 - day; // Monday-start week fallback
+    fallbackStart.setDate(fallbackStart.getDate() + diff);
+    fallbackStart.setHours(0, 0, 0, 0);
+    const fallbackEnd = new Date(fallbackStart);
+    fallbackEnd.setDate(fallbackEnd.getDate() + 7);
+    return { start: fallbackStart, endExclusive: fallbackEnd };
+  }
+
+  const elapsedMs = now.getTime() - anchor.getTime();
+  const cycleIndex = Math.floor(elapsedMs / PAYOUT_CYCLE_MS);
+  const cycleStartMs = anchor.getTime() + cycleIndex * PAYOUT_CYCLE_MS;
+  const start = new Date(cycleStartMs);
+  const endExclusive = new Date(cycleStartMs + PAYOUT_CYCLE_MS);
+  return { start, endExclusive };
+}
+
+function computeWorkerWeeklyMetrics(walletDoc, now = new Date()) {
+  const { start, endExclusive } = getWeekBounds(now);
+  const txs = Array.isArray(walletDoc?.transactions) ? walletDoc.transactions : [];
+  let earnings = 0;
+  let deducted = 0;
+
+  for (const tx of txs) {
+    const txDate = tx?.date ? new Date(tx.date) : null;
+    if (!txDate || Number.isNaN(txDate.getTime())) continue;
+    if (txDate < start || txDate >= endExclusive) continue;
+
+    const amount = Number(tx.amount || 0);
+    if (!Number.isFinite(amount) || amount <= 0) continue;
+
+    const isIncentive =
+      tx.type === "incentive_reward" ||
+      tx.type === "incentive" ||
+      String(tx?.metadata?.source || "").toLowerCase() === "incentive";
+    if (tx.type === "payment" || isIncentive) {
+      earnings += amount;
+      continue;
+    }
+    if (tx.type === "withdraw") {
+      const fromPocket = String(tx?.metadata?.balanceSource || "") === "pocket";
+      if (!fromPocket) deducted += amount;
+    }
+  }
+
+  const available = Math.max(0, earnings - deducted);
+  return {
+    earnings,
+    available,
+    deducted,
+    weekStart: start,
+    weekEnd: new Date(endExclusive.getTime() - 1),
+  };
+}
+
 const PAYOUT_ALLOWED_ROLES = new Set(["worker", "contractor"]);
 
 async function requirePayoutAccess(req, res) {
@@ -108,7 +170,11 @@ router.get("/", authenticateToken, async (req, res) => {
       wallet.balance = Number(wallet.availableBalance || 0);
       await wallet.save();
     }
-    res.json({ success: true, wallet });
+    const walletPayload = wallet.toObject();
+    if (String(req.user?.role || "").toLowerCase() === "worker") {
+      walletPayload.weekly = computeWorkerWeeklyMetrics(wallet);
+    }
+    res.json({ success: true, wallet: walletPayload });
   } catch (err) {
     console.error('Wallet fetch error:', err);
     res.status(500).json({ success: false, message: "Error fetching wallet" });
@@ -302,6 +368,10 @@ router.post("/deposit/verify", authenticateToken, depositVerifyLimiter, async (r
         console.error(`🔴 FRAUD DETECTION: Suspicious amount: ₹${depositAmount}`);
         return res.status(400).json({ success: false, message: 'Invalid payment amount' });
       }
+      if (depositAmount < 100) {
+        console.error(`🔴 Deposit below minimum: ₹${depositAmount}`);
+        return res.status(400).json({ success: false, message: "Minimum deposit is ₹100" });
+      }
       
       console.log(`✅ Payment verified from Razorpay: ₹${depositAmount}, Status: captured`);
     } catch (razorpayErr) {
@@ -353,15 +423,18 @@ router.post("/deposit/verify", authenticateToken, depositVerifyLimiter, async (r
     if (!existingWalletBeforeUpdate) {
       return res.status(404).json({ success: false, message: "Wallet not found. Please login again." });
     }
-    const isWorker = String(req.user?.role || "").toLowerCase() === "worker";
-    const targetBalanceField = isWorker ? "pocketBalance" : "availableBalance";
+    const role = String(req.user?.role || "").toLowerCase();
+    const isWorker = role === "worker";
+    const isContractor = role === "contractor";
+    const usePocketBalance = isWorker || isContractor;
+    const targetBalanceField = isContractor ? "pocketBalance" : "availableBalance";
     const openingBalance = Number(existingWalletBeforeUpdate[targetBalanceField] || 0);
     const closingBalance = openingBalance + depositAmount;
-    const balanceInc = { [targetBalanceField]: depositAmount };
-    // Keep legacy `balance` aligned with withdrawable funds only.
-    if (!isWorker) {
-      balanceInc.balance = depositAmount;
-    }
+    const balanceInc = isContractor
+      ? { pocketBalance: depositAmount }
+      : isWorker
+        ? { pocketBalance: depositAmount, availableBalance: depositAmount, balance: depositAmount }
+        : { availableBalance: depositAmount, balance: depositAmount };
 
     const wallet = await Wallet.findOneAndUpdate(
       {
@@ -371,20 +444,25 @@ router.post("/deposit/verify", authenticateToken, depositVerifyLimiter, async (r
         $inc: balanceInc, // Atomically increment target bucket
         $push: {
           transactions: appendAuditFields({
-            type: isWorker ? 'pocket_deposit' : 'deposit',
+            type: isContractor ? 'pocket_deposit' : 'deposit',
             amount: depositAmount,
             openingBalance,
             closingBalance,
             paymentId,
             orderId,
             status: 'completed',
-            description: isWorker
+            description: isContractor
               ? `Pocket balance deposit via Razorpay (${paymentId})`
+              : isWorker
+                ? `Worker deposit credited to available + pocket (${paymentId})`
               : `Wallet deposit via Razorpay (${paymentId})`,
             source: 'app',
             provider: 'razorpay',
             providerEventId: paymentId,
-            metadata: { verifiedBy: 'deposit/verify', balanceType: isWorker ? 'pocket' : 'available' },
+            metadata: {
+              verifiedBy: 'deposit/verify',
+              balanceType: isContractor ? 'pocket' : isWorker ? 'available+pocket' : 'available',
+            },
           })
         }
       },
@@ -600,8 +678,6 @@ router.post("/withdraw", authenticateToken, withdrawLimiter, async (req, res) =>
     if (!(await requirePayoutAccess(req, res))) return;
     const { amount, payoutMethod: payoutMethodInput } = req.body;
     const payoutMethod = String(payoutMethodInput || "bank").toLowerCase();
-    const isWorker = String(req.user?.role || "").toLowerCase() === "worker";
-    const balanceSource = isWorker ? "pocket" : "available";
     
     // 🔐 STEP 1: INPUT VALIDATION - Numeric type safety
     if (amount === undefined || amount === null) {
@@ -683,29 +759,39 @@ router.post("/withdraw", authenticateToken, withdrawLimiter, async (req, res) =>
     if (!existingWalletBeforeWithdraw) {
       return res.status(404).json({ success: false, message: "Wallet not found. Please login again." });
     }
-    const openingBalance = Number(
-      isWorker
-        ? (existingWalletBeforeWithdraw.pocketBalance ?? 0)
-        : (existingWalletBeforeWithdraw.availableBalance ?? existingWalletBeforeWithdraw.balance ?? 0)
-    );
+    const role = String(req.user?.role || "").toLowerCase();
+    const isContractor = role === "contractor";
+    const rawAvailable = Number(existingWalletBeforeWithdraw.availableBalance ?? 0);
+    const rawPocket = Number(existingWalletBeforeWithdraw.pocketBalance ?? 0);
+    const openingAvailable = rawAvailable;
+    const deductedFromAvailable = withdrawAmount;
+    const deductedFromPocket = 0;
+    const balanceSource = isContractor ? "pocket" : "available";
+
+    const openingBalance = isContractor ? rawPocket : openingAvailable;
     const closingBalance = openingBalance - withdrawAmount;
 
+    const query = isContractor
+      ? {
+          phone: req.user.phone,
+          pocketBalance: { $gte: withdrawAmount },
+        }
+      : {
+          phone: req.user.phone,
+          availableBalance: { $gte: withdrawAmount },
+        };
+
+    const incOps = {};
+    if (isContractor) {
+      incOps.pocketBalance = -withdrawAmount;
+    } else {
+      incOps.availableBalance = -deductedFromAvailable;
+      incOps.balance = -deductedFromAvailable;
+    }
     const wallet = await Wallet.findOneAndUpdate(
+      query,
       {
-        phone: req.user.phone,
-        ...(isWorker
-          ? { pocketBalance: { $gte: withdrawAmount } }
-          : {
-              $or: [
-                { availableBalance: { $gte: withdrawAmount } },
-                { availableBalance: { $exists: false }, balance: { $gte: withdrawAmount } },
-              ],
-            }),
-      },
-      {
-        $inc: isWorker
-          ? { pocketBalance: -withdrawAmount }
-          : { balance: -withdrawAmount, availableBalance: -withdrawAmount },
+        $inc: incOps,
         $push: {
           transactions: appendAuditFields({
             type: "withdraw",
@@ -721,8 +807,8 @@ router.post("/withdraw", authenticateToken, withdrawLimiter, async (req, res) =>
             provider: "razorpay",
             metadata:
               payoutMethod === "bank"
-                ? { payoutMethod: "bank", bankMasked: bankAccount.maskedAccount, balanceSource }
-                : { payoutMethod: "upi", upiMasked: upiDetails.maskedUpiId, balanceSource },
+                ? { payoutMethod: "bank", bankMasked: bankAccount.maskedAccount, balanceSource, deductedFromAvailable: isContractor ? 0 : deductedFromAvailable, deductedFromPocket: isContractor ? withdrawAmount : 0 }
+                : { payoutMethod: "upi", upiMasked: upiDetails.maskedUpiId, balanceSource, deductedFromAvailable: isContractor ? 0 : deductedFromAvailable, deductedFromPocket: isContractor ? withdrawAmount : 0 },
           })
         }
       },
@@ -740,6 +826,8 @@ router.post("/withdraw", authenticateToken, withdrawLimiter, async (req, res) =>
       amount: withdrawAmount,
       status: 'initiated',
       balanceSource,
+      deductedFromAvailable: isContractor ? 0 : deductedFromAvailable,
+      deductedFromPocket: isContractor ? withdrawAmount : deductedFromPocket,
       walletTransactionId: latestTransaction?._id || null,
       provider: 'razorpay',
       bankSnapshot:
@@ -785,6 +873,8 @@ router.post("/withdraw", authenticateToken, withdrawLimiter, async (req, res) =>
       pocketBalance: Number(wallet.pocketBalance || 0),
       withdrawalAmount: withdrawAmount,
       balanceSource,
+      deductedFromAvailable: isContractor ? 0 : deductedFromAvailable,
+      deductedFromPocket: isContractor ? withdrawAmount : deductedFromPocket,
       payoutMethod,
       bankAccount: bankAccount?.maskedAccount || null,
       upiId: upiDetails?.maskedUpiId || null,
@@ -902,7 +992,7 @@ router.post("/deposit/webhook", async (req, res) => {
     const phone = payment?.notes?.phone;
     const type = payment?.notes?.type;
 
-    if (!paymentId || !phone || type !== "wallet_deposit" || amount <= 0) {
+    if (!paymentId || !phone || type !== "wallet_deposit" || amount <= 0 || amount < 100) {
       return res.status(400).json({ success: false, message: "Invalid webhook payload" });
     }
 
@@ -922,27 +1012,38 @@ router.post("/deposit/webhook", async (req, res) => {
       role = String(userDoc?.role || "worker").toLowerCase();
     }
     const isWorker = role === "worker";
-    const targetBalanceField = isWorker ? "pocketBalance" : "availableBalance";
+    const isContractor = role === "contractor";
+    const usePocketBalance = isWorker || isContractor;
+    const targetBalanceField = isContractor ? "pocketBalance" : "availableBalance";
     const updatedWallet = await Wallet.findOneAndUpdate(
       { phone, "transactions.paymentId": { $ne: paymentId } },
       {
-        $inc: isWorker ? { pocketBalance: amount } : { availableBalance: amount, balance: amount },
+        $inc: isContractor
+          ? { pocketBalance: amount }
+          : isWorker
+            ? { pocketBalance: amount, availableBalance: amount, balance: amount }
+            : { availableBalance: amount, balance: amount },
         $push: {
           transactions: appendAuditFields({
-            type: isWorker ? "pocket_deposit" : "deposit",
+            type: isContractor ? "pocket_deposit" : "deposit",
             amount,
             openingBalance: Number(walletDoc[targetBalanceField] || 0),
             closingBalance: Number(walletDoc[targetBalanceField] || 0) + amount,
             orderId,
             paymentId,
             status: "completed",
-            description: isWorker
+            description: isContractor
               ? `Pocket balance deposit via webhook (${paymentId})`
+              : isWorker
+                ? `Worker deposit credited to available + pocket via webhook (${paymentId})`
               : `Wallet deposit via webhook (${paymentId})`,
             source: "webhook",
             provider: "razorpay",
             providerEventId: paymentId,
-            metadata: { webhookEvent: event, balanceType: isWorker ? "pocket" : "available" },
+            metadata: {
+              webhookEvent: event,
+              balanceType: isContractor ? "pocket" : isWorker ? "available+pocket" : "available",
+            },
           }),
         },
       },
@@ -1027,23 +1128,32 @@ router.post("/payout/webhook", async (req, res) => {
         );
         if (!alreadyRolledBack) {
           const source = String(withdrawal.balanceSource || "available");
-          const fromPocket = source === "pocket";
-          const openingBalance = Number(
-            fromPocket
-              ? (wallet.pocketBalance ?? 0)
-              : (wallet.availableBalance ?? wallet.balance ?? 0)
-          );
-          const closingBalance = openingBalance + Number(withdrawal.amount || 0);
-          if (fromPocket) {
-            wallet.pocketBalance = closingBalance;
+          const addAvailable = Number(withdrawal.deductedFromAvailable || 0);
+          const addPocket = Number(withdrawal.deductedFromPocket || 0);
+          const fallbackAmount = Number(withdrawal.amount || 0);
+          const shouldFallbackSingleBucket = addAvailable <= 0 && addPocket <= 0;
+          const openingBalance = Number(wallet.availableBalance ?? wallet.balance ?? 0) + Number(wallet.pocketBalance ?? 0);
+          if (shouldFallbackSingleBucket) {
+            if (source === "pocket") {
+              wallet.pocketBalance = Number(wallet.pocketBalance || 0) + fallbackAmount;
+            } else {
+              wallet.availableBalance = Number(wallet.availableBalance ?? wallet.balance ?? 0) + fallbackAmount;
+              wallet.balance = Number(wallet.availableBalance || 0);
+            }
           } else {
-            wallet.availableBalance = closingBalance;
-            wallet.balance = closingBalance;
+            if (addAvailable > 0) {
+              wallet.availableBalance = Number(wallet.availableBalance ?? wallet.balance ?? 0) + addAvailable;
+              wallet.balance = Number(wallet.availableBalance || 0);
+            }
+            if (addPocket > 0) {
+              wallet.pocketBalance = Number(wallet.pocketBalance || 0) + addPocket;
+            }
           }
+          const closingBalance = Number(wallet.availableBalance ?? wallet.balance ?? 0) + Number(wallet.pocketBalance ?? 0);
           wallet.transactions.push(
             appendAuditFields({
               type: "refund",
-              amount: Number(withdrawal.amount || 0),
+              amount: fallbackAmount,
               openingBalance,
               closingBalance,
               status: "completed",
@@ -1051,7 +1161,13 @@ router.post("/payout/webhook", async (req, res) => {
               source: "webhook",
               provider: "razorpay",
               providerEventId: rollbackEventId,
-              metadata: { payoutEvent: event, payoutId, balanceSource: source },
+              metadata: {
+                payoutEvent: event,
+                payoutId,
+                balanceSource: source,
+                refundedToAvailable: addAvailable,
+                refundedToPocket: addPocket,
+              },
             })
           );
           await wallet.save();

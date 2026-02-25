@@ -210,7 +210,7 @@ router.post('/verify-payment', authenticateToken, async (req, res) => {
         'transactions.paymentId': { $ne: paymentId }  // Only update if paymentId NOT present
       },
       {
-        $inc: { balance: actualAmount, availableBalance: actualAmount },
+        $inc: { balance: actualAmount, availableBalance: actualAmount, totalEarned: actualAmount },
         $push: {
           transactions: {
             type: 'payment',
@@ -338,6 +338,8 @@ router.post('/verify-payment', authenticateToken, async (req, res) => {
     if (io) {
       io.to(workerPhone).emit('walletUpdated', {
         phone: workerPhone,
+        type: 'payment',
+        amount: actualAmount,
         balance: updatedWallet.balance,
         availableBalance: Number(updatedWallet.availableBalance || updatedWallet.balance || 0),
         pocketBalance: Number(updatedWallet.pocketBalance || 0),
@@ -479,7 +481,7 @@ router.post('/webhook', async (req, res) => {
         'transactions.paymentId': { $ne: paymentId }  // Only update if paymentId NOT already present
       },
       {
-        $inc: { balance: actualAmount, availableBalance: actualAmount },
+        $inc: { balance: actualAmount, availableBalance: actualAmount, totalEarned: actualAmount },
         $push: {
           transactions: {
             type: 'payment',
@@ -605,6 +607,8 @@ router.post('/webhook', async (req, res) => {
     if (io) {
       io.to(workerPhone).emit('walletUpdated', {
         phone: workerPhone,
+        type: 'payment',
+        amount: actualAmount,
         balance: updatedWallet.balance,
         availableBalance: Number(updatedWallet.availableBalance || updatedWallet.balance || 0),
         pocketBalance: Number(updatedWallet.pocketBalance || 0),

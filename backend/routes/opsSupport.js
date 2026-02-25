@@ -1,6 +1,7 @@
 const express = require("express");
 const { authenticateToken } = require("../utils/auth");
 const rateLimit = require("express-rate-limit");
+const { ipKeyGenerator } = require("express-rate-limit");
 const crypto = require("crypto");
 const ActivityLog = require("../models/ActivityLog");
 const SupportTicket = require("../models/SupportTicket");
@@ -23,7 +24,7 @@ function createOpsSupportRouter({ upload, PORT }) {
     max: 5,
     standardHeaders: true,
     legacyHeaders: false,
-    keyGenerator: (req) => req.user?.phone || req.ip,
+    keyGenerator: (req) => req.user?.phone || ipKeyGenerator(req.ip),
     message: { success: false, message: "Too many support tickets created. Please try again later." },
   });
 

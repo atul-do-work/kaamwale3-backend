@@ -81,6 +81,8 @@ export default function ContractorWalletAttendance() {
   const [loading, setLoading] = useState(true);
   const [contractorName, setContractorName] = useState<string>("");
   const [walletBalance, setWalletBalance] = useState<number>(0);
+  const [availableBalance, setAvailableBalance] = useState<number>(0);
+  const [pocketBalance, setPocketBalance] = useState<number>(0);
 
   const [depositAmount, setDepositAmount] = useState<string>("");
   const [withdrawAmount, setWithdrawAmount] = useState<string>("");
@@ -150,6 +152,8 @@ export default function ContractorWalletAttendance() {
   ) => {
     Alert.alert(title, message, actions.length ? actions : [{ text: "OK" }]);
   };
+
+  const withdrawableBalance = pocketBalance;
 
 
   // ✅ Close all modals when wallet tab loses focus (not visible in other tabs)
@@ -274,8 +278,11 @@ export default function ContractorWalletAttendance() {
         }
         // Safe to update - event is for current user
         setWalletBalance(data.balance);
+        setAvailableBalance(Number(data.availableBalance ?? data.balance ?? 0));
+        setPocketBalance(Number(data.pocketBalance || 0));
       } else if (typeof data === 'number') {
         setWalletBalance(data);
+        setAvailableBalance(data);
       }
     };
 
@@ -526,7 +533,11 @@ export default function ContractorWalletAttendance() {
       const data = res.data;
 
       if (data && data.success) {
-        setWalletBalance(data.wallet.balance);
+        const nextAvailable = Number(data.wallet.availableBalance ?? data.wallet.balance ?? 0);
+        const nextPocket = Number(data.wallet.pocketBalance || 0);
+        setWalletBalance(Number(data.wallet.balance || 0));
+        setAvailableBalance(nextAvailable);
+        setPocketBalance(nextPocket);
       }
     } catch (err) {
       console.error("Wallet fetch failed:", err);
@@ -839,7 +850,7 @@ export default function ContractorWalletAttendance() {
       return;
     }
 
-    if (Number(withdrawAmount) > walletBalance) {
+    if (Number(withdrawAmount) > withdrawableBalance) {
       showAlert("Error", "Insufficient balance");
       return;
     }
@@ -1040,7 +1051,7 @@ export default function ContractorWalletAttendance() {
         >
           <View style={styles.balanceContainer}>
             <Text style={styles.balanceTitle}>Pocket Balance</Text>
-            <Text style={styles.balanceAmount}>₹{walletBalance}</Text>
+            <Text style={styles.balanceAmount}>₹{pocketBalance}</Text>
           </View>
 
           {/* Deposit + Withdraw Buttons in one line */}

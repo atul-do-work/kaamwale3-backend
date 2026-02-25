@@ -56,6 +56,7 @@ function createPremiumWalletRouter({ io }) {
         if (!user) {
           throw Object.assign(new Error("User not found"), { statusCode: 404 });
         }
+        const isContractor = String(req.user?.role || "").toLowerCase() === "contractor";
 
         const existingByKey = await PremiumSubscription.findOne({
           userPhone: req.user.phone,
@@ -65,7 +66,7 @@ function createPremiumWalletRouter({ io }) {
         if (existingByKey) {
           let wallet = await Wallet.findOne({ phone: req.user.phone }).session(session);
           if (!wallet) {
-            wallet = new Wallet({ phone: req.user.phone, balance: 0, transactions: [] });
+            wallet = new Wallet({ phone: req.user.phone, balance: 0, availableBalance: 0, pocketBalance: 0, transactions: [] });
             await wallet.save({ session });
           }
 
@@ -74,7 +75,9 @@ function createPremiumWalletRouter({ io }) {
             idempotent: true,
             message: `Subscription already processed for plan ${existingByKey.planType}`,
             premiumPlan: user.premiumPlan,
-            newBalance: wallet.balance,
+            newBalance: isContractor ? Number(wallet.pocketBalance || 0) : Number(wallet.balance || 0),
+            newAvailableBalance: Number(wallet.availableBalance ?? wallet.balance ?? 0),
+            newPocketBalance: Number(wallet.pocketBalance || 0),
           };
           return;
         }
@@ -92,13 +95,17 @@ function createPremiumWalletRouter({ io }) {
 
         let wallet = await Wallet.findOne({ phone: req.user.phone }).session(session);
         if (!wallet) {
-          wallet = new Wallet({ phone: req.user.phone, balance: 0, transactions: [] });
+          wallet = new Wallet({ phone: req.user.phone, balance: 0, availableBalance: 0, pocketBalance: 0, transactions: [] });
           await wallet.save({ session });
         }
 
-        if (wallet.balance < plan.price) {
+        const rawPocket = Number(wallet.pocketBalance || 0);
+        const rawBalance = Number(wallet.balance || 0);
+        const spendableBalance = isContractor ? rawPocket : rawBalance;
+
+        if (spendableBalance < plan.price) {
           throw Object.assign(
-            new Error(`Insufficient balance. You have Rs ${wallet.balance}, but plan costs Rs ${plan.price}`),
+            new Error(`Insufficient balance. You have Rs ${spendableBalance}, but plan costs Rs ${plan.price}`),
             { statusCode: 400 }
           );
         }
@@ -145,28 +152,47 @@ function createPremiumWalletRouter({ io }) {
         );
 
         const createdSub = subscription[0];
-        const openingBalance = Number(wallet.balance) || 0;
-        wallet.balance = openingBalance - plan.price;
-        wallet.transactions.push({
-          type: "premium_subscription",
-          amount: plan.price,
-          date: now,
-          description: `Premium ${planId} subscription`,
-          idempotencyKey: `${req.user.phone}:${idempotencyKey}`,
-          status: "completed",
-          openingBalance,
-          closingBalance: wallet.balance,
-          source: "app",
-          provider: "internal",
-          providerEventId: createdSub.subscriptionId,
-          metadata: {
-            subscriptionId: createdSub.subscriptionId,
-            invoiceId: createdSub.invoiceId,
-            currency: createdSub.currency,
-            planType: planId,
+        const chargedWallet = await Wallet.findOneAndUpdate(
+          isContractor
+            ? { phone: req.user.phone, pocketBalance: { $gte: plan.price } }
+            : { phone: req.user.phone, balance: { $gte: plan.price } },
+          {
+            $inc: isContractor ? { pocketBalance: -plan.price } : { balance: -plan.price },
+            $push: {
+              transactions: {
+                type: "premium_subscription",
+                amount: plan.price,
+                date: now,
+                description: `Premium ${planId} subscription`,
+                idempotencyKey: `${req.user.phone}:${idempotencyKey}`,
+                status: "completed",
+                openingBalance: spendableBalance,
+                closingBalance: spendableBalance - plan.price,
+                source: "app",
+                provider: "internal",
+                providerEventId: createdSub.subscriptionId,
+                metadata: {
+                  subscriptionId: createdSub.subscriptionId,
+                  invoiceId: createdSub.invoiceId,
+                  currency: createdSub.currency,
+                  planType: planId,
+                  deductedFrom: isContractor ? "pocketBalance" : "balance",
+                },
+              },
+            },
           },
-        });
-        await wallet.save({ session });
+          { new: true, session }
+        );
+
+        if (!chargedWallet) {
+          throw Object.assign(
+            new Error(`Insufficient balance. You have Rs ${spendableBalance}, but plan costs Rs ${plan.price}`),
+            { statusCode: 400 }
+          );
+        }
+
+        wallet = chargedWallet;
+        const closingBalance = isContractor ? Number(wallet.pocketBalance || 0) : Number(wallet.balance || 0);
 
         user.premiumPlan = {
           type: planId,
@@ -210,7 +236,9 @@ function createPremiumWalletRouter({ io }) {
           success: true,
           message: `Successfully subscribed to ${planId} plan`,
           premiumPlan: user.premiumPlan,
-          newBalance: wallet.balance,
+          newBalance: closingBalance,
+          newAvailableBalance: Number(wallet.availableBalance ?? wallet.balance ?? 0),
+          newPocketBalance: Number(wallet.pocketBalance || 0),
           subscriptionId: createdSub.subscriptionId,
           invoiceId: createdSub.invoiceId,
         };
@@ -229,6 +257,8 @@ function createPremiumWalletRouter({ io }) {
         io.to(req.user.phone).emit("walletUpdated", {
           phone: req.user.phone,
           balance: responsePayload.newBalance,
+          availableBalance: Number(responsePayload.newAvailableBalance || 0),
+          pocketBalance: Number(responsePayload.newPocketBalance || 0),
           source: "premium_subscription",
         });
       }
@@ -350,11 +380,13 @@ function createPremiumWalletRouter({ io }) {
     try {
       let wallet = await Wallet.findOne({ phone: req.user.phone });
       if (!wallet) {
-        wallet = new Wallet({ phone: req.user.phone, balance: 0, transactions: [] });
+        wallet = new Wallet({ phone: req.user.phone, balance: 0, availableBalance: 0, pocketBalance: 0, transactions: [] });
         await wallet.save();
       }
 
-      return res.json({ success: true, balance: wallet.balance });
+      const isContractor = String(req.user?.role || "").toLowerCase() === "contractor";
+      const displayBalance = isContractor ? Number(wallet.pocketBalance || 0) : Number(wallet.balance || 0);
+      return res.json({ success: true, balance: displayBalance });
     } catch (err) {
       return res.status(500).json({ success: false, message: "Failed to get balance" });
     }

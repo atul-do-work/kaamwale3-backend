@@ -180,6 +180,7 @@ async function payJob({ jobId, mode, workerPhone, idempotencyKey, userPhone, use
       const creditAmount = Number(job.amount) || 0;
       workerWallet.availableBalance = Number(workerWallet.availableBalance ?? workerWallet.balance ?? 0) + creditAmount;
       workerWallet.balance = Number(workerWallet.availableBalance || 0);
+      workerWallet.totalEarned = Number(workerWallet.totalEarned || 0) + creditAmount;
       workerWallet.transactions.push({
         type: "payment",
         amount: creditAmount,
@@ -298,6 +299,7 @@ async function payJob({ jobId, mode, workerPhone, idempotencyKey, userPhone, use
     const creditAmount = Number(job.amount) || 0;
     workerWallet.availableBalance = Number(workerWallet.availableBalance ?? workerWallet.balance ?? 0) + creditAmount;
     workerWallet.balance = Number(workerWallet.availableBalance || 0);
+    workerWallet.totalEarned = Number(workerWallet.totalEarned || 0) + creditAmount;
     workerWallet.transactions.push({
       type: "payment",
       amount: creditAmount,
@@ -654,9 +656,14 @@ async function cancelJob({ jobId, reason, reasonDescription, userPhone, deps }) 
 
   if (refundAmount > 0 && cancelledBy === "contractor" && !job.acceptedBy) {
     let wallet = await Wallet.findOne({ phone: job.contractorPhone });
-    if (!wallet) wallet = new Wallet({ phone: job.contractorPhone });
-    wallet.balance += refundAmount;
-    wallet.transactions.push({ type: "refund", amount: refundAmount, date: new Date() });
+    if (!wallet) wallet = new Wallet({ phone: job.contractorPhone, balance: 0, availableBalance: 0, pocketBalance: 0 });
+    wallet.pocketBalance = Number(wallet.pocketBalance || 0) + refundAmount;
+    wallet.transactions.push({
+      type: "refund",
+      amount: refundAmount,
+      date: new Date(),
+      metadata: { creditedTo: "pocketBalance", reason: "job_cancel_refund" },
+    });
     await wallet.save();
   }
 

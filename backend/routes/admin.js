@@ -23,6 +23,8 @@ const District = require('../models/City'); // File is City.js, exports as "Dist
 const GigHistory = require('../models/GigHistory');
 const IncentiveLedger = require('../models/IncentiveLedger');
 const PayoutBatch = require('../models/PayoutBatch');
+const WorkerEarnings = require('../models/WorkerEarnings');
+const { runWeeklyWalletSettlement } = require('../services/weeklyWalletSettlement');
 
 // Middleware to check admin role
 const checkAdmin = (req, res, next) => {
@@ -1446,19 +1448,30 @@ router.post('/payouts/batches', authenticateToken, checkAdmin, async (req, res) 
         const startDate = start ? new Date(start) : week.start;
         const endDate = end ? new Date(end) : week.end;
 
-        const paidJobs = await Job.find({
-            paymentStatus: 'Paid',
-            paymentTime: { $gte: startDate, $lt: endDate },
+        // Single payout pipeline source: WorkerEarnings ledger.
+        const weekEarnings = await WorkerEarnings.find({
+            earnedAt: { $gte: startDate, $lt: endDate },
+            status: { $in: ['earned', 'payout_requested'] },
         }).lean();
 
+        if (!weekEarnings.length) {
+            return res.status(400).json({ success: false, message: 'No eligible worker earnings found for this window' });
+        }
+
         const byWorker = new Map();
-        for (const j of paidJobs) {
-            const phone = safeText(j.acceptedBy, 20);
+        for (const earning of weekEarnings) {
+            const phone = safeText(earning.workerPhone, 20);
             if (!isValidPhone(phone)) continue;
-            if (!byWorker.has(phone)) byWorker.set(phone, { workerPhone: phone, workerName: '', earningsAmount: 0, deductions: 0, netAmount: 0, status: 'pending' });
+            if (!byWorker.has(phone)) byWorker.set(phone, { workerPhone: phone, workerName: '', earningsAmount: 0, deductions: 0, netAmount: 0, status: 'pending', earningIds: [] });
             const row = byWorker.get(phone);
-            row.earningsAmount += Number(j.amount || 0);
-            row.netAmount += Number(j.amount || 0);
+            const amount = Number(earning.amount || 0);
+            row.earningsAmount += amount;
+            row.netAmount += amount;
+            row.earningIds.push(String(earning._id));
+        }
+
+        if (!byWorker.size) {
+            return res.status(400).json({ success: false, message: 'No valid worker earnings found for payout batch' });
         }
 
         const now = new Date();
@@ -1485,6 +1498,26 @@ router.post('/payouts/batches', authenticateToken, checkAdmin, async (req, res) 
     }
 });
 
+router.post('/payouts/weekly-settlement/run', authenticateToken, checkAdmin, async (req, res) => {
+    try {
+        const io = req.app.get('io');
+        const result = await runWeeklyWalletSettlement(new Date(), { io });
+        await logAdminAudit({
+            req,
+            action: 'payout_batch_state_changed',
+            phone: req.user.phone || 'admin',
+            description: 'Manual weekly wallet settlement run',
+            before: null,
+            after: result,
+            metadata: { source: 'admin_console' },
+        });
+        return res.json({ success: true, message: 'Weekly settlement run completed', result });
+    } catch (error) {
+        console.error('Weekly settlement run error:', error);
+        return res.status(500).json({ success: false, message: error.message });
+    }
+});
+
 router.patch('/payouts/:batchId/state', authenticateToken, checkAdmin, async (req, res) => {
     try {
         const batchId = String(req.params.batchId || '').trim();
@@ -1507,6 +1540,23 @@ router.patch('/payouts/:batchId/state', authenticateToken, checkAdmin, async (re
             for (const w of batch.workers || []) {
                 if (w.status !== 'success') w.status = 'success';
             }
+            // Source-of-truth sync: mark underlying earnings as paid out for this batch window.
+            await WorkerEarnings.updateMany(
+                {
+                    workerPhone: { $in: (batch.workers || []).map((w) => w.workerPhone).filter(Boolean) },
+                    earnedAt: { $gte: batch.payoutWeek.startDate, $lt: batch.payoutWeek.endDate },
+                    status: { $in: ['earned', 'payout_requested'] },
+                },
+                {
+                    $set: {
+                        status: 'payout_completed',
+                        payoutCompletedAt: new Date(),
+                        source: 'admin',
+                        provider: 'internal',
+                        providerEventId: `batch:${batch.batchId}`,
+                    },
+                }
+            );
         } else {
             batch.status = next === 'queued' ? 'pending' : next;
             if (next === 'processing') batch.processedAt = new Date();

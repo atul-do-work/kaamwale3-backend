@@ -21,7 +21,7 @@ import { connectSocket } from '../../../utils/socket';
 import { useLanguage } from '../../../context/LanguageContext';
 // Define types for wallet and transactions
 type Transaction = {
-  type: 'deposit' | 'pocket_deposit' | 'withdraw' | 'payment'; // ✅ Added 'payment' type for contractor payments
+  type: 'deposit' | 'pocket_deposit' | 'withdraw' | 'payment' | 'incentive_reward';
   amount: number;
   date: string;
 };
@@ -33,6 +33,14 @@ type WalletType = {
   transactions: Transaction[];
 };
 
+type WeeklyType = {
+  earnings: number;
+  available: number;
+  deducted: number;
+  weekStart: string | Date;
+  weekEnd: string | Date;
+};
+
 import { useAuth } from '../../../context/AuthContext';
 import api from '../../../utils/api';
 
@@ -42,6 +50,7 @@ export default function Wallet(): React.ReactElement {
   const { accessToken, user: authUser } = useAuth();
   
   const [wallet, setWallet] = useState<WalletType>({ balance: 0, availableBalance: 0, pocketBalance: 0, transactions: [] });
+  const [weekly, setWeekly] = useState<WeeklyType | null>(null);
   const [showDeposit, setShowDeposit] = useState(false);
   const [showWithdraw, setShowWithdraw] = useState(false);
   const [depositAmount, setDepositAmount] = useState('');
@@ -174,6 +183,37 @@ export default function Wallet(): React.ReactElement {
                 ]
               };
             });
+            setWeekly(prev => {
+              if (!prev) return prev;
+              const now = new Date();
+              const weekStart = new Date(prev.weekStart);
+              const weekEnd = new Date(prev.weekEnd);
+              if (
+                Number.isNaN(weekStart.getTime()) ||
+                Number.isNaN(weekEnd.getTime()) ||
+                now < weekStart ||
+                now > weekEnd
+              ) {
+                return prev;
+              }
+              const amt = Number(data.amount || 0);
+              if (!Number.isFinite(amt) || amt <= 0) return prev;
+              if (data.type === 'payment') {
+                return {
+                  ...prev,
+                  earnings: Number(prev.earnings || 0) + amt,
+                  available: Number(prev.available || 0) + amt,
+                };
+              }
+              if (data.type === 'withdraw') {
+                return {
+                  ...prev,
+                  deducted: Number(prev.deducted || 0) + amt,
+                  available: Math.max(0, Number(prev.available || 0) - amt),
+                };
+              }
+              return prev;
+            });
             console.log(`✅ Wallet updated: available ₹${nextAvailable}, pocket ₹${nextPocket}`);
           } else {
             console.warn(`⚠️ Invalid wallet update data:`, data);
@@ -217,6 +257,7 @@ export default function Wallet(): React.ReactElement {
           pocketBalance: Number(res.data.wallet.pocketBalance || 0),
           transactions: res.data.wallet.transactions || []
         });
+        setWeekly(res.data.wallet.weekly || null);
         return Promise.resolve();
       }
       return Promise.reject('Failed to fetch wallet');
@@ -379,7 +420,7 @@ export default function Wallet(): React.ReactElement {
       // setDepositModalVisible(false);
 
       if (res.data.success) {
-        Alert.alert('Success', `₹${currentDepositAmount} deposited to your pocket balance!`);
+        Alert.alert('Success', `₹${currentDepositAmount} deposited to your available and pocket balance!`);
         setDepositAmount('');
         setShowDeposit(false);
         // ✅ Fallback: Fetch wallet if socket fails
@@ -425,7 +466,8 @@ export default function Wallet(): React.ReactElement {
       return;
     }
 
-    if (Number(withdrawAmount) > wallet.availableBalance) {
+    const availableBalance = Number(wallet.availableBalance ?? wallet.balance ?? 0);
+    if (Number(withdrawAmount) > availableBalance) {
       Alert.alert('Error', 'Insufficient balance');
       return;
     }
@@ -527,8 +569,26 @@ export default function Wallet(): React.ReactElement {
     title: t.type.charAt(0).toUpperCase() + t.type.slice(1),
     amount: t.amount,
     date: new Date(t.date).toLocaleDateString(),
-    icon: (t.type === 'deposit' || t.type === 'pocket_deposit') ? 'attach-money' : (t.type === 'payment' ? 'paid' : 'money-off')
+    icon:
+      t.type === 'deposit' || t.type === 'pocket_deposit'
+        ? 'attach-money'
+        : t.type === 'payment' || t.type === 'incentive_reward'
+          ? 'paid'
+          : 'money-off'
   }));
+
+  const formatWeekRange = (w: WeeklyType | null) => {
+    if (!w?.weekStart || !w?.weekEnd) return "";
+    const start = new Date(w.weekStart);
+    const end = new Date(w.weekEnd);
+    if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return "";
+    const fmt = (d: Date) =>
+      `${String(d.getDate()).padStart(2, '0')} ${d.toLocaleString('en-IN', { month: 'short' })}`;
+    return `${fmt(start)} - ${fmt(end)}`;
+  };
+  const weekRangeText = formatWeekRange(weekly);
+  const weeklyEarningsAmount = Number(weekly?.earnings ?? 0);
+  const weeklyAvailableAmount = Number(weekly?.available ?? wallet.availableBalance);
 
   useEffect(() => {
     setDisplayedCardCount(4);
@@ -547,7 +607,10 @@ export default function Wallet(): React.ReactElement {
         style={styles.headerContainer}
       >
         <Text style={styles.headerText}>Earnings</Text>
-        <Text style={styles.amountText}>₹{wallet.availableBalance}</Text>
+        <Text style={styles.amountText}>₹{weeklyEarningsAmount}</Text>
+        {!!weekRangeText && (
+          <Text style={{ color: '#d7e3f5', marginTop: 4, fontSize: 12 }}>{weekRangeText}</Text>
+        )}
       </LinearGradient>
 
       {/* Pocket Balance */}
@@ -559,7 +622,7 @@ export default function Wallet(): React.ReactElement {
       {/* Available Balance */}
       <View style={styles.balanceContainer}>
         <Text style={styles.balanceTitle}>Available Balance</Text>
-        <Text style={styles.balanceAmount}>₹{wallet.availableBalance}</Text>
+        <Text style={styles.balanceAmount}>₹{weeklyAvailableAmount}</Text>
       </View>
 
       {/* Deposit & Withdraw Buttons */}

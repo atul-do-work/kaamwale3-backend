@@ -65,7 +65,6 @@ const cancellationLogSchema = new mongoose.Schema(
 );
 
 // Indexes
-cancellationLogSchema.index({ jobId: 1 });
 cancellationLogSchema.index({ contractorPhone: 1, cancelledAt: -1 });
 cancellationLogSchema.index({ workerPhone: 1, cancelledAt: -1 });
 cancellationLogSchema.index({ cancelledAt: -1 });

@@ -1303,6 +1303,7 @@
                     <div style="background:#f9fafb;padding:14px;border-radius:10px;border:1px solid #e5e7eb;">
                         <h4>Payout Queue</h4>
                         <button class="btn-small btn-view" onclick="opsCreatePayoutBatch()">Create Weekly Batch</button>
+                        <button class="btn-small btn-approve" onclick="opsRunWeeklySettlement()">Run Weekly Settlement</button>
                         <button class="btn-small btn-view" onclick="opsLoadPayoutQueue()">Refresh Queue</button>
                         <div id="opsPayoutOut" style="margin-top:10px;max-height:220px;overflow:auto;background:#fff;padding:10px;border-radius:8px;font-size:12px;border:1px solid #e5e7eb;"></div>
                     </div>
@@ -2980,6 +2981,16 @@
             }
         }
 
+        async function opsRunWeeklySettlement() {
+            try {
+                const data = await adminApi('/admin/payouts/weekly-settlement/run', { method: 'POST', body: JSON.stringify({}) });
+                document.getElementById('opsPayoutOut').textContent = toPretty(data.result || data);
+                await opsLoadPayoutQueue();
+            } catch (err) {
+                alert(err.message);
+            }
+        }
+
         async function opsLoadPayoutQueue() {
             try {
                 const data = await adminApi('/admin/payouts/queue');
@@ -3190,6 +3201,23 @@
         async function opsRejectAdjustment(id) { try { await adminApi(`/admin/wallet-adjustments/${encodeURIComponent(id)}/reject`, { method: 'POST', body: JSON.stringify({ reason: 'Rejected from ops console' }) }); await opsLoadAdjustments(); } catch (err) { alert(err.message); } }
 
         async function opsCreatePayoutBatch() { try { await adminApi('/admin/payouts/batches', { method: 'POST', body: JSON.stringify({}) }); await opsLoadPayoutQueue(); } catch (err) { alert(err.message); } }
+        async function opsRunWeeklySettlement() {
+            try {
+                const data = await adminApi('/admin/payouts/weekly-settlement/run', { method: 'POST', body: JSON.stringify({}) });
+                if (data && data.result) {
+                    renderTable('opsPayoutOut', [
+                        { key: 'metric', label: 'Metric' },
+                        { key: 'value', label: 'Value' },
+                    ], [
+                        { metric: 'Settled Workers', value: data.result.settledWorkers || 0 },
+                        { metric: 'Settled Amount', value: data.result.settledAmount || 0 },
+                        { metric: 'Cycle Start', value: data.result.cycleStart || '' },
+                        { metric: 'Cycle End', value: data.result.cycleEnd || '' },
+                    ]);
+                }
+                await opsLoadPayoutQueue();
+            } catch (err) { alert(err.message); }
+        }
         async function opsLoadPayoutQueue() {
             try { const data = await adminApi('/admin/payouts/queue'); renderTable('opsPayoutOut', [{ key: 'batchId', label: 'Batch ID' }, { key: 'status', label: 'Status' }, { key: 'totalWorkers', label: 'Workers' }, { key: 'totalAmount', label: 'Amount' }, { key: 'createdAt', label: 'Created At' }], data.batches || []); } catch (err) { alert(err.message); }
         }

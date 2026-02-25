@@ -67,28 +67,42 @@ function createJobsCoreRouter({
 
       let wallet = await Wallet.findOne({ phone: req.user.phone });
       if (!wallet) {
-        wallet = new Wallet({ phone: req.user.phone });
+        wallet = new Wallet({ phone: req.user.phone, balance: 0, availableBalance: 0, pocketBalance: 0 });
         await wallet.save();
       }
 
       const workersCount = wantsBulkHiring ? (parseInt(requiredWorkers) || 1) : 1;
       const requiredBalance = workersCount * 25;
+      const isContractor = String(req.user?.role || "").toLowerCase() === "contractor";
+      const pocketBalance = Number(wallet.pocketBalance || 0);
+      const legacyBalance = Number(wallet.balance || 0);
+      const spendableBalance = isContractor ? pocketBalance : legacyBalance;
 
-      if (wallet.balance < requiredBalance) {
+      const chargedWallet = await Wallet.findOneAndUpdate(
+        isContractor
+          ? { phone: req.user.phone, pocketBalance: { $gte: requiredBalance } }
+          : { phone: req.user.phone, balance: { $gte: requiredBalance } },
+        {
+          $inc: isContractor ? { pocketBalance: -requiredBalance } : { balance: -requiredBalance },
+          $push: {
+            transactions: {
+              type: "job_post_fee",
+              amount: requiredBalance,
+              workersCount,
+              date: new Date(),
+              metadata: { deductedFrom: isContractor ? "pocketBalance" : "balance" },
+            },
+          },
+        },
+        { new: true }
+      );
+
+      if (!chargedWallet) {
         return res.status(400).json({
           success: false,
-          message: `Insufficient wallet balance. You need ₹${requiredBalance} to post this job for ${workersCount} worker(s). Current balance: ₹${wallet.balance}`,
+          message: `Insufficient wallet balance. You need ₹${requiredBalance} to post this job for ${workersCount} worker(s). Current balance: ₹${spendableBalance}`,
         });
       }
-
-      wallet.balance -= requiredBalance;
-      wallet.transactions.push({
-        type: "job_post_fee",
-        amount: requiredBalance,
-        workersCount,
-        date: new Date(),
-      });
-      await wallet.save();
 
       const newJob = new Job({
         title,
@@ -206,7 +220,7 @@ function createJobsCoreRouter({
       return res.json({
         success: true,
         job: newJob,
-        wallet,
+        wallet: chargedWallet,
         message: "Job posted. Searching for nearby workers...",
       });
     } catch (err) {

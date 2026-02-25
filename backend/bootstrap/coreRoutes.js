@@ -9,6 +9,7 @@ function registerCoreRoutes(app) {
   const { startWalletReconciliationScheduler } = require("../services/walletReconciliation");
   const { startJobReconciliationScheduler } = require("../services/jobReconciliation");
   const { startPremiumReconciliationScheduler } = require("../services/premiumReconciliation");
+  const { startWeeklyWalletSettlementScheduler } = require("../services/weeklyWalletSettlement");
   app.use("/leaderboard", leaderboardRoutes);
 
   const payoutRoutes = require("../routes/payout");
@@ -28,10 +29,10 @@ function registerCoreRoutes(app) {
     startWalletReconciliationScheduler,
     startJobReconciliationScheduler,
     startPremiumReconciliationScheduler,
+    startWeeklyWalletSettlementScheduler,
   };
 }
 
 module.exports = {
   registerCoreRoutes,
 };
-

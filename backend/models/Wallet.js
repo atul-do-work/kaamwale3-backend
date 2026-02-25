@@ -24,7 +24,7 @@ const walletSchema = new mongoose.Schema(
       {
         type: {
           type: String,
-          enum: ['deposit', 'withdraw', 'payment', 'job_post_fee', 'refund', 'premium_subscription', 'pocket_deposit'],
+          enum: ['deposit', 'withdraw', 'payment', 'job_post_fee', 'refund', 'premium_subscription', 'pocket_deposit', 'incentive_reward', 'payout_settlement'],
         },
         amount: Number,
         date: { type: Date, default: Date.now },
