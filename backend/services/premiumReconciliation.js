@@ -50,7 +50,7 @@ async function runPremiumReconciliation() {
           continue;
         }
 
-        const sub = await PremiumSubscription.findOne({ subscriptionId: subId }).select("_id userPhone status");
+        const sub = await PremiumSubscription.findOne({ subscriptionId: subId }).select("_id userPhone status source walletTxnId");
         if (!sub) {
           mismatches.push({
             entityType: "subscription",
@@ -62,6 +62,12 @@ async function runPremiumReconciliation() {
             entityType: "subscription",
             localId: subId,
             issue: "wallet_phone_subscription_phone_mismatch",
+          });
+        } else if (sub.source === "wallet" && !sub.walletTxnId) {
+          mismatches.push({
+            entityType: "subscription",
+            localId: subId,
+            issue: "wallet_source_subscription_missing_wallet_txn_id",
           });
         }
       }

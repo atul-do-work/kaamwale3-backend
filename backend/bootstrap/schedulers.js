@@ -8,6 +8,7 @@ function startBackgroundSchedulers({
   startJobReconciliationScheduler,
   startPremiumReconciliationScheduler,
   startWeeklyWalletSettlementScheduler,
+  startCancellationReconciliationScheduler,
 }) {
   const { cancelDispatchState } = require("../services/dispatchStateService");
   const startJobOfferCleanupScheduler = () => {
@@ -52,6 +53,7 @@ function startBackgroundSchedulers({
     startJobReconciliationScheduler();
     startPremiumReconciliationScheduler();
     startWeeklyWalletSettlementScheduler({ io });
+    startCancellationReconciliationScheduler();
   }, 2000);
 }
 

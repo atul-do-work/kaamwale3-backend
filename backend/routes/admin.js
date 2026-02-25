@@ -1131,6 +1131,45 @@ router.post('/jobs/:jobId/bulk/payment', authenticateToken, checkAdmin, async (r
         workerWallet.updateTotals();
         await workerWallet.save();
 
+        try {
+            const week = getWeekRange();
+            await WorkerEarnings.findOneAndUpdate(
+                { workerPhone, jobId: job._id },
+                {
+                    $setOnInsert: {
+                        workerPhone,
+                        jobId: job._id,
+                        amount,
+                        currency: 'INR',
+                        status: 'earned',
+                        source: 'admin',
+                        provider: 'manual',
+                        providerEventId: `admin_bulk:${idempotencyKey}`,
+                        idempotencyKey: `admin_bulk:${idempotencyKey}`,
+                        earnedAt: new Date(),
+                        payoutWeek: {
+                            year: Number(week.start.getUTCFullYear()),
+                            week: Number(week.week),
+                            startDate: week.start,
+                            endDate: week.end,
+                        },
+                        contractorName: job.contractorName,
+                        contractorPhone: job.contractorPhone,
+                        jobTitle: job.title,
+                        notes: `Admin marked payment as paid (${paymentMode})`,
+                        metadata: {
+                            createdFrom: 'admin_bulk_payment',
+                            paymentMode,
+                            actor: req.user.phone || 'admin',
+                        },
+                    },
+                },
+                { upsert: true, new: true }
+            );
+        } catch (earningErr) {
+            console.error('WorkerEarnings upsert error (admin bulk payment):', earningErr);
+        }
+
         await Job.updateOne(
             { _id: job._id, 'acceptedWorkers.phone': workerPhone },
             {

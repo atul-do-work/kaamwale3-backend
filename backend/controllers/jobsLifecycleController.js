@@ -77,6 +77,7 @@ function createJobsLifecycleController(deps) {
           jobId: req.params.id,
           reason: req.body.reason,
           reasonDescription: req.body.reasonDescription,
+          idempotencyKey: req.headers["x-idempotency-key"] || req.body.idempotencyKey,
           userPhone: req.user.phone,
           deps,
         });

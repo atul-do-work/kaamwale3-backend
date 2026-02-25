@@ -1,5 +1,6 @@
 import { StyleSheet, Dimensions } from 'react-native';
-const { width } = Dimensions.get('window');
+const { width, height } = Dimensions.get('window');
+const isCompactHeight = height < 760;
 
 export default StyleSheet.create({
   container: { flex: 1, backgroundColor: '#f0f2f7', position: 'relative' },
@@ -35,6 +36,11 @@ export default StyleSheet.create({
     width: '100%',
     zIndex: 1,
   },
+  headerActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    columnGap: 10,
+  },
   dashboardText: { fontSize: 28, fontWeight: '800', color: '#fff', letterSpacing: 0.5 },
   greetingText: { fontSize: 14, color: '#d0dfe8', marginTop: 4, fontWeight: '500' },
 
@@ -66,6 +72,19 @@ export default StyleSheet.create({
     shadowOffset: { width: 0, height: 3 },
     shadowRadius: 6,
   },
+  supportContainer: {
+    backgroundColor: '#E74C3C',
+    borderRadius: 10,
+    width: 38,
+    height: 38,
+    justifyContent: 'center',
+    alignItems: 'center',
+    elevation: 6,
+    shadowColor: '#E74C3C',
+    shadowOpacity: 0.35,
+    shadowOffset: { width: 0, height: 3 },
+    shadowRadius: 6,
+  },
   badge: {
     position: 'absolute',
     top: -8,
@@ -85,6 +104,46 @@ export default StyleSheet.create({
     shadowRadius: 4,
   },
   badgeText: { color: '#fff', fontSize: 10, fontWeight: '900' },
+  supportModalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.45)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 24,
+  },
+  supportModalCard: {
+    backgroundColor: '#fff',
+    borderRadius: 14,
+    paddingHorizontal: 18,
+    paddingVertical: 16,
+    width: '100%',
+    maxWidth: 290,
+    alignItems: 'center',
+  },
+  supportModalTitle: {
+    marginTop: 8,
+    fontSize: 16,
+    fontWeight: '800',
+    color: '#1a2f4d',
+  },
+  supportModalText: {
+    marginTop: 6,
+    fontSize: 13,
+    color: '#4b5563',
+    textAlign: 'center',
+  },
+  supportModalBtn: {
+    marginTop: 12,
+    backgroundColor: '#1a2f4d',
+    borderRadius: 9,
+    paddingHorizontal: 18,
+    paddingVertical: 8,
+  },
+  supportModalBtnText: {
+    color: '#fff',
+    fontWeight: '700',
+    fontSize: 13,
+  },
 
   // TOP CARDS - Premium styling
   topRow: { 
@@ -153,10 +212,10 @@ export default StyleSheet.create({
   // LEADERBOARD CONTAINER - Modern styling
   leaderboardWrapper: {
     flex: 1,
-    minHeight: 320,
+    minHeight: isCompactHeight ? 260 : 320,
     borderTopLeftRadius: 32,
     borderTopRightRadius: 32,
-    padding: 24,
+    padding: isCompactHeight ? 16 : 24,
     marginTop: 0,
     overflow: 'hidden',
     backgroundColor: '#fff',
@@ -197,7 +256,7 @@ export default StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 18,
+    marginBottom: isCompactHeight ? 12 : 18,
     paddingHorizontal: 4,
   },
   expandButton: {
@@ -233,19 +292,19 @@ export default StyleSheet.create({
   },
 
   leaderboardTitle: { 
-    fontSize: 28, 
+    fontSize: isCompactHeight ? 22 : 25, 
     fontWeight: '900', 
     color: '#1a2f4d',
     letterSpacing: 0.4,
-    lineHeight: 34,
+    lineHeight: isCompactHeight ? 28 : 31,
   },
 
   // PREMIUM BANNER - Eye-catching design
   premiumBanner: {
     backgroundColor: '#FFF8DC',
     borderRadius: 18,
-    padding: 24,
-    marginBottom: 20,
+    padding: isCompactHeight ? 14 : 24,
+    marginBottom: isCompactHeight ? 10 : 20,
     alignItems: 'center',
     borderWidth: 2,
     borderColor: '#FFD700',
@@ -256,24 +315,24 @@ export default StyleSheet.create({
     shadowRadius: 8,
   },
   premiumBannerTitle: {
-    fontSize: 20,
+    fontSize: isCompactHeight ? 18 : 20,
     fontWeight: '800',
     color: '#1a1a1a',
-    marginTop: 12,
-    marginBottom: 8,
+    marginTop: isCompactHeight ? 8 : 12,
+    marginBottom: isCompactHeight ? 6 : 8,
     letterSpacing: 0.3,
   },
   premiumBannerSubtitle: {
-    fontSize: 14,
+    fontSize: isCompactHeight ? 13 : 14,
     color: '#555',
-    marginBottom: 16,
+    marginBottom: isCompactHeight ? 10 : 16,
     textAlign: 'center',
     fontWeight: '500',
   },
   premiumBannerButton: {
     backgroundColor: '#FFD700',
-    paddingHorizontal: 36,
-    paddingVertical: 14,
+    paddingHorizontal: isCompactHeight ? 28 : 36,
+    paddingVertical: isCompactHeight ? 10 : 14,
     borderRadius: 14,
     elevation: 5,
     shadowColor: '#FFD700',
@@ -284,7 +343,7 @@ export default StyleSheet.create({
   premiumBannerButtonText: {
     color: '#1a1a1a',
     fontWeight: '800',
-    fontSize: 16,
+    fontSize: isCompactHeight ? 14 : 16,
     letterSpacing: 0.3,
   },
 

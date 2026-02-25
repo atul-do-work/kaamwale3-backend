@@ -59,6 +59,7 @@ const {
   startJobReconciliationScheduler,
   startPremiumReconciliationScheduler,
   startWeeklyWalletSettlementScheduler,
+  startCancellationReconciliationScheduler,
 } = registerCoreRoutes(app);
 
 
@@ -191,6 +192,7 @@ startBackgroundSchedulers({
   startJobReconciliationScheduler,
   startPremiumReconciliationScheduler,
   startWeeklyWalletSettlementScheduler,
+  startCancellationReconciliationScheduler,
 });
 
 // ---------------- START SERVER ----------------

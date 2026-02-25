@@ -2,6 +2,7 @@ const Job = require("../models/Jobs");
 const WorkerModel = require("../models/Worker");
 const User = require("../models/User");
 const Wallet = require("../models/Wallet");
+const WorkerEarnings = require("../models/WorkerEarnings");
 const NotificationHistory = require("../models/NotificationHistory");
 const CancellationLog = require("../models/CancellationLog");
 const ActivityLog = require("../models/ActivityLog");
@@ -12,6 +13,29 @@ const { cancelDispatchState } = require("./dispatchStateService");
 const payInFlightLocks = new Map();
 const payIdempotencyResults = new Map();
 const IDEMPOTENCY_TTL_MS = 5 * 60 * 1000;
+const cancelInFlightLocks = new Map();
+const cancelIdempotencyResults = new Map();
+const CANCEL_IDEMPOTENCY_TTL_MS = 10 * 60 * 1000;
+const PAYOUT_CYCLE_ANCHOR_ISO = process.env.PAYOUT_CYCLE_ANCHOR_ISO || "2025-02-25T00:00:00+05:30";
+const PAYOUT_CYCLE_MS = 7 * 24 * 60 * 60 * 1000;
+const CANCEL_REFUND_BEFORE_ACCEPT = Number(process.env.CANCEL_REFUND_BEFORE_ACCEPT || 25);
+const CANCEL_FEE_AFTER_ACCEPT = Number(process.env.CANCEL_FEE_AFTER_ACCEPT || 0);
+const ALLOWED_CANCELLATION_REASONS = new Set([
+  "no_workers_available",
+  "worker_not_responding",
+  "location_changed",
+  "job_completed_elsewhere",
+  "payment_issue",
+  "safety_concern",
+  "worker_unavailable",
+  "technical_issue",
+  "contractor_request",
+  "contractor_requested",
+  "worker_request",
+  "worker_requested",
+  "admin_action",
+  "other",
+]);
 
 function getPayKey({ jobId, workerPhone, mode, idempotencyKey }) {
   const target = `${jobId}:${workerPhone || "single"}:${String(mode || "cash").toLowerCase()}`;
@@ -25,6 +49,94 @@ function cleanupIdempotencyCache() {
       payIdempotencyResults.delete(key);
     }
   }
+}
+
+function cleanupCancelIdempotencyCache() {
+  const now = Date.now();
+  for (const [key, value] of cancelIdempotencyResults.entries()) {
+    if (!value || value.expiresAt <= now) {
+      cancelIdempotencyResults.delete(key);
+    }
+  }
+}
+
+function getCancelKey({ jobId, userPhone, idempotencyKey }) {
+  return `cancel:${jobId}:${userPhone || "unknown"}:${idempotencyKey || ""}`;
+}
+
+function getPayoutWeekBounds(now = new Date()) {
+  const anchor = new Date(PAYOUT_CYCLE_ANCHOR_ISO);
+  if (Number.isNaN(anchor.getTime())) {
+    const fallbackStart = new Date(now);
+    const day = fallbackStart.getDay();
+    const diff = day === 0 ? -6 : 1 - day;
+    fallbackStart.setDate(fallbackStart.getDate() + diff);
+    fallbackStart.setHours(0, 0, 0, 0);
+    const fallbackEnd = new Date(fallbackStart.getTime() + PAYOUT_CYCLE_MS);
+    return { start: fallbackStart, endExclusive: fallbackEnd };
+  }
+
+  const elapsedMs = now.getTime() - anchor.getTime();
+  const cycleIndex = Math.floor(elapsedMs / PAYOUT_CYCLE_MS);
+  const cycleStartMs = anchor.getTime() + cycleIndex * PAYOUT_CYCLE_MS;
+  const start = new Date(cycleStartMs);
+  const endExclusive = new Date(cycleStartMs + PAYOUT_CYCLE_MS);
+  return { start, endExclusive };
+}
+
+function getUtcWeekNumber(date) {
+  const d = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
+  const dayNum = d.getUTCDay() || 7;
+  d.setUTCDate(d.getUTCDate() + 4 - dayNum);
+  const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
+  return Math.ceil((((d - yearStart) / 86400000) + 1) / 7);
+}
+
+async function upsertWorkerEarningForJobPayment({ job, workerPhone, amount, mode }) {
+  if (!job?._id || !workerPhone) return;
+  const earningAmount = Number(amount || 0);
+  if (!Number.isFinite(earningAmount) || earningAmount <= 0) return;
+
+  const normalizedMode = String(mode || "cash").trim().toLowerCase();
+  const now = new Date();
+  const { start, endExclusive } = getPayoutWeekBounds(now);
+  const providerEventId = `manual:${job._id}:${workerPhone}:${normalizedMode}`;
+
+  await WorkerEarnings.findOneAndUpdate(
+    { workerPhone, jobId: job._id },
+    {
+      $setOnInsert: {
+        workerPhone,
+        jobId: job._id,
+        amount: earningAmount,
+        currency: "INR",
+        status: "earned",
+        source: "app",
+        provider: "manual",
+        orderId: null,
+        paymentId: null,
+        providerEventId,
+        idempotencyKey: providerEventId,
+        earnedAt: now,
+        payoutWeek: {
+          year: start.getUTCFullYear(),
+          week: getUtcWeekNumber(start),
+          startDate: start,
+          endDate: new Date(endExclusive.getTime() - 1),
+        },
+        contractorName: job.contractorName,
+        contractorPhone: job.contractorPhone,
+        jobTitle: job.title,
+        notes: `Job marked paid (${normalizedMode})`,
+        metadata: {
+          createdFrom: "jobs/pay",
+          paymentMode: normalizedMode,
+          balanceType: "available",
+        },
+      },
+    },
+    { upsert: true, new: true }
+  );
 }
 
 async function markAttendance({ jobId, status, workerPhone, userPhone, deps }) {
@@ -198,6 +310,17 @@ async function payJob({ jobId, mode, workerPhone, idempotencyKey, userPhone, use
     }
 
     try {
+      await upsertWorkerEarningForJobPayment({
+        job,
+        workerPhone,
+        amount: job.amount,
+        mode,
+      });
+    } catch (earnErr) {
+      console.error("Error upserting WorkerEarnings after bulk payment:", earnErr);
+    }
+
+    try {
       await updateGigDataOnCompletion(workerPhone, {
         jobId: job._id.toString(),
         title: job.title,
@@ -314,6 +437,17 @@ async function payJob({ jobId, mode, workerPhone, idempotencyKey, userPhone, use
     await workerWallet.save();
   } catch (walletErr) {
     console.error("Error updating worker wallet after payment:", walletErr);
+  }
+
+  try {
+    await upsertWorkerEarningForJobPayment({
+      job,
+      workerPhone: job.acceptedBy,
+      amount: job.amount,
+      mode,
+    });
+  } catch (earnErr) {
+    console.error("Error upserting WorkerEarnings after payment:", earnErr);
   }
 
   // First completed cash-paid job activates mandatory pocket balance rule for worker availability.
@@ -573,31 +707,108 @@ async function rateContractor({ jobId, stars, feedback, userPhone, userName, dep
   return { code: 200, body: { success: true, message: "Contractor rated successfully", job } };
 }
 
-async function cancelJob({ jobId, reason, reasonDescription, userPhone, deps }) {
+async function cancelJob({ jobId, reason, reasonDescription, idempotencyKey, userPhone, deps }) {
+  cleanupCancelIdempotencyCache();
+  const cancelKey = idempotencyKey ? getCancelKey({ jobId, userPhone, idempotencyKey }) : null;
+  if (cancelKey && cancelIdempotencyResults.has(cancelKey)) {
+    return cancelIdempotencyResults.get(cancelKey).result;
+  }
+
+  const lockKey = `${jobId}:${userPhone || "unknown"}`;
+  if (cancelInFlightLocks.has(lockKey)) {
+    return { code: 409, body: { success: false, message: "Cancellation already processing. Please wait." } };
+  }
+  cancelInFlightLocks.set(lockKey, true);
+
+  const finalize = (result) => {
+    cancelInFlightLocks.delete(lockKey);
+    if (cancelKey) {
+      cancelIdempotencyResults.set(cancelKey, {
+        result,
+        expiresAt: Date.now() + CANCEL_IDEMPOTENCY_TTL_MS,
+      });
+    }
+    return result;
+  };
+
+  try {
   const {
     io,
     pendingJobTimeouts,
     pendingJobExpirations,
     logJobEvent,
     emitJobCancelledToUsers,
+    emitJobUpdatedToUsers,
+    updateContractorStats,
   } = deps;
 
-  if (!reason) {
-    return { code: 400, body: { success: false, message: "Cancellation reason required" } };
+  const normalizedReason = String(reason || "").trim().toLowerCase();
+  const normalizedReasonDescription = String(reasonDescription || "").trim().slice(0, 300);
+
+  if (!normalizedReason) {
+    return finalize({ code: 400, body: { success: false, message: "Cancellation reason required" } });
+  }
+  if (!ALLOWED_CANCELLATION_REASONS.has(normalizedReason)) {
+    return finalize({
+      code: 400,
+      body: {
+        success: false,
+        message: "Invalid cancellation reason",
+        allowedReasons: Array.from(ALLOWED_CANCELLATION_REASONS.values()),
+      },
+    });
   }
 
   const job = await Job.findById(jobId);
   if (!job) {
-    return { code: 404, body: { success: false, message: "Job not found" } };
+    return finalize({ code: 404, body: { success: false, message: "Job not found" } });
+  }
+
+  if (job.status === "cancelled" || job.isCancelled === true) {
+    const existingCancellation = await CancellationLog.findOne({ jobId: job._id }).sort({ cancelledAt: -1 }).lean();
+    return finalize({
+      code: 200,
+      body: {
+        success: true,
+        idempotent: true,
+        cancellation: existingCancellation || null,
+        message: "Job already cancelled",
+      },
+    });
   }
 
   let cancelledBy = "admin";
   if (userPhone === job.contractorPhone) cancelledBy = "contractor";
   if (userPhone === job.acceptedBy) cancelledBy = "worker";
 
+  const hasAssignedWorker =
+    Boolean(job.acceptedBy) ||
+    (Array.isArray(job.acceptedWorkers) && job.acceptedWorkers.some((w) => Boolean(w?.phone)));
+
   let refundAmount = 0;
   let cancellationFee = 0;
-  if (cancelledBy === "contractor" && !job.acceptedBy) refundAmount = 25;
+  if (cancelledBy === "contractor" && !hasAssignedWorker) {
+    refundAmount = Number.isFinite(CANCEL_REFUND_BEFORE_ACCEPT) ? Math.max(0, CANCEL_REFUND_BEFORE_ACCEPT) : 25;
+  }
+  if (cancelledBy === "contractor" && hasAssignedWorker) {
+    cancellationFee = Number.isFinite(CANCEL_FEE_AFTER_ACCEPT) ? Math.max(0, CANCEL_FEE_AFTER_ACCEPT) : 0;
+  }
+
+  if (cancelledBy === "contractor" && cancellationFee > 0) {
+    const contractorWallet = await Wallet.findOne({ phone: job.contractorPhone }).select("pocketBalance");
+    const currentPocket = Number(contractorWallet?.pocketBalance || 0);
+    if (currentPocket < cancellationFee) {
+      return finalize({
+        code: 400,
+        body: {
+          success: false,
+          message: `Insufficient pocket balance for cancellation fee of ₹${cancellationFee}`,
+          pocketBalance: currentPocket,
+          requiredFee: cancellationFee,
+        },
+      });
+    }
+  }
 
   const cancellation = new CancellationLog({
     jobId: job._id,
@@ -605,18 +816,27 @@ async function cancelJob({ jobId, reason, reasonDescription, userPhone, deps }) 
     contractorName: job.contractorName,
     workerPhone: job.acceptedBy,
     cancelledBy,
-    reason,
-    reasonDescription,
+    reason: normalizedReason,
+    reasonDescription: normalizedReasonDescription,
     jobAmount: job.amount,
     cancellationFee,
     refundAmount,
     refundToPhone: job.contractorPhone,
     cancelledAt: new Date(),
+    cancellationPolicy: `refund_before_accept=${CANCEL_REFUND_BEFORE_ACCEPT};fee_after_accept=${CANCEL_FEE_AFTER_ACCEPT}`,
+    policyExplanation: hasAssignedWorker
+      ? `Assigned worker exists; cancellation fee ₹${cancellationFee}`
+      : `No assigned worker; refund ₹${refundAmount}`,
   });
   await cancellation.save();
 
   const oldState = { status: job.status, paymentStatus: job.paymentStatus };
   job.status = "cancelled";
+  job.isCancelled = true;
+  job.cancelledAt = cancellation.cancelledAt;
+  job.cancelledBy = cancelledBy;
+  job.cancellationReason = normalizedReason;
+  job.cancellationReasonDescription = normalizedReasonDescription || null;
   await job.save();
 
   try {
@@ -634,7 +854,7 @@ async function cancelJob({ jobId, reason, reasonDescription, userPhone, deps }) 
         hoursWorked: 0,
         timeSpentMinutes: 0,
         eventTime: new Date(),
-        metadata: { reason, reasonDescription: reasonDescription || "", cancelledBy },
+        metadata: { reason: normalizedReason, reasonDescription: normalizedReasonDescription || "", cancelledBy },
       });
     }
   } catch (e) {
@@ -649,12 +869,39 @@ async function cancelJob({ jobId, reason, reasonDescription, userPhone, deps }) 
     source: "app",
     oldState,
     newState: { status: job.status, paymentStatus: job.paymentStatus },
-    reasonCode: reason,
-    reasonText: reasonDescription || reason,
+    reasonCode: normalizedReason,
+    reasonText: normalizedReasonDescription || normalizedReason,
     metadata: { refundAmount, cancellationFee },
   });
 
-  if (refundAmount > 0 && cancelledBy === "contractor" && !job.acceptedBy) {
+  if (cancelledBy === "contractor" && cancellationFee > 0) {
+    let wallet = await Wallet.findOne({ phone: job.contractorPhone });
+    if (!wallet) wallet = new Wallet({ phone: job.contractorPhone, balance: 0, availableBalance: 0, pocketBalance: 0 });
+    const openingPocket = Number(wallet.pocketBalance || 0);
+    wallet.pocketBalance = openingPocket - cancellationFee;
+    wallet.transactions.push({
+      type: "job_post_fee",
+      amount: cancellationFee,
+      date: new Date(),
+      description: `Cancellation fee charged for job ${job._id}`,
+      metadata: { debitedFrom: "pocketBalance", reason: "job_cancel_fee", jobId: job._id, cancellationId: cancellation._id },
+    });
+    await wallet.save();
+
+    if (io) {
+      io.to(job.contractorPhone).emit("walletUpdated", {
+        phone: job.contractorPhone,
+        type: "job_post_fee",
+        amount: cancellationFee,
+        balance: Number(wallet.balance || 0),
+        availableBalance: Number(wallet.availableBalance ?? wallet.balance ?? 0),
+        pocketBalance: Number(wallet.pocketBalance || 0),
+        message: `Cancellation fee debited: ₹${cancellationFee}`,
+      });
+    }
+  }
+
+  if (refundAmount > 0 && cancelledBy === "contractor" && !hasAssignedWorker) {
     let wallet = await Wallet.findOne({ phone: job.contractorPhone });
     if (!wallet) wallet = new Wallet({ phone: job.contractorPhone, balance: 0, availableBalance: 0, pocketBalance: 0 });
     wallet.pocketBalance = Number(wallet.pocketBalance || 0) + refundAmount;
@@ -662,9 +909,22 @@ async function cancelJob({ jobId, reason, reasonDescription, userPhone, deps }) 
       type: "refund",
       amount: refundAmount,
       date: new Date(),
-      metadata: { creditedTo: "pocketBalance", reason: "job_cancel_refund" },
+      description: `Refund for cancelled job ${job._id}`,
+      metadata: { creditedTo: "pocketBalance", reason: "job_cancel_refund", jobId: job._id, cancellationId: cancellation._id },
     });
     await wallet.save();
+
+    if (io) {
+      io.to(job.contractorPhone).emit("walletUpdated", {
+        phone: job.contractorPhone,
+        type: "refund",
+        amount: refundAmount,
+        balance: Number(wallet.balance || 0),
+        availableBalance: Number(wallet.availableBalance ?? wallet.balance ?? 0),
+        pocketBalance: Number(wallet.pocketBalance || 0),
+        message: `Refund credited: ₹${refundAmount}`,
+      });
+    }
   }
 
   const cancellationPayload = {
@@ -673,7 +933,7 @@ async function cancelJob({ jobId, reason, reasonDescription, userPhone, deps }) 
     id: job._id.toString(),
     status: "cancelled",
     cancelledBy,
-    cancelledAt: new Date(),
+    cancelledAt: cancellation.cancelledAt,
   };
   const targetUsers = [
     job.contractorPhone,
@@ -685,6 +945,11 @@ async function cancelJob({ jobId, reason, reasonDescription, userPhone, deps }) 
     await emitJobCancelledToUsers(cancellationPayload, targetUsers);
   } else {
     io.emit("jobCancelled", cancellationPayload);
+  }
+  if (typeof emitJobUpdatedToUsers === "function") {
+    await emitJobUpdatedToUsers(cancellationPayload, targetUsers);
+  } else {
+    io.emit("jobUpdated", cancellationPayload);
   }
 
   if (pendingJobTimeouts.has(jobId)) {
@@ -702,12 +967,24 @@ async function cancelJob({ jobId, reason, reasonDescription, userPhone, deps }) 
     phone: userPhone,
     action: "job_cancelled",
     jobId: job._id,
-    description: `Job cancelled by ${cancelledBy}: ${reason}`,
+    description: `Job cancelled by ${cancelledBy}: ${normalizedReason}`,
     status: "success",
-    metadata: { reason, refundAmount, cancellationFee },
+    metadata: { reason: normalizedReason, refundAmount, cancellationFee },
   });
 
-  return { code: 200, body: { success: true, cancellation, message: "Job cancelled successfully" } };
+  try {
+    if (typeof updateContractorStats === "function" && job.contractorPhone) {
+      await updateContractorStats(job.contractorPhone);
+    }
+  } catch (statsErr) {
+    console.error("Error updating contractor stats after cancellation:", statsErr);
+  }
+
+  return finalize({ code: 200, body: { success: true, cancellation, message: "Job cancelled successfully" } });
+  } catch (err) {
+    cancelInFlightLocks.delete(lockKey);
+    throw err;
+  }
 }
 
 async function getCancellations({ userPhone }) {

@@ -760,6 +760,7 @@ router.post("/withdraw", authenticateToken, withdrawLimiter, async (req, res) =>
       return res.status(404).json({ success: false, message: "Wallet not found. Please login again." });
     }
     const role = String(req.user?.role || "").toLowerCase();
+    const isWorker = role === "worker";
     const isContractor = role === "contractor";
     const rawAvailable = Number(existingWalletBeforeWithdraw.availableBalance ?? 0);
     const rawPocket = Number(existingWalletBeforeWithdraw.pocketBalance ?? 0);
@@ -779,6 +780,7 @@ router.post("/withdraw", authenticateToken, withdrawLimiter, async (req, res) =>
       : {
           phone: req.user.phone,
           availableBalance: { $gte: withdrawAmount },
+          ...(isWorker ? { pocketBalance: { $gte: 100 } } : {}),
         };
 
     const incOps = {};
@@ -817,6 +819,14 @@ router.post("/withdraw", authenticateToken, withdrawLimiter, async (req, res) =>
 
     // If wallet is undefined, it means balance check failed (race condition prevented)
     if (!wallet) {
+      if (isWorker && rawPocket < 100) {
+        return res.status(400).json({
+          success: false,
+          message: "Minimum pocket balance of ₹100 is required before withdrawal.",
+          pocketBalance: rawPocket,
+          requiredPocketBalance: 100,
+        });
+      }
       return res.status(400).json({ success: false, message: "Insufficient balance" });
     }
 

@@ -1,4 +1,5 @@
 const User = require("../models/User");
+const { getPlanEntitlements } = require("../config/premiumEntitlements");
 
 function isPremiumEntitled(user) {
   if (!user || !user.premiumPlan) return false;
@@ -12,29 +13,41 @@ function isPremiumEntitled(user) {
   return statusOk && (expiryOk || graceOk);
 }
 
-async function requireActivePremium(req, res, next) {
-  try {
-    const user = await User.findOne({ phone: req.user.phone }).select("phone premiumPlan");
-    if (!user || !isPremiumEntitled(user)) {
-      return res.status(403).json({
-        success: false,
-        message: "Active premium subscription required",
-      });
-    }
+function requirePremium(featureKey) {
+  return async function premiumFeatureGuard(req, res, next) {
+    try {
+      const user = await User.findOne({ phone: req.user.phone }).select("phone premiumPlan");
+      if (!user || !isPremiumEntitled(user)) {
+        return res.status(403).json({
+          success: false,
+          message: "Active premium subscription required",
+        });
+      }
 
-    req.premiumEntitlement = {
-      type: user.premiumPlan.type,
-      expiryDate: user.premiumPlan.expiryDate,
-      graceUntil: user.premiumPlan.graceUntil || null,
-      status: user.premiumPlan.status || "active",
-    };
-    return next();
-  } catch (err) {
-    return res.status(500).json({ success: false, message: "Premium entitlement check failed" });
-  }
+      const entitlements = getPlanEntitlements(user.premiumPlan.type);
+      if (featureKey && !entitlements[featureKey]) {
+        return res.status(403).json({
+          success: false,
+          message: `Premium plan does not include ${featureKey}`,
+        });
+      }
+
+      req.premiumEntitlement = {
+        type: user.premiumPlan.type,
+        expiryDate: user.premiumPlan.expiryDate,
+        graceUntil: user.premiumPlan.graceUntil || null,
+        status: user.premiumPlan.status || "active",
+        entitlements,
+      };
+
+      return next();
+    } catch (err) {
+      return res.status(500).json({ success: false, message: "Premium entitlement check failed" });
+    }
+  };
 }
 
 module.exports = {
   isPremiumEntitled,
-  requireActivePremium,
+  requirePremium,
 };

@@ -113,6 +113,7 @@ function mountAppRoutes({
       User,
       NotificationHistory,
       logJobEvent,
+      updateContractorStats,
       updateGigDataOnAcceptance,
       updateGigDataOnCancellation,
       emitJobUpdatedToUsers,

@@ -9,6 +9,7 @@ function createJobsLifecycleCoreRouter({
   User,
   NotificationHistory,
   logJobEvent,
+  updateContractorStats,
   updateGigDataOnAcceptance,
   updateGigDataOnCancellation,
   emitJobUpdatedToUsers,
@@ -258,6 +259,13 @@ function createJobsLifecycleCoreRouter({
 
         const payload = { ...bulkJob.toObject(), _targetedUpdate: true, targetedFor: [bulkJob.contractorName] };
         await emitJobUpdatedToUsers(payload, [bulkJob.contractorPhone, workerPhone, bulkJob.acceptedBy]);
+        try {
+          if (typeof updateContractorStats === "function" && bulkJob.contractorPhone) {
+            await updateContractorStats(bulkJob.contractorPhone);
+          }
+        } catch (statsErr) {
+          console.error("Error updating contractor stats after bulk accept:", statsErr);
+        }
 
         return finish(200, { success: true, message: "Job accepted successfully", job: bulkJob, idempotent: false });
       }
@@ -356,6 +364,13 @@ function createJobsLifecycleCoreRouter({
         targetedFor: [updated.contractorPhone, workerPhone],
       };
       await emitJobUpdatedToUsers(acceptPayload, [updated.contractorPhone, workerPhone]);
+      try {
+        if (typeof updateContractorStats === "function" && updated.contractorPhone) {
+          await updateContractorStats(updated.contractorPhone);
+        }
+      } catch (statsErr) {
+        console.error("Error updating contractor stats after accept:", statsErr);
+      }
 
       if (pendingJobTimeouts.has(jobId)) {
         clearTimeout(pendingJobTimeouts.get(jobId));

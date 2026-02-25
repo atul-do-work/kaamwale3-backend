@@ -2,7 +2,8 @@ const express = require("express");
 const mongoose = require("mongoose");
 const crypto = require("crypto");
 const { authenticateToken } = require("../utils/auth");
-const { requireActivePremium, isPremiumEntitled } = require("../utils/premiumEntitlement");
+const { requirePremium, isPremiumEntitled } = require("../utils/premiumEntitlement");
+const { getPlanEntitlements } = require("../config/premiumEntitlements");
 const User = require("../models/User");
 const Wallet = require("../models/Wallet");
 const ActivityLog = require("../models/ActivityLog");
@@ -12,8 +13,8 @@ function createPremiumWalletRouter({ io }) {
   const router = express.Router();
 
   const PLANS = {
-    basic: { price: 399, durationDays: 30 },
-    pro: { price: 699, durationDays: 30 },
+    basic: { id: "basic", name: "Basic", price: 399, durationDays: 30, features: ["Bulk Hiring", "24/7 Instant", "Leaderboard"] },
+    pro: { id: "pro", name: "Pro", price: 699, durationDays: 30, features: ["Bulk Hiring", "24/7 Instant", "Leaderboard", "Custom Add-ons"] },
   };
 
   function getIdempotencyKey(req) {
@@ -32,10 +33,15 @@ function createPremiumWalletRouter({ io }) {
     return `inv_${userPhone}_${Date.now()}_${suffix}`;
   }
 
+  function makePremiumTxnId(userPhone) {
+    const suffix = crypto.randomUUID ? crypto.randomUUID() : crypto.randomBytes(16).toString("hex");
+    return `ptx_${userPhone}_${Date.now()}_${suffix}`;
+  }
+
   router.post("/premium/subscribe", authenticateToken, async (req, res) => {
     const session = await mongoose.startSession();
     try {
-      const { planId, coupon = null } = req.body || {};
+      const { planId, coupon = null, autoRenew = false } = req.body || {};
       const plan = PLANS[planId];
       const idempotencyKey = getIdempotencyKey(req);
 
@@ -73,11 +79,14 @@ function createPremiumWalletRouter({ io }) {
           responsePayload = {
             success: true,
             idempotent: true,
-            message: `Subscription already processed for plan ${existingByKey.planType}`,
+            message: `Subscription already processed for plan ${existingByKey.plan || existingByKey.planType}`,
             premiumPlan: user.premiumPlan,
             newBalance: isContractor ? Number(wallet.pocketBalance || 0) : Number(wallet.balance || 0),
             newAvailableBalance: Number(wallet.availableBalance ?? wallet.balance ?? 0),
             newPocketBalance: Number(wallet.pocketBalance || 0),
+            subscriptionId: existingByKey.subscriptionId,
+            premiumTxnId: existingByKey.premiumTxnId,
+            walletTxnId: existingByKey.walletTxnId,
           };
           return;
         }
@@ -100,8 +109,8 @@ function createPremiumWalletRouter({ io }) {
         }
 
         const rawPocket = Number(wallet.pocketBalance || 0);
-        const rawBalance = Number(wallet.balance || 0);
-        const spendableBalance = isContractor ? rawPocket : rawBalance;
+        const rawAvailable = Number(wallet.availableBalance || wallet.balance || 0);
+        const spendableBalance = isContractor ? rawPocket : rawAvailable;
 
         if (spendableBalance < plan.price) {
           throw Object.assign(
@@ -118,9 +127,12 @@ function createPremiumWalletRouter({ io }) {
 
         const now = new Date();
         const expiryDate = new Date(now.getTime() + plan.durationDays * 24 * 60 * 60 * 1000);
+        const renewalAt = new Date(expiryDate);
         const subscriptionId = makeSubscriptionId(req.user.phone);
+        const premiumTxnId = makePremiumTxnId(req.user.phone);
         const invoiceId = makeInvoiceId(req.user.phone);
         const tax = 0;
+        const walletTxnObjectId = new mongoose.Types.ObjectId();
 
         const subscription = await PremiumSubscription.create(
           [
@@ -128,23 +140,40 @@ function createPremiumWalletRouter({ io }) {
               subscriptionId,
               userPhone: req.user.phone,
               userName: user.name || "",
+              premiumTxnId,
               eventType: "subscription_started",
+              plan: planId,
               planType: planId,
+              amount: plan.price,
               price: plan.price,
               currency: "INR",
               tax,
               coupon,
               status: "active",
+              source: "wallet",
+              autoRenew: Boolean(autoRenew),
               provider: "internal",
+              gatewayOrderId: null,
+              gatewayPaymentId: null,
+              gatewaySubscriptionId: null,
               providerSubId: null,
               invoiceId,
+              walletTxnId: String(walletTxnObjectId),
               idempotencyKey,
+              startAt: now,
+              endAt: expiryDate,
+              renewalAt,
               startedAt: now,
               expiryDate,
               cancelAt: null,
               graceUntil: null,
               failureReason: null,
-              metadata: { source: "app", actorPhone: req.user.phone },
+              metadata: {
+                source: "app",
+                actorPhone: req.user.phone,
+                role: req.user?.role || null,
+                entitlements: getPlanEntitlements(planId),
+              },
               isCurrent: true,
             },
           ],
@@ -155,11 +184,12 @@ function createPremiumWalletRouter({ io }) {
         const chargedWallet = await Wallet.findOneAndUpdate(
           isContractor
             ? { phone: req.user.phone, pocketBalance: { $gte: plan.price } }
-            : { phone: req.user.phone, balance: { $gte: plan.price } },
+            : { phone: req.user.phone, availableBalance: { $gte: plan.price } },
           {
-            $inc: isContractor ? { pocketBalance: -plan.price } : { balance: -plan.price },
+            $inc: isContractor ? { pocketBalance: -plan.price } : { availableBalance: -plan.price, balance: -plan.price },
             $push: {
               transactions: {
+                _id: walletTxnObjectId,
                 type: "premium_subscription",
                 amount: plan.price,
                 date: now,
@@ -173,10 +203,13 @@ function createPremiumWalletRouter({ io }) {
                 providerEventId: createdSub.subscriptionId,
                 metadata: {
                   subscriptionId: createdSub.subscriptionId,
+                  premiumTxnId: createdSub.premiumTxnId,
                   invoiceId: createdSub.invoiceId,
                   currency: createdSub.currency,
                   planType: planId,
-                  deductedFrom: isContractor ? "pocketBalance" : "balance",
+                  source: "wallet",
+                  walletTxnId: String(walletTxnObjectId),
+                  deductedFrom: isContractor ? "pocketBalance" : "availableBalance",
                 },
               },
             },
@@ -193,13 +226,14 @@ function createPremiumWalletRouter({ io }) {
 
         wallet = chargedWallet;
         const closingBalance = isContractor ? Number(wallet.pocketBalance || 0) : Number(wallet.balance || 0);
+        const planEntitlements = getPlanEntitlements(planId);
 
         user.premiumPlan = {
           type: planId,
           price: plan.price,
           startDate: now,
           expiryDate,
-          autoRenew: false,
+          autoRenew: Boolean(autoRenew),
           subscriptionId: createdSub.subscriptionId,
           provider: createdSub.provider,
           providerSubId: createdSub.providerSubId,
@@ -211,6 +245,8 @@ function createPremiumWalletRouter({ io }) {
           cancelAt: createdSub.cancelAt,
           graceUntil: createdSub.graceUntil,
           failureReason: createdSub.failureReason,
+          renewalAt,
+          entitlements: planEntitlements,
         };
         await user.save({ session });
 
@@ -224,8 +260,11 @@ function createPremiumWalletRouter({ io }) {
               status: "success",
               metadata: {
                 subscriptionId: createdSub.subscriptionId,
+                premiumTxnId: createdSub.premiumTxnId,
+                walletTxnId: createdSub.walletTxnId,
                 invoiceId: createdSub.invoiceId,
                 idempotencyKey,
+                source: "wallet",
               },
             },
           ],
@@ -240,7 +279,10 @@ function createPremiumWalletRouter({ io }) {
           newAvailableBalance: Number(wallet.availableBalance ?? wallet.balance ?? 0),
           newPocketBalance: Number(wallet.pocketBalance || 0),
           subscriptionId: createdSub.subscriptionId,
+          premiumTxnId: createdSub.premiumTxnId,
+          walletTxnId: createdSub.walletTxnId,
           invoiceId: createdSub.invoiceId,
+          entitlements: planEntitlements,
         };
       });
 
@@ -279,12 +321,21 @@ function createPremiumWalletRouter({ io }) {
         return res.status(404).json({ success: false, message: "User not found" });
       }
 
+      const currentSubscription = await PremiumSubscription.findOne({
+        userPhone: req.user.phone,
+        isCurrent: true,
+      })
+        .sort({ createdAt: -1 })
+        .lean();
+
       const isActive = isPremiumEntitled(user);
       return res.json({
         success: true,
         premiumPlan: user.premiumPlan?.type || "free",
         isActive,
         premiumDetails: user.premiumPlan,
+        subscription: currentSubscription || null,
+        entitlements: getPlanEntitlements(user.premiumPlan?.type || "free"),
       });
     } catch (err) {
       return res.status(500).json({ success: false, message: "Failed to check status" });
@@ -307,21 +358,34 @@ function createPremiumWalletRouter({ io }) {
         );
 
         const now = new Date();
+        const premiumTxnId = makePremiumTxnId(req.user.phone);
         const cancelSnapshot = {
           subscriptionId: makeSubscriptionId(req.user.phone),
           userPhone: req.user.phone,
           userName: user.name || "",
+          premiumTxnId,
           eventType: "subscription_cancelled",
+          plan: "free",
           planType: "free",
+          amount: 0,
           price: 0,
           currency: "INR",
           tax: 0,
           coupon: null,
           status: "cancelled",
+          source: "wallet",
+          autoRenew: false,
           provider: "internal",
+          gatewayOrderId: null,
+          gatewayPaymentId: null,
+          gatewaySubscriptionId: null,
           providerSubId: null,
           invoiceId: null,
+          walletTxnId: null,
           idempotencyKey: null,
+          startAt: now,
+          endAt: null,
+          renewalAt: null,
           startedAt: now,
           expiryDate: null,
           cancelAt: now,
@@ -350,6 +414,8 @@ function createPremiumWalletRouter({ io }) {
           cancelAt: now,
           graceUntil: null,
           failureReason: null,
+          renewalAt: null,
+          entitlements: getPlanEntitlements("free"),
         };
         await user.save({ session });
 
@@ -361,6 +427,7 @@ function createPremiumWalletRouter({ io }) {
               action: "premium_cancelled",
               description: "Premium plan cancelled",
               status: "success",
+              metadata: { premiumTxnId },
             },
           ],
           { session }
@@ -435,43 +502,18 @@ function createPremiumWalletRouter({ io }) {
 
   router.get("/premium/plans", async (req, res) => {
     try {
-      const plans = [
-        {
-          id: "basic",
-          name: "Basic",
-          price: 399,
-          features: ["Bulk Hiring", "24/7 Instant", "Leaderboard"],
-          popular: false,
-        },
-        {
-          id: "pro",
-          name: "Pro",
-          price: 699,
-          features: ["Bulk Hiring", "24/7 Instant", "Leaderboard", "Custom Add-ons"],
-          popular: true,
-        },
-      ];
+      const plans = Object.values(PLANS).map((plan) => ({
+        ...plan,
+        popular: plan.id === "pro",
+        entitlements: getPlanEntitlements(plan.id),
+      }));
       return res.json({ success: true, plans });
     } catch (err) {
       return res.status(500).json({ success: false, message: "Failed to load plans" });
     }
   });
 
-  router.post("/premium/add-ons", authenticateToken, requireActivePremium, async (req, res) => {
-    try {
-      const { addOns } = req.body;
-      return res.json({
-        success: true,
-        message: "Custom add-ons feature coming soon",
-        entitlement: req.premiumEntitlement,
-        requestedAddOns: addOns || [],
-      });
-    } catch (err) {
-      return res.status(500).json({ success: false, message: "Failed to add custom add-ons" });
-    }
-  });
-
-  router.get("/leaderboard", authenticateToken, requireActivePremium, async (req, res) => {
+  router.get("/leaderboard", authenticateToken, requirePremium("canViewLeaderboard"), async (req, res) => {
     try {
       const { limit = 10 } = req.query;
       const filter = { role: "contractor", points: { $gt: 0 } };

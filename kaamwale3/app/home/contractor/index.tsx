@@ -1,21 +1,18 @@
-import React, { useEffect, useState } from 'react';
-import { View, Text, Image, TouchableOpacity, ScrollView, FlatList, Alert, Modal } from 'react-native';
+import React, { useEffect } from 'react';
+import { View, Text, Image, TouchableOpacity, FlatList, Modal } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { MaterialIcons, FontAwesome } from '@expo/vector-icons';
+import { MaterialIcons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
-import { BlurView } from 'expo-blur';
 import { useRouter } from 'expo-router';
 import { useFocusEffect } from '@react-navigation/native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Location from 'expo-location';
 import { socket } from '../../../utils/socket';
-import { SERVER_URL } from '../../../utils/config';
-import { API_BASE } from '../../../utils/config';
+import { SERVER_URL, API_BASE } from '../../../utils/config';
 import PremiumPlansModal from '../../../components/PremiumPlansModal';
 import { useLanguage } from '../../../context/LanguageContext';
 import { useAuth } from '../../../context/AuthContext';
 import styles from '../../../styles/ContractorHomeStyles';
-const bannerImage = require('../../../assets/discount.jpg');
 const profile = require('../../../assets/oip2.jpg');
 
 export default function ContractorHome() {
@@ -28,9 +25,6 @@ export default function ContractorHome() {
   const [userProfilePhoto, setUserProfilePhoto] = React.useState(profile);
   const [leaderboard, setLeaderboard] = React.useState<any[]>([]);
   const [leaderboardExpanded, setLeaderboardExpanded] = React.useState(false);
-  const [walletBalance, setWalletBalance] = React.useState(0);
-  const [jobs, setJobs] = React.useState<any[]>([]);
-  const [activeWorkerCount, setActiveWorkerCount] = React.useState(0);
   const [jobsDoneCount, setJobsDoneCount] = React.useState(0);
   const [postedCount, setPostedCount] = React.useState(0);
   const [totalSpending, setTotalSpending] = React.useState(0);
@@ -38,6 +32,7 @@ export default function ContractorHome() {
   const [notificationCount, setNotificationCount] = React.useState<number>(0); // ✅ Add notification count state
   const [showLocationModal, setShowLocationModal] = React.useState<boolean>(false); // ✅ Location modal state
   const [requestingLocation, setRequestingLocation] = React.useState<boolean>(false); // ✅ Loading state for location request
+  const [supportModalVisible, setSupportModalVisible] = React.useState(false);
   // ✅ Removed dead token state - use accessToken from context instead
 
   // ✅ Separate premium listener effect - runs on login, not on every tab focus
@@ -96,8 +91,6 @@ export default function ContractorHome() {
     };
   }, [accessToken]);
 
-  const premiumSubUpdateHandlerRef = React.useRef<any>(null);
-
   // ✅ Memoize sorted leaderboard to prevent re-sorting on every render
   // CRITICAL: Clone array before sorting to avoid mutating React state
   const sortedLeaderboard = React.useMemo(() => {
@@ -109,175 +102,23 @@ export default function ContractorHome() {
       return (a.rank || 999) - (b.rank || 999);
     });
   }, [leaderboard, userName]);
-  useFocusEffect(
-    React.useCallback(() => {
-      (async () => {
-        try {
-          const savedToken = accessToken;
-          const userStr = authUser ? JSON.stringify(authUser) : null;
 
-          if (savedToken) {
-            let currentUser = null;
-            let hasActivePremium = false;
-
-            // Fetch user data
-            if (authUser) {
-              currentUser = authUser;
-              setUserName(currentUser.name || 'You');
-              if (currentUser.profilePhoto) {
-                setUserProfilePhoto({ uri: currentUser.profilePhoto });
-              }
-            }
-            
-            // ✅ If premiumPlan not in localStorage, fetch fresh from backend
-            if (!currentUser?.premiumPlan) {
-              try {
-                const response = await fetch(`${SERVER_URL}/users/profile`, {
-                  headers: { Authorization: `Bearer ${savedToken}` },
-                });
-                if (response.ok) {
-                  const data = await response.json();
-                  
-                  if (data.success && data.user) {
-                    currentUser = { ...currentUser, ...data.user };
-                    // Update AsyncStorage with fresh data
-                    await AsyncStorage.setItem('user', JSON.stringify(currentUser));
-                  }
-                } else {
-                  console.warn(`⚠️ Profile fetch returned status ${response.status}`);
-                }
-              } catch (err) {
-                console.warn('Could not fetch fresh user data:', err);
-              }
-            }
-            
-            // ✅ Check if user has an ACTIVE premium plan - validate against expiry date
-            // Always check expiry date for current validity, don't rely solely on cached boolean
-            const cachedPremium = await AsyncStorage.getItem('hasPremium');
-            
-            if (cachedPremium === 'true' && currentUser?.premiumPlan?.expiryDate) {
-              // Verify cached premium is still valid by checking expiry
-              const expiryDate = new Date(currentUser.premiumPlan.expiryDate);
-              const now = new Date();
-              
-              if (expiryDate > now) {
-                hasActivePremium = true;
-                console.log('✅ Premium status verified - cached and valid, expiry:', currentUser.premiumPlan.expiryDate);
-              } else {
-                console.log('⚠️ Cached premium expired:', currentUser.premiumPlan.expiryDate);
-                hasActivePremium = false;
-                await AsyncStorage.removeItem('hasPremium');
-              }
-            } else if (currentUser?.premiumPlan?.expiryDate) {
-              // Check the premium plan data from user object
-              const expiryDate = new Date(currentUser.premiumPlan.expiryDate);
-              const now = new Date();
-              
-              // If premium plan hasn't expired
-              if (expiryDate > now) {
-                hasActivePremium = true;
-                console.log('✅ Premium status - actively verified, expiry:', currentUser.premiumPlan.expiryDate);
-              } else {
-                console.log('⚠️ Premium subscription has expired:', currentUser.premiumPlan.expiryDate);
-              }
-            }
-            
-            setHasPremium(hasActivePremium);
-            
-            // ✅ Persist premium status for next time (tab switch, etc.)
-            if (hasActivePremium) {
-              await AsyncStorage.setItem('hasPremium', 'true');
-            } else {
-              await AsyncStorage.removeItem('hasPremium');
-            }
-            
-            // ✅ Don't auto-show premium modal - only show when user clicks "Upgrade Now"
-            // Modal will show on demand only
-            
-            // ✅ Only fetch leaderboard if user has premium
-            try {
-              const cachedLeaderboard = await AsyncStorage.getItem('leaderboard');
-              if (cachedLeaderboard) {
-                const leaderboardData = JSON.parse(cachedLeaderboard);
-                console.log('📊 Cached leaderboard data:', leaderboardData);
-                
-                // The data can come in two formats:
-                // 1. { leaderboard: [...], myRank, myScore, ... } (from login response)
-                // 2. Array directly (legacy format)
-                const boardData = Array.isArray(leaderboardData) ? leaderboardData : leaderboardData.leaderboard || [];
-                
-                const formattedLeaderboard = boardData.map((contractor: any) => ({
-                  id: contractor.contractorId || contractor._id || contractor.phone,
-                  name: contractor.name,
-                  points: contractor.score || contractor.points || 0,
-                  profile: contractor.profilePhoto ? contractor.profilePhoto : null,
-                  rank: contractor.rank,
-                  rating: contractor.avgRating,
-                  jobsPosted: contractor.totalJobsPosted,
-                  tier: contractor.tier,
-                }));
-                
-                console.log('✅ Formatted leaderboard:', formattedLeaderboard);
-                setLeaderboard(formattedLeaderboard);
-              } else {
-                // Fallback: try district-based leaderboard if no cached data
-                try {
-                  const leaderboardRes = await fetch(
-                    `${SERVER_URL}/leaderboard/contractors/by-district?lat=${currentUser?.latitude || 0}&lon=${currentUser?.longitude || 0}`,
-                    {
-                      headers: { Authorization: `Bearer ${savedToken}` },
-                    }
-                  );
-                  const leaderboardData = await leaderboardRes.json();
-                  
-                  if (leaderboardData.leaderboard && Array.isArray(leaderboardData.leaderboard)) {
-                    const formattedLeaderboard = leaderboardData.leaderboard.map((contractor: any) => ({
-                      id: contractor.contractorId || contractor._id || contractor.phone,
-                      name: contractor.name,
-                      points: contractor.score || 0,
-                      profile: contractor.profilePhoto ? contractor.profilePhoto : null,
-                      rank: contractor.rank,
-                      rating: contractor.rating,
-                      jobsPosted: contractor.jobCount,
-                      tier: contractor.tier,
-                    }));
-                    setLeaderboard(formattedLeaderboard);
-                    console.log('✅ Fetched leaderboard from API:', formattedLeaderboard);
-                  }
-                } catch (err) {
-                  console.warn('Could not fetch leaderboard:', (err as Error).message);
-                }
-              }
-            } catch (err) {
-              console.warn('Error loading leaderboard:', (err as Error).message);
-            }
-            
-            // Global socket already created at login
-            // Just ensure it's connected
-            if (!socket.connected && savedToken) {
-              socket.auth = { token: savedToken };
-              socket.connect();
-            }
-
-            // Fetch wallet balance and jobs in parallel
-            await Promise.all([
-              fetchWalletBalance(),
-              fetchJobs(),
-              fetchNotificationCount()
-            ]);
-          }
-        } catch (err) {
-          // Silent fail on token loading
-        }
-      })();
-
-      return () => {
-        // ✅ Socket listener cleanup is now handled in separate useEffect
-        // This useFocusEffect focuses on data fetching
-      };
-    }, [accessToken, authUser])
-  );
-
+  const fetchPremiumStatus = React.useCallback(async (): Promise<boolean> => {
+    if (!accessToken) return false;
+    try {
+      const response = await fetch(`${SERVER_URL}/premium/status`, {
+        headers: { Authorization: `Bearer ${accessToken}` },
+      });
+      const data = await response.json();
+      const isActive = Boolean(data?.success && data?.isActive);
+      setHasPremium(isActive);
+      return isActive;
+    } catch (err) {
+      console.warn('Could not fetch premium status:', (err as Error).message);
+      setHasPremium(false);
+      return false;
+    }
+  }, [accessToken]);
   const topCards = [
     { id: 1, icon: 'work', amount: postedCount.toString(), label: t('jobsPosted') },
     { id: 2, icon: 'check-circle', amount: jobsDoneCount.toString(), label: t('jobsCompleted') },
@@ -289,45 +130,11 @@ export default function ContractorHome() {
 
   // Leaderboard is now populated from state in useFocusEffect
 
-  const getMedal = (rank: string | number) => {
-    if (rank === 'You' || rank === 0) {
-      return <FontAwesome name="star" size={20} color="#FF6B6B" />; // Current user badge
-    }
-    switch (rank) {
-      case 1:
-        return <FontAwesome name="trophy" size={20} color="#FFD700" />; // Gold
-      case 2:
-        return <FontAwesome name="trophy" size={20} color="#C0C0C0" />; // Silver
-      case 3:
-        return <FontAwesome name="trophy" size={20} color="#CD7F32" />; // Bronze
-      default:
-        return <Text style={{ fontSize: 14, width: 24, color: '#666', fontWeight: '600' }}>{rank}</Text>;
-    }
-  };
-
   const handleUpgrade = () => {
     setPremiumModalVisible(true);
   };
 
-  const fetchWalletBalance = async () => {
-    try {
-      if (!accessToken) {
-        console.warn('No access token available');
-        return;
-      }
-      const res = await fetch(`${SERVER_URL}/wallet/balance`, {
-        headers: { Authorization: `Bearer ${accessToken}` },
-      });
-      const data = await res.json();
-      if (data.balance !== undefined) {
-        setWalletBalance(data.balance);
-      }
-    } catch (err) {
-      // Silently fail - wallet might not exist yet
-    }
-  };
-
-  const fetchJobs = async () => {
+  const fetchJobs = React.useCallback(async () => {
     try {
       if (!accessToken) {
         console.warn('No access token available');
@@ -344,7 +151,6 @@ export default function ContractorHome() {
       if (!res.ok) throw new Error('Failed to fetch jobs');
 
       const data = await res.json();
-      setJobs(data);
 
       // Filter jobs posted by this contractor
       const myJobs = data.filter((job: any) => job.contractorName === authUser?.name && !job.isCancelled); // ✅ Use authUser.name to avoid stale userName state
@@ -353,7 +159,6 @@ export default function ContractorHome() {
       // Count active/unpaid workers for contractor jobs
       const unpaidJobs = myJobs.filter((job: any) => job.paymentStatus !== 'Paid' && (job.acceptedBy || (job.acceptedWorkers && job.acceptedWorkers.length > 0)));
       const uniqueUnpaidWorkers = new Set(unpaidJobs.flatMap((job: any) => job.acceptedWorkers && job.acceptedWorkers.length ? job.acceptedWorkers.map((w: any) => w.phone || w) : (job.acceptedBy ? [job.acceptedBy] : [])));
-      setActiveWorkerCount(uniqueUnpaidWorkers.size);
       setWorkersEngaged(uniqueUnpaidWorkers.size);
 
       // Count jobs done (paid jobs for this contractor)
@@ -377,10 +182,10 @@ export default function ContractorHome() {
     } catch (err) {
       console.error('Job fetch error:', err);
     }
-  };
+  }, [accessToken, authUser?.name]);
 
   // ✅ Fetch notification count
-  const fetchNotificationCount = async () => {
+  const fetchNotificationCount = React.useCallback(async () => {
     try {
       if (!accessToken) {
         console.warn('No access token available');
@@ -396,7 +201,126 @@ export default function ContractorHome() {
     } catch (err) {
       console.error('Failed to fetch notification count:', err);
     }
-  };
+  }, [accessToken]);
+
+  useFocusEffect(
+    React.useCallback(() => {
+      (async () => {
+        try {
+          const savedToken = accessToken;
+
+          if (savedToken) {
+            let currentUser = null;
+
+            if (authUser) {
+              currentUser = authUser;
+              setUserName(currentUser.name || 'You');
+              if (currentUser.profilePhoto) {
+                setUserProfilePhoto({ uri: currentUser.profilePhoto });
+              }
+            }
+
+            if (!currentUser?.premiumPlan) {
+              try {
+                const response = await fetch(`${SERVER_URL}/users/profile`, {
+                  headers: { Authorization: `Bearer ${savedToken}` },
+                });
+                if (response.ok) {
+                  const data = await response.json();
+
+                  if (data.success && data.user) {
+                    currentUser = { ...currentUser, ...data.user };
+                    await AsyncStorage.setItem('user', JSON.stringify(currentUser));
+                  }
+                } else {
+                  console.warn(`⚠️ Profile fetch returned status ${response.status}`);
+                }
+              } catch (err) {
+                console.warn('Could not fetch fresh user data:', err);
+              }
+            }
+
+            const hasActivePremium = await fetchPremiumStatus();
+            if (!hasActivePremium) {
+              setLeaderboard([]);
+            }
+
+            if (hasActivePremium) {
+              try {
+                const cachedLeaderboard = await AsyncStorage.getItem('leaderboard');
+                if (cachedLeaderboard) {
+                  const leaderboardData = JSON.parse(cachedLeaderboard);
+                  console.log('📊 Cached leaderboard data:', leaderboardData);
+
+                  const boardData = Array.isArray(leaderboardData) ? leaderboardData : leaderboardData.leaderboard || [];
+
+                  const formattedLeaderboard = boardData.map((contractor: any) => ({
+                    id: contractor.contractorId || contractor._id || contractor.phone,
+                    name: contractor.name,
+                    points: contractor.score || contractor.points || 0,
+                    profile: contractor.profilePhoto ? contractor.profilePhoto : null,
+                    rank: contractor.rank,
+                    rating: contractor.avgRating,
+                    jobsPosted: contractor.totalJobsPosted,
+                    tier: contractor.tier,
+                  }));
+
+                  console.log('✅ Formatted leaderboard:', formattedLeaderboard);
+                  setLeaderboard(formattedLeaderboard);
+                } else {
+                  try {
+                    const leaderboardRes = await fetch(
+                      `${SERVER_URL}/leaderboard/contractors/by-district?lat=${currentUser?.latitude || 0}&lon=${currentUser?.longitude || 0}`,
+                      {
+                        headers: { Authorization: `Bearer ${savedToken}` },
+                      }
+                    );
+                    const leaderboardData = await leaderboardRes.json();
+
+                    if (leaderboardData.leaderboard && Array.isArray(leaderboardData.leaderboard)) {
+                      const formattedLeaderboard = leaderboardData.leaderboard.map((contractor: any) => ({
+                        id: contractor.contractorId || contractor._id || contractor.phone,
+                        name: contractor.name,
+                        points: contractor.score || 0,
+                        profile: contractor.profilePhoto ? contractor.profilePhoto : null,
+                        rank: contractor.rank,
+                        rating: contractor.rating,
+                        jobsPosted: contractor.jobCount,
+                        tier: contractor.tier,
+                      }));
+                      setLeaderboard(formattedLeaderboard);
+                      console.log('✅ Fetched leaderboard from API:', formattedLeaderboard);
+                    }
+                  } catch (err) {
+                    console.warn('Could not fetch leaderboard:', (err as Error).message);
+                  }
+                }
+              } catch (err) {
+                console.warn('Error loading leaderboard:', (err as Error).message);
+              }
+            }
+
+            if (!socket.connected && savedToken) {
+              socket.auth = { token: savedToken };
+              socket.connect();
+            }
+
+            await Promise.all([
+              fetchJobs(),
+              fetchNotificationCount(),
+            ]);
+          }
+        } catch {
+          // Silent fail on token loading
+        }
+      })();
+
+      return () => {
+        // ✅ Socket listener cleanup is now handled in separate useEffect
+        // This useFocusEffect focuses on data fetching
+      };
+    }, [accessToken, authUser, fetchJobs, fetchNotificationCount, fetchPremiumStatus])
+  );
 
   // ✅ REQUEST AND UPDATE LOCATION FOR CONTRACTOR
   const requestAndUpdateLocation = async (): Promise<boolean> => {
@@ -512,9 +436,6 @@ export default function ContractorHome() {
         return;
       }
       
-      // ✅ Save premium status to AsyncStorage
-      await AsyncStorage.setItem('hasPremium', 'true');
-      
       // ✅ Fetch updated user data from backend and save to AsyncStorage with premium plan info
       try {
         const response = await fetch(`${SERVER_URL}/users/profile`, {
@@ -536,7 +457,7 @@ export default function ContractorHome() {
       setPremiumModalVisible(false);
       
       // Set premium status immediately
-      setHasPremium(true);
+      await fetchPremiumStatus();
       
       // ✅ FETCH FRESH LEADERBOARD FROM NEW DISTRICT ENDPOINT AFTER PREMIUM PURCHASE
       try {
@@ -589,13 +510,6 @@ export default function ContractorHome() {
     }
   };
 
-  const getGreeting = () => {
-    const hour = new Date().getHours();
-    if (hour < 12) return t('goodMorning');
-    if (hour < 17) return t('goodAfternoon');
-    return t('goodEvening');
-  };
-
   return (
     <SafeAreaView
       edges={['top', 'left', 'right']}
@@ -616,19 +530,27 @@ export default function ContractorHome() {
           >
             <Image source={userProfilePhoto} style={styles.headerProfilePhoto} />
           </TouchableOpacity>
-          <TouchableOpacity 
-            style={styles.bellContainer}
-            onPress={() => router.push("/NotificationHistory" as any)}
-          >
-            <MaterialIcons name="notifications-none" size={28} color="#000" />
-            {notificationCount > 0 && ( // ✅ Show badge if unread notifications exist
-              <View style={styles.badge}>
-                <Text style={styles.badgeText}>
-                  {notificationCount > 9 ? '9+' : notificationCount}
-                </Text>
-              </View>
-            )}
-          </TouchableOpacity>
+          <View style={styles.headerActions}>
+            <TouchableOpacity
+              style={styles.supportContainer}
+              onPress={() => setSupportModalVisible(true)}
+            >
+              <MaterialIcons name="support-agent" size={22} color="#fff" />
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.bellContainer}
+              onPress={() => router.push("/NotificationHistory" as any)}
+            >
+              <MaterialIcons name="notifications-none" size={28} color="#000" />
+              {notificationCount > 0 && ( // ✅ Show badge if unread notifications exist
+                <View style={styles.badge}>
+                  <Text style={styles.badgeText}>
+                    {notificationCount > 9 ? '9+' : notificationCount}
+                  </Text>
+                </View>
+              )}
+            </TouchableOpacity>
+          </View>
         </View>
       </LinearGradient>
 
@@ -789,6 +711,19 @@ export default function ContractorHome() {
         onPlanSelected={handlePlanSelected}
       />
 
+      <Modal visible={supportModalVisible} transparent animationType="fade" onRequestClose={() => setSupportModalVisible(false)}>
+        <TouchableOpacity style={styles.supportModalOverlay} activeOpacity={1} onPress={() => setSupportModalVisible(false)}>
+          <View style={styles.supportModalCard}>
+            <MaterialIcons name="support-agent" size={28} color="#e74c3c" />
+            <Text style={styles.supportModalTitle}>Support</Text>
+            <Text style={styles.supportModalText}>Support will call you shortly.</Text>
+            <TouchableOpacity style={styles.supportModalBtn} onPress={() => setSupportModalVisible(false)}>
+              <Text style={styles.supportModalBtnText}>OK</Text>
+            </TouchableOpacity>
+          </View>
+        </TouchableOpacity>
+      </Modal>
+
       {/* ✅ POST-LOGIN LOCATION PERMISSION MODAL FOR CONTRACTOR */}
       <Modal visible={showLocationModal} transparent animationType="fade">
         <TouchableOpacity 
@@ -872,4 +807,6 @@ export default function ContractorHome() {
     </SafeAreaView>
   );
 }
+
+
 

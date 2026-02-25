@@ -104,6 +104,11 @@ function createContractorStatsRouter() {
         if (job.acceptedBy) {
           bucket.workersList.push(job.acceptedBy);
         }
+        if (Array.isArray(job.acceptedWorkers) && job.acceptedWorkers.length) {
+          for (const w of job.acceptedWorkers) {
+            if (w?.phone) bucket.workersList.push(w.phone);
+          }
+        }
       }
 
       const stats = Array.from(dayMap.values())
@@ -179,7 +184,16 @@ function createContractorStatsRouter() {
       });
       const jobsPosted = todayJobs.length;
       const jobsCompleted = todayJobs.filter((j) => j.attendanceStatus && j.paymentStatus === "Paid").length;
-      const workersList = [...new Set(todayJobs.map((j) => j.acceptedBy))];
+      const workersList = [
+        ...new Set(
+          todayJobs.flatMap((j) => [
+            ...(j.acceptedBy ? [j.acceptedBy] : []),
+            ...((Array.isArray(j.acceptedWorkers) ? j.acceptedWorkers : [])
+              .map((w) => w?.phone)
+              .filter(Boolean)),
+          ])
+        ),
+      ];
       const workersEngaged = workersList.length;
       const totalSpending = todayJobs.reduce((sum, j) => sum + (Number(j.amount) || 0), 0);
 

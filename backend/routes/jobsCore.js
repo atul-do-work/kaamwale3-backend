@@ -2,6 +2,7 @@ const express = require("express");
 const path = require("path");
 const { scheduleDispatchState, cancelDispatchState } = require("../services/dispatchStateService");
 const { isPremiumEntitled } = require("../utils/premiumEntitlement");
+const { getPlanEntitlements } = require("../config/premiumEntitlements");
 
 function createJobsCoreRouter({
   authenticateToken,
@@ -57,11 +58,14 @@ function createJobsCoreRouter({
       const requestedDays = Number.parseInt(numberOfDays, 10);
       const normalizedDays = Number.isFinite(requestedDays) && requestedDays > 0 ? requestedDays : 1;
       const hasActivePremium = isPremiumEntitled(userRecord);
+      const entitlements = getPlanEntitlements(userRecord?.premiumPlan?.type || "free");
 
-      if ((wantsBulkHiring || normalizedDays > 1) && !hasActivePremium) {
+      const canBulkHire = hasActivePremium && Boolean(entitlements.canBulkHire);
+      const canMultiDayPost = hasActivePremium && Boolean(entitlements.canMultiDayPost);
+      if ((wantsBulkHiring && !canBulkHire) || (normalizedDays > 1 && !canMultiDayPost)) {
         return res.status(403).json({
           success: false,
-          message: "Active premium subscription required for bulk hiring or multi-day jobs.",
+          message: "Selected plan does not include bulk hiring or multi-day jobs.",
         });
       }
 

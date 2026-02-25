@@ -57,7 +57,7 @@ export default function PostJobScreen() {
   const [showSkillDropdown, setShowSkillDropdown] = useState(false);
   const [showWorkerTypeDropdown, setShowWorkerTypeDropdown] = useState(false);
   const [priceError, setPriceError] = useState(false);
-  const [hasPremium, setHasPremium] = useState(false); // ✅ Premium check
+  const [hasPremium, setHasPremium] = useState(false); // ✅ Active premium status from backend
   const [bulkHiringEnabled, setBulkHiringEnabled] = useState(false); // ✅ Bulk hiring toggle
   const [requiredWorkers, setRequiredWorkers] = useState(1); // ✅ Number of workers needed
   const [numberOfDays, setNumberOfDays] = useState(1); // ✅ Job duration in days (1-30)
@@ -120,29 +120,49 @@ export default function PostJobScreen() {
             setCurrentUserPhone(userPhone);
             setWalletBalance(0);
             setHasPremium(false);
+            setBulkHiringEnabled(false);
+            setRequiredWorkers(1);
+            setNumberOfDays(1);
           } else if (!userPhone && previousUserPhoneRef.current !== null) {
             console.log(`👤 Postjobs: User logged out, resetting wallet`);
             previousUserPhoneRef.current = null;
             setCurrentUserPhone(null);
             setWalletBalance(0);
             setHasPremium(false);
+            setBulkHiringEnabled(false);
+            setRequiredWorkers(1);
+            setNumberOfDays(1);
           }
 
-          if (user) {
-            if (user?.name) setContractorName(user.name);
-            
-            // Check if user has active premium
-            if (user?.premiumPlan && user.premiumPlan.type) {
-              const expiryDate = new Date(user.premiumPlan.expiryDate);
-              const now = new Date();
-              if (expiryDate > now) {
-                setHasPremium(true);
-              } else {
-                setHasPremium(false);
+          if (user?.name) setContractorName(user.name);
+
+          if (storedToken) {
+            try {
+              const premiumRes = await fetch(`${SERVER_URL}/premium/status`, {
+                headers: { Authorization: `Bearer ${storedToken}` },
+              });
+              const premiumData = await premiumRes.json();
+              const isActive = Boolean(premiumData?.success && premiumData?.isActive);
+
+              setHasPremium(isActive);
+
+              if (!isActive) {
+                setBulkHiringEnabled(false);
+                setRequiredWorkers(1);
+                setNumberOfDays(1);
               }
-            } else {
+            } catch (premiumErr) {
+              console.warn("Failed to load premium status in postjobs", premiumErr);
               setHasPremium(false);
+              setBulkHiringEnabled(false);
+              setRequiredWorkers(1);
+              setNumberOfDays(1);
             }
+          } else {
+            setHasPremium(false);
+            setBulkHiringEnabled(false);
+            setRequiredWorkers(1);
+            setNumberOfDays(1);
           }
         } catch (err) {
           console.error("Failed to load user/token in postjobs", err);
@@ -357,7 +377,9 @@ export default function PostJobScreen() {
     }
 
     // 💰 Calculate required posting fee based on bulk hiring
-    const workersCount = bulkHiringEnabled ? requiredWorkers : 1;
+    const isBulkAllowed = hasPremium;
+    const isMultiDayAllowed = hasPremium;
+    const workersCount = isBulkAllowed && bulkHiringEnabled ? requiredWorkers : 1;
     const requiredBalance = workersCount * 25;
 
     if (walletBalance < requiredBalance) {
@@ -446,9 +468,9 @@ export default function PostJobScreen() {
         imageUrl,
         startTime: startTimeStr,
         endTime: endTimeStr,
-        numberOfDays: hasPremium ? numberOfDays : 1, // ✅ Include days for premium users, default 1 for free
-        bulkHiring: bulkHiringEnabled, // ✅ Include bulk hiring flag
-        requiredWorkers: bulkHiringEnabled ? requiredWorkers : 1, // ✅ Include required workers count
+        numberOfDays: isMultiDayAllowed ? numberOfDays : 1,
+        bulkHiring: isBulkAllowed ? bulkHiringEnabled : false,
+        requiredWorkers: isBulkAllowed && bulkHiringEnabled ? requiredWorkers : 1,
       };
 
       const res = await fetch(`${SERVER_URL}/jobs/post`, {
@@ -511,8 +533,8 @@ export default function PostJobScreen() {
         {/* ✅ Show Posting Fee Transparently */}
         <View style={styles.feeDisplay}>
           <Text style={styles.feeLabel}>Posting Fee</Text>
-          <Text style={styles.feeAmount}>₹{(bulkHiringEnabled ? requiredWorkers : 1) * 25}</Text>
-          <Text style={styles.feeInfo}>{bulkHiringEnabled ? requiredWorkers : 1} worker(s)</Text>
+          <Text style={styles.feeAmount}>₹{((hasPremium && bulkHiringEnabled) ? requiredWorkers : 1) * 25}</Text>
+          <Text style={styles.feeInfo}>{(hasPremium && bulkHiringEnabled) ? requiredWorkers : 1} worker(s)</Text>
         </View>
 
         {/* Job Title Dropdown */}
@@ -680,7 +702,7 @@ export default function PostJobScreen() {
 
         {/* Date Picker */}
 
-        {/* ✅ Bulk Hiring + Duration in one row (Premium) */}
+        {/* ✅ Premium-only controls */}
         {hasPremium && (
           <View style={styles.bulkDurationWrap}>
             <View style={styles.twoColRow}>
@@ -867,7 +889,7 @@ export default function PostJobScreen() {
 const styles = StyleSheet.create({
   scroll: { flexGrow: 1, paddingHorizontal: 16, paddingTop: 14, paddingBottom: 16, backgroundColor: "#f3f3f3", alignItems: "center" },
   container: { backgroundColor: "#1f3a5f", borderRadius: 20, paddingHorizontal: 16, paddingTop: 16, paddingBottom: 14, width: "100%", maxWidth: 420, marginBottom: 10 },
-  header: { fontSize: 22, fontWeight: "700", color: "#fff", marginBottom: 14, textAlign: "center" },
+  header: { fontSize: 18, fontWeight: "700", color: "#fff", marginBottom: 12, textAlign: "center" },
   walletText: { color: "#fff", fontWeight: "700", marginBottom: 10, fontSize: 14 },
   inputCard: {
     flexDirection: "row",

@@ -46,6 +46,7 @@ const userSchema = new mongoose.Schema({
     price: { type: Number, default: 0 },
     startDate: { type: Date, default: null },
     expiryDate: { type: Date, default: null },
+    renewalAt: { type: Date, default: null },
     autoRenew: { type: Boolean, default: false },
     subscriptionId: { type: String, default: null },
     provider: { type: String, default: 'internal' },
@@ -58,6 +59,7 @@ const userSchema = new mongoose.Schema({
     cancelAt: { type: Date, default: null },
     graceUntil: { type: Date, default: null },
     failureReason: { type: String, default: null },
+    entitlements: { type: mongoose.Schema.Types.Mixed, default: null },
   },
   // Leaderboard points for premium users
   points: { type: Number, default: 0 },

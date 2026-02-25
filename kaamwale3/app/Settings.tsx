@@ -287,7 +287,7 @@ export default function SettingsScreen(): React.ReactElement {
   ];
 
   return (
-    <ScrollView style={styles.container}>
+    <ScrollView style={styles.container} contentContainerStyle={styles.contentContainer}>
       {/* Header */}
       <LinearGradient colors={["#6C63FF", "#A78BFA"]} style={styles.header}>
         <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}>
@@ -340,21 +340,22 @@ export default function SettingsScreen(): React.ReactElement {
         </View>
       ))}
 
-      {/* Verification Button */}
-      <TouchableOpacity 
-        style={styles.verificationButton} 
-        onPress={() => router.push("/Verification" as any)}
-      >
-        <MaterialIcons name="verified-user" size={20} color="#fff" />
-        <Text style={styles.verificationText}>Verification & KYC</Text>
-        <MaterialIcons name="arrow-forward" size={20} color="#fff" />
-      </TouchableOpacity>
+      <View style={styles.actionRow}>
+        {/* Verification Button */}
+        <TouchableOpacity
+          style={[styles.verificationButton, styles.rowButton]}
+          onPress={() => router.push("/Verification" as any)}
+        >
+          <MaterialIcons name="verified-user" size={18} color="#fff" />
+          <Text style={styles.rowButtonText}>Verification</Text>
+        </TouchableOpacity>
 
-      {/* Save Button */}
-      <TouchableOpacity style={styles.saveButton} onPress={handleSave}>
-        <MaterialIcons name="save" size={20} color="#fff" />
-        <Text style={styles.saveText}>{t('save')} Settings</Text>
-      </TouchableOpacity>
+        {/* Save Button */}
+        <TouchableOpacity style={[styles.saveButton, styles.rowButton]} onPress={handleSave}>
+          <MaterialIcons name="save" size={18} color="#fff" />
+          <Text style={styles.rowButtonText}>{t('save')} Settings</Text>
+        </TouchableOpacity>
+      </View>
 
       {isPayoutAllowed && (
         <TouchableOpacity
@@ -627,6 +628,9 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: "#F8F9FA",
   },
+  contentContainer: {
+    paddingBottom: 120,
+  },
   header: {
     flexDirection: "row",
     alignItems: "center",
@@ -716,15 +720,13 @@ const styles = StyleSheet.create({
     marginLeft: 68,
   },
   verificationButton: {
-    marginHorizontal: 16,
     marginTop: 24,
-    marginBottom: 12,
     flexDirection: "row",
     backgroundColor: "#10B981",
     borderRadius: 12,
-    paddingHorizontal: 20,
-    paddingVertical: 16,
-    justifyContent: "space-between",
+    paddingHorizontal: 12,
+    paddingVertical: 14,
+    justifyContent: "center",
     alignItems: "center",
   },
   verificationText: {
@@ -755,9 +757,7 @@ const styles = StyleSheet.create({
     marginLeft: 12,
   },
   saveButton: {
-    marginHorizontal: 16,
-    marginTop: 12,
-    marginBottom: 24,
+    marginTop: 24,
     backgroundColor: "#6C63FF",
     flexDirection: "row",
     alignItems: "center",
@@ -773,6 +773,7 @@ const styles = StyleSheet.create({
   },
   paymentMethodButton: {
     marginHorizontal: 16,
+    marginTop: 12,
     marginBottom: 12,
     flexDirection: "row",
     backgroundColor: "#2563EB",
@@ -940,7 +941,22 @@ const styles = StyleSheet.create({
     opacity: 0.7,
   },
   spacer: {
-    height: 20,
+    height: 8,
+  },
+  actionRow: {
+    flexDirection: "row",
+    marginHorizontal: 16,
+    columnGap: 10,
+  },
+  rowButton: {
+    flex: 1,
+  },
+  rowButtonText: {
+    color: "#fff",
+    fontSize: 14,
+    fontWeight: "700",
+    marginLeft: 8,
+    textAlign: "center",
   },
   
   // ✅ Modal Styles

@@ -35,6 +35,7 @@ export default function PremiumPlansModal({
   // Fetch wallet balance when modal opens
   React.useEffect(() => {
     if (visible) {
+      setError("");
       fetchWalletBalance();
       fetchPlans();
     }
@@ -79,9 +80,9 @@ export default function PremiumPlansModal({
       setError("");
       setSubscribing(true);
       setSubscribingPlanId(planId);
-      const idempotencyKey = `premium_${planId}_${Date.now()}`;
+      const idempotencyKey = `premium:${planId}:${Date.now()}:${Math.random().toString(36).slice(2, 10)}`;
 
-      const res = await api.post(`/premium/subscribe`, { planId, customAddons: [], idempotencyKey });
+      const res = await api.post(`/premium/subscribe`, { planId, autoRenew: false, idempotencyKey });
       const data = res.data;
 
       if (data.success) {
@@ -96,8 +97,9 @@ export default function PremiumPlansModal({
       } else {
         setError(data.message || "Subscription failed");
       }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Network error");
+    } catch (err: any) {
+      const apiError = err?.response?.data?.message;
+      setError(apiError || (err instanceof Error ? err.message : "Network error"));
     } finally {
       subscribeInFlightRef.current = false;
       setSubscribing(false);
@@ -179,7 +181,9 @@ export default function PremiumPlansModal({
               </View>
             ) : null}
 
-            {plans.map((plan) => (
+            {plans.map((plan) => {
+              const hasSufficientBalance = walletBalance >= plan.price;
+              return (
               <LinearGradient
                 key={plan.id}
                 colors={plan.popular ? ["#2E8B57", "#1a4d2e"] : ["#f5f5f5", "#fff"]}
@@ -246,12 +250,12 @@ export default function PremiumPlansModal({
 
                   <TouchableOpacity
                     onPress={() => handleSubscribe(plan.id)}
-                    disabled={subscribing || plansLoading}
+                    disabled={subscribing || plansLoading || !hasSufficientBalance}
                     style={{
                       backgroundColor: plan.popular ? "#FFD700" : "#2E8B57",
                       paddingVertical: 10,
                       borderRadius: 6,
-                      opacity: subscribing || plansLoading ? 0.6 : 1,
+                      opacity: subscribing || plansLoading || !hasSufficientBalance ? 0.6 : 1,
                     }}
                   >
                     {subscribing && subscribingPlanId === plan.id ? (
@@ -261,16 +265,17 @@ export default function PremiumPlansModal({
                         style={{
                           textAlign: "center",
                           fontWeight: "bold",
-                          color: plan.popular ? "#333" : "#fff",
+                          color: !hasSufficientBalance ? "#f8f8f8" : plan.popular ? "#333" : "#fff",
                         }}
                       >
-                        Choose Plan
+                        {hasSufficientBalance ? "Choose Plan" : "Insufficient Wallet Balance"}
                       </Text>
                     )}
                   </TouchableOpacity>
                 </View>
               </LinearGradient>
-            ))}
+              );
+            })}
 
             <TouchableOpacity
               onPress={onClose}

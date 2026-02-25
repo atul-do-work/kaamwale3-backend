@@ -588,7 +588,7 @@ export default function Wallet(): React.ReactElement {
   };
   const weekRangeText = formatWeekRange(weekly);
   const weeklyEarningsAmount = Number(weekly?.earnings ?? 0);
-  const weeklyAvailableAmount = Number(weekly?.available ?? wallet.availableBalance);
+  const currentAvailableAmount = Number(wallet.availableBalance ?? wallet.balance ?? 0);
 
   useEffect(() => {
     setDisplayedCardCount(4);
@@ -622,7 +622,7 @@ export default function Wallet(): React.ReactElement {
       {/* Available Balance */}
       <View style={styles.balanceContainer}>
         <Text style={styles.balanceTitle}>Available Balance</Text>
-        <Text style={styles.balanceAmount}>₹{weeklyAvailableAmount}</Text>
+        <Text style={styles.balanceAmount}>₹{currentAvailableAmount}</Text>
       </View>
 
       {/* Deposit & Withdraw Buttons */}

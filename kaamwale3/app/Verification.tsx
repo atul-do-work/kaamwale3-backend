@@ -647,13 +647,14 @@ const styles = StyleSheet.create({
   docTypeGrid: {
     flexDirection: "row",
     flexWrap: "wrap",
-    gap: 12,
+    justifyContent: "space-between",
   },
   docTypeBtn: {
     width: "48%",
     backgroundColor: "#F3F0FF",
     borderRadius: 12,
     paddingVertical: 16,
+    marginBottom: 12,
     alignItems: "center",
     justifyContent: "center",
     borderWidth: 2,

@@ -12,7 +12,16 @@ function createUpdateContractorStats({ Job, ContractorStats }) {
 
       const jobsPosted = todayJobs.length;
       const jobsCompleted = todayJobs.filter((j) => j.attendanceStatus && j.paymentStatus === "Paid").length;
-      const workersList = [...new Set(todayJobs.map((j) => j.acceptedBy).filter(Boolean))];
+      const workersList = [
+        ...new Set(
+          todayJobs.flatMap((j) => [
+            ...(j.acceptedBy ? [j.acceptedBy] : []),
+            ...((Array.isArray(j.acceptedWorkers) ? j.acceptedWorkers : [])
+              .map((w) => w?.phone)
+              .filter(Boolean)),
+          ])
+        ),
+      ];
       const totalSpending = todayJobs.reduce((sum, j) => sum + (Number(j.amount) || 0), 0);
 
       let stats = await ContractorStats.findOne({ phone, date: today });

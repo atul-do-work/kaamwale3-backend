@@ -118,6 +118,7 @@ export default function DashboardScreen() {
   const [token, setToken] = useState<string>('');
   const [dateRange, setDateRange] = useState<'today' | 'week' | 'month'>('today');
   const [showAllTodayAcceptances, setShowAllTodayAcceptances] = useState(false);
+  const todayLabel = String(t('today') || '').trim() || 'Today';
   const [stats, setStats] = useState<AggregatedStats | null>(null);
   
   // Worker details modal state
@@ -501,7 +502,12 @@ export default function DashboardScreen() {
     const workersEngaged = new Set(
       jobs
         .filter((j) => new Date(j.timestamp).toDateString() === today)
-        .map((j) => j.acceptedBy)
+        .flatMap((j) => [
+          ...(j.acceptedBy ? [j.acceptedBy] : []),
+          ...((Array.isArray((j as any).acceptedWorkers) ? (j as any).acceptedWorkers : [])
+            .map((w: any) => w?.phone)
+            .filter(Boolean)),
+        ])
     ).size;
     const totalSpending = jobs.reduce((sum, j) => sum + Number(j.amount), 0);
 
@@ -675,7 +681,7 @@ export default function DashboardScreen() {
           style={[styles.filterButton, dateRange === 'today' && styles.filterButtonActive]}
           onPress={() => handleDateRangeChange('today')}
         >
-          <Text style={[styles.filterText, dateRange === 'today' && styles.filterTextActive]}>{t('today')}</Text>
+          <Text style={[styles.filterText, dateRange === 'today' && styles.filterTextActive]}>{todayLabel}</Text>
         </TouchableOpacity>
         <TouchableOpacity
           style={[styles.filterButton, dateRange === 'week' && styles.filterButtonActive]}
@@ -999,7 +1005,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   filterButtonActive: {
-    backgroundColor: '#1a2f4d ',
+    backgroundColor: '#1a2f4d',
     borderColor: '#6c5ce7',
   },
   filterText: {
