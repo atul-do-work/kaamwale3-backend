@@ -24,7 +24,6 @@ function createNotificationsRouter({ io }) {
         recipientPhone: req.user.phone,
         isRead: false,
       });
-
       return res.json({ success: true, notifications, total, unreadCount });
     } catch (err) {
       console.error("Fetch notifications error:", err);

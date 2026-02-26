@@ -24,6 +24,8 @@ const GigHistory = require('../models/GigHistory');
 const IncentiveLedger = require('../models/IncentiveLedger');
 const PayoutBatch = require('../models/PayoutBatch');
 const WorkerEarnings = require('../models/WorkerEarnings');
+const JobEventLog = require('../models/JobEventLog');
+const OpsAlert = require('../models/OpsAlert');
 const { runWeeklyWalletSettlement } = require('../services/weeklyWalletSettlement');
 
 // Middleware to check admin role
@@ -286,8 +288,8 @@ router.get('/dashboard', authenticateToken, checkAdmin, async (req, res) => {
         ]);
         
         // Worker availability
-        const availableWorkers = await Worker.countDocuments({ isAvailable: true });
-        const unavailableWorkers = await Worker.countDocuments({ isAvailable: false });
+        const availableWorkers = await User.countDocuments({ role: 'worker', isAvailable: true });
+        const unavailableWorkers = await User.countDocuments({ role: 'worker', isAvailable: false });
         
         // Verified workers
         const verifiedWorkers = await Worker.countDocuments({ isVerified: true });
@@ -449,7 +451,7 @@ router.get('/workers', authenticateToken, checkAdmin, async (req, res) => {
         // Enrich worker data with User information
         const enrichedWorkers = await Promise.all(
             workers.map(async (worker) => {
-                const user = await User.findOne({ phone: worker.phone }).select('name role isVerified city');
+                const user = await User.findOne({ phone: worker.phone }).select('name role isVerified city isAvailable');
                 return {
                     _id: worker._id,
                     phone: worker.phone,
@@ -459,7 +461,7 @@ router.get('/workers', authenticateToken, checkAdmin, async (req, res) => {
                     jobsCompleted: worker.jobsCompleted || 0,
                     skills: worker.skills || [],
                     isVerified: user?.isVerified || false,
-                    isAvailable: worker.isAvailable,
+                    isAvailable: user?.isAvailable ?? worker.isAvailable ?? false,
                     city: user?.city || '-',
                     createdAt: worker.createdAt
                 };
@@ -758,6 +760,151 @@ router.get('/wallets/summary', authenticateToken, checkAdmin, async (req, res) =
 });
 
 // ============================
+// JOB DETAILS - Full detail by Job ID (single source for admin modal)
+// ============================
+router.get('/jobs/:jobId/details', authenticateToken, checkAdmin, async (req, res) => {
+    try {
+        const rawJobId = String(req.params.jobId || '').trim();
+        if (!rawJobId) {
+            return res.status(400).json({ success: false, message: 'jobId is required' });
+        }
+
+        const objectId = toObjectIdOrNull(rawJobId);
+        let job = null;
+        if (objectId) {
+            job = await Job.findById(objectId).lean();
+        }
+        if (!job) {
+            job = await Job.findOne({ id: rawJobId }).lean();
+        }
+        if (!job) {
+            return res.status(404).json({ success: false, message: 'Job not found' });
+        }
+
+        const canonicalJobId = job._id;
+        const [timeline, walletTxRows, workerEarnings] = await Promise.all([
+            JobEventLog.find({ jobId: canonicalJobId }).sort({ timestamp: -1 }).lean(),
+            Wallet.aggregate([
+                { $match: { 'transactions.jobId': canonicalJobId } },
+                { $unwind: '$transactions' },
+                { $match: { 'transactions.jobId': canonicalJobId } },
+                {
+                    $project: {
+                        _id: 0,
+                        walletPhone: '$phone',
+                        txId: '$transactions._id',
+                        type: '$transactions.type',
+                        amount: '$transactions.amount',
+                        date: '$transactions.date',
+                        description: '$transactions.description',
+                        orderId: '$transactions.orderId',
+                        paymentId: '$transactions.paymentId',
+                        payoutId: '$transactions.payoutId',
+                        idempotencyKey: '$transactions.idempotencyKey',
+                        status: '$transactions.status',
+                        source: '$transactions.source',
+                        provider: '$transactions.provider',
+                        providerEventId: '$transactions.providerEventId',
+                        metadata: '$transactions.metadata',
+                    }
+                },
+                { $sort: { date: -1 } }
+            ]),
+            WorkerEarnings.find({ jobId: canonicalJobId })
+                .select('workerPhone amount status source provider orderId paymentId payoutId providerEventId idempotencyKey earnedAt payoutRequestedAt payoutCompletedAt metadata')
+                .sort({ earnedAt: -1 })
+                .lean(),
+        ]);
+
+        const webhookEvents = timeline.filter((e) => String(e?.source || '').toLowerCase() === 'webhook' || String(e?.actorType || '').toLowerCase() === 'webhook');
+        const paymentEvents = timeline.filter((e) => String(e?.eventType || '').toLowerCase().includes('payment') || e?.oldState?.paymentStatus !== undefined || e?.newState?.paymentStatus !== undefined);
+        const providerIds = new Set();
+        for (const tx of walletTxRows || []) {
+            if (tx?.paymentId) providerIds.add(String(tx.paymentId));
+            if (tx?.orderId) providerIds.add(String(tx.orderId));
+            if (tx?.providerEventId) providerIds.add(String(tx.providerEventId));
+        }
+        for (const ev of paymentEvents || []) {
+            if (ev?.providerEventId) providerIds.add(String(ev.providerEventId));
+        }
+        const providerIdList = Array.from(providerIds.values());
+        const reconciliationRuns = providerIdList.length
+            ? await ReconciliationRun.find({
+                mismatches: {
+                    $elemMatch: {
+                        $or: [
+                            { providerId: { $in: providerIdList } },
+                            { localId: { $in: providerIdList } },
+                        ],
+                    },
+                },
+            })
+                .sort({ startedAt: -1 })
+                .limit(20)
+                .lean()
+            : [];
+
+        return res.json({
+            success: true,
+            job,
+            details: {
+                acceptance: {
+                    acceptedBy: job.acceptedBy || null,
+                    acceptedAt: job.acceptedAt || null,
+                    acceptedWorker: job.acceptedWorker || null,
+                    acceptedWorkers: Array.isArray(job.acceptedWorkers) ? job.acceptedWorkers : [],
+                },
+                attendance: {
+                    status: job.attendanceStatus || null,
+                    time: job.attendanceTime || null,
+                    bulkWorkers: Array.isArray(job.acceptedWorkers)
+                        ? job.acceptedWorkers.map((w) => ({
+                            phone: w.phone || null,
+                            name: w.name || null,
+                            attendanceStatus: w.attendanceStatus || null,
+                            attendanceTime: w.attendanceTime || null,
+                            paymentStatus: w.paymentStatus || null,
+                            paymentMode: w.paymentMode || null,
+                            paymentTime: w.paymentTime || null,
+                        }))
+                        : [],
+                },
+                payment: {
+                    status: job.paymentStatus || null,
+                    mode: job.paymentMode || null,
+                    paymentTime: job.paymentTime || null,
+                    amount: Number(job.amount || 0),
+                    walletTransactions: walletTxRows,
+                    workerEarnings,
+                    paymentEvents,
+                    webhookEvents,
+                    reconciliation: {
+                        matchedProviderIds: providerIdList,
+                        runs: reconciliationRuns.map((run) => ({
+                            _id: run._id,
+                            runType: run.runType,
+                            provider: run.provider,
+                            status: run.status,
+                            startedAt: run.startedAt,
+                            completedAt: run.completedAt,
+                            mismatches: (run.mismatches || []).filter((m) => {
+                                const pid = String(m?.providerId || "");
+                                const lid = String(m?.localId || "");
+                                return providerIds.has(pid) || providerIds.has(lid);
+                            }),
+                        })),
+                    },
+                },
+                timeline,
+            },
+        });
+    } catch (error) {
+        console.error('Job details error:', error);
+        return res.status(500).json({ success: false, message: error.message });
+    }
+});
+
+// ============================
 // GLOBAL SEARCH - users/workers/jobs/tickets/wallets
 // ============================
 router.get('/search', authenticateToken, checkAdmin, async (req, res) => {
@@ -787,13 +934,24 @@ router.get('/search', authenticateToken, checkAdmin, async (req, res) => {
                 $or: [{ ticketId: regex }, { ticketNumber: regex }, { reporterPhone: regex }, { subject: regex }],
             }).limit(limit).sort({ createdAt: -1 }).lean(),
         ]);
+        const workerPhones = workers.map((w) => w.phone).filter(Boolean);
+        const workerUsers = await User.find({ phone: { $in: workerPhones } }).select('phone isAvailable').lean();
+        const workerUserAvailability = new Map(workerUsers.map((u) => [u.phone, !!u.isAvailable]));
 
         return res.json({
             success: true,
             query: q,
             results: {
                 users: users.map((u) => ({ _id: u._id, phone: u.phone, name: u.name, role: u.role, city: u.city })),
-                workers: workers.map((w) => ({ _id: w._id, phone: w.phone, isAvailable: w.isAvailable, rating: w.rating, isBlocked: w.isBlocked })),
+                workers: workers.map((w) => ({
+                    _id: w._id,
+                    phone: w.phone,
+                    isAvailable: workerUserAvailability.has(w.phone)
+                        ? workerUserAvailability.get(w.phone)
+                        : !!w.isAvailable,
+                    rating: w.rating,
+                    isBlocked: w.isBlocked
+                })),
                 wallets: wallets.map((w) => ({ _id: w._id, phone: w.phone, balance: w.balance, availableBalance: w.availableBalance, pocketBalance: w.pocketBalance })),
                 jobs: jobs.map((j) => ({ _id: j._id, title: j.title, contractorPhone: j.contractorPhone, status: j.status, paymentStatus: j.paymentStatus })),
                 tickets: tickets.map((t) => ({ _id: t._id, ticketId: t.ticketId, status: t.status, priority: t.priority, reporterPhone: t.reporterPhone })),
@@ -801,6 +959,98 @@ router.get('/search', authenticateToken, checkAdmin, async (req, res) => {
         });
     } catch (error) {
         console.error('Global search error:', error);
+        return res.status(500).json({ success: false, message: error.message });
+    }
+});
+
+// ============================
+// OPS ALERTS - bell notifications
+// ============================
+router.get('/ops-alerts', authenticateToken, checkAdmin, async (req, res) => {
+    try {
+        const { limit, page, skip } = parsePagination(req, 20, 100);
+        const unreadOnly = String(req.query.unreadOnly || '').toLowerCase() === 'true';
+        const viewerPhone = String(req.user?.phone || '');
+        const visibilityQuery = {
+            $or: [
+                { audiences: { $in: ['admin', 'all'] } },
+                { audiences: { $exists: false } },
+                { targetPhones: viewerPhone },
+            ],
+        };
+        const query = unreadOnly
+            ? { ...visibilityQuery, readByPhones: { $ne: viewerPhone } }
+            : visibilityQuery;
+        const [alerts, unreadCount, total] = await Promise.all([
+            OpsAlert.find(query).sort({ createdAt: -1 }).skip(skip).limit(limit).lean(),
+            OpsAlert.countDocuments({ ...visibilityQuery, readByPhones: { $ne: viewerPhone } }),
+            OpsAlert.countDocuments(query),
+        ]);
+
+        return res.json({
+            success: true,
+            page,
+            limit,
+            total,
+            unreadCount,
+            alerts: alerts.map((a) => ({
+                ...a,
+                read: Array.isArray(a.readByPhones) ? a.readByPhones.includes(viewerPhone) : false,
+            })),
+        });
+    } catch (error) {
+        console.error('Ops alerts fetch error:', error);
+        return res.status(500).json({ success: false, message: error.message });
+    }
+});
+
+router.patch('/ops-alerts/:id/read', authenticateToken, checkAdmin, async (req, res) => {
+    try {
+        const alertId = toObjectIdOrNull(req.params.id);
+        if (!alertId) return res.status(400).json({ success: false, message: 'Invalid alert id' });
+        const viewerPhone = String(req.user?.phone || '');
+        const alertDoc = await OpsAlert.findByIdAndUpdate(
+            alertId,
+            { $addToSet: { readByPhones: viewerPhone }, $set: { read: true, readAt: new Date() } },
+            { new: true }
+        ).lean();
+        if (!alertDoc) return res.status(404).json({ success: false, message: 'Alert not found' });
+        const unreadCount = await OpsAlert.countDocuments({
+            $or: [
+                { audiences: { $in: ['admin', 'all'] } },
+                { audiences: { $exists: false } },
+                { targetPhones: viewerPhone },
+            ],
+            readByPhones: { $ne: viewerPhone },
+        });
+        return res.json({
+            success: true,
+            alert: { ...alertDoc, read: true },
+            unreadCount,
+        });
+    } catch (error) {
+        console.error('Ops alert read error:', error);
+        return res.status(500).json({ success: false, message: error.message });
+    }
+});
+
+router.patch('/ops-alerts/read-all', authenticateToken, checkAdmin, async (req, res) => {
+    try {
+        const viewerPhone = String(req.user?.phone || '');
+        await OpsAlert.updateMany(
+            {
+                $or: [
+                    { audiences: { $in: ['admin', 'all'] } },
+                    { audiences: { $exists: false } },
+                    { targetPhones: viewerPhone },
+                ],
+                readByPhones: { $ne: viewerPhone },
+            },
+            { $addToSet: { readByPhones: viewerPhone }, $set: { read: true, readAt: new Date() } }
+        );
+        return res.json({ success: true, unreadCount: 0 });
+    } catch (error) {
+        console.error('Ops alert read-all error:', error);
         return res.status(500).json({ success: false, message: error.message });
     }
 });
@@ -815,9 +1065,10 @@ router.patch('/workers/:phone/control', authenticateToken, checkAdmin, async (re
 
         const worker = await Worker.findOne({ phone });
         if (!worker) return res.status(404).json({ success: false, message: 'Worker not found' });
+        const user = await User.findOne({ phone }).select('isAvailable').lean();
 
         const before = {
-            isAvailable: worker.isAvailable,
+            isAvailable: user?.isAvailable ?? worker.isAvailable ?? false,
             isBlocked: worker.isBlocked || false,
             blockedReason: worker.blockedReason || '',
             riskFlags: worker.riskFlags || [],
@@ -828,6 +1079,7 @@ router.patch('/workers/:phone/control', authenticateToken, checkAdmin, async (re
             blockReason,
             forceOffline,
             forceOfflineReason,
+            setAvailability,
             addRiskFlags = [],
             removeRiskFlags = [],
         } = req.body || {};
@@ -835,6 +1087,13 @@ router.patch('/workers/:phone/control', authenticateToken, checkAdmin, async (re
         if (typeof block === 'boolean') {
             worker.isBlocked = block;
             worker.blockedReason = block ? safeText(blockReason, 200) : '';
+            // Blocking should always force worker offline so backend remains source of truth.
+            if (block) {
+                worker.isAvailable = false;
+                worker.forceOfflineAt = new Date();
+                worker.forceOfflineReason = safeText(blockReason || 'blocked_by_admin', 200);
+                await User.updateOne({ phone }, { $set: { isAvailable: false } });
+            }
         }
 
         if (forceOffline === true) {
@@ -844,12 +1103,48 @@ router.patch('/workers/:phone/control', authenticateToken, checkAdmin, async (re
             await User.updateOne({ phone }, { $set: { isAvailable: false } });
         }
 
+        if (typeof setAvailability === 'boolean') {
+            if (setAvailability === true && worker.isBlocked) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Blocked worker cannot be set online. Unblock first.',
+                    code: 'WORKER_BLOCKED',
+                });
+            }
+            worker.isAvailable = setAvailability;
+            if (setAvailability === false) {
+                worker.forceOfflineAt = new Date();
+                worker.forceOfflineReason = safeText(forceOfflineReason || 'set_offline_by_admin', 200);
+            }
+            await User.updateOne({ phone }, { $set: { isAvailable: setAvailability } });
+        }
+
         const currentFlags = new Set(Array.isArray(worker.riskFlags) ? worker.riskFlags : []);
         for (const f of (Array.isArray(addRiskFlags) ? addRiskFlags : [])) currentFlags.add(safeText(f, 60));
         for (const f of (Array.isArray(removeRiskFlags) ? removeRiskFlags : [])) currentFlags.delete(safeText(f, 60));
         worker.riskFlags = Array.from(currentFlags).filter(Boolean);
 
         await worker.save();
+        const syncedUser = await User.findOne({ phone }).select('isAvailable').lean();
+        const availabilityTruth = syncedUser?.isAvailable ?? worker.isAvailable ?? false;
+
+        // Keep in-memory/socket state aligned for dispatch logic and worker UI.
+        try {
+            const io = req.app.get('io');
+            if (io) {
+                io.to(phone).emit('workerControlUpdated', {
+                    phone,
+                    isAvailable: !!availabilityTruth,
+                    isBlocked: !!worker.isBlocked,
+                    blockedReason: worker.blockedReason || '',
+                    forceOfflineAt: worker.forceOfflineAt || null,
+                    forceOfflineReason: worker.forceOfflineReason || '',
+                    updatedAt: new Date(),
+                });
+            }
+        } catch (emitErr) {
+            console.warn('Worker control emit warning:', emitErr?.message || emitErr);
+        }
 
         await logAdminAudit({
             req,
@@ -858,7 +1153,7 @@ router.patch('/workers/:phone/control', authenticateToken, checkAdmin, async (re
             description: 'Worker control update',
             before,
             after: {
-                isAvailable: worker.isAvailable,
+                isAvailable: availabilityTruth,
                 isBlocked: worker.isBlocked,
                 blockedReason: worker.blockedReason,
                 riskFlags: worker.riskFlags,
@@ -867,7 +1162,13 @@ router.patch('/workers/:phone/control', authenticateToken, checkAdmin, async (re
             metadata: { operation: 'worker_control' },
         });
 
-        return res.json({ success: true, worker });
+        return res.json({
+            success: true,
+            worker: {
+                ...worker.toObject(),
+                isAvailable: availabilityTruth,
+            },
+        });
     } catch (error) {
         console.error('Worker control error:', error);
         return res.status(500).json({ success: false, message: error.message });

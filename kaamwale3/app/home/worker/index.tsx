@@ -374,8 +374,38 @@ function WorkerHome() {
           const user = JSON.parse(userStr);
           setIsOnline(user.isAvailable || false);
         }
+
+        // Sync availability from backend (source of truth) on every focus.
+        try {
+          if (userPhone) {
+            let authToken = token;
+            if (!authToken) {
+              authToken = (await AsyncStorage.getItem("token")) || (await AsyncStorage.getItem("accessToken"));
+            }
+
+            if (authToken) {
+              const availabilityRes = await fetch(`${API_BASE}/worker/profile`, {
+                headers: { Authorization: `Bearer ${authToken}` },
+              });
+
+              if (availabilityRes.ok) {
+                const availabilityData = await availabilityRes.json();
+                const backendIsAvailable = !!availabilityData?.worker?.isAvailable;
+                setIsOnline(backendIsAvailable);
+
+                if (userStr) {
+                  const user = JSON.parse(userStr);
+                  user.isAvailable = backendIsAvailable;
+                  await AsyncStorage.setItem("user", JSON.stringify(user));
+                }
+              }
+            }
+          }
+        } catch (syncErr) {
+          console.warn("Could not sync availability from backend on focus:", syncErr);
+        }
       })();
-    }, [])
+    }, [token])
   );
 
   // ✅ TOKEN REFRESH HELPER - Attempt to refresh expired token
@@ -961,12 +991,48 @@ function WorkerHome() {
       }
     };
 
+    const handleWorkerControlUpdated = (data: any) => {
+      try {
+        if (!data || data.phone !== currentUserPhone) return;
+        const forcedOnlineState = !!data.isAvailable;
+        setIsOnline(forcedOnlineState);
+        AsyncStorage.getItem("user").then((userStr) => {
+          if (!userStr) return;
+          const user = JSON.parse(userStr);
+          user.isAvailable = forcedOnlineState;
+          AsyncStorage.setItem("user", JSON.stringify(user)).catch(() => {});
+        }).catch(() => {});
+
+        if (forcedOnlineState && currentLocation) {
+          socket.emit("registerWorker", {
+            lat: currentLocation.lat,
+            lon: currentLocation.lon,
+            workerType: workerType || "General",
+          });
+          socket.emit("updateWorkerLocation", {
+            lat: currentLocation.lat,
+            lon: currentLocation.lon,
+          });
+        }
+
+        if (data.isBlocked) {
+          Alert.alert(
+            "Account Blocked",
+            "You are blocked and cannot go online. Please contact support."
+          );
+        }
+      } catch (err) {
+        console.error("Error handling worker control update:", err);
+      }
+    };
+
     socket.on("newJob", handleNewJob);
     socket.on("jobUpdated", handleJobUpdated);
     socket.on("jobAccepted", handleJobAccepted);
     socket.on("jobCancelled", handleJobCancelled);
     socket.on("notificationCountUpdated", handleNotificationCountUpdate);
     socket.on("profilePhotoUpdated", handleProfilePhotoUpdate);
+    socket.on("workerControlUpdated", handleWorkerControlUpdated);
 
     return () => {
       stopLocationTracking();
@@ -976,9 +1042,10 @@ function WorkerHome() {
       socket.off("jobCancelled", handleJobCancelled);
       socket.off("notificationCountUpdated", handleNotificationCountUpdate);
       socket.off("profilePhotoUpdated", handleProfilePhotoUpdate);
+      socket.off("workerControlUpdated", handleWorkerControlUpdated);
       console.log("[WorkerHome] job listeners removed (unmounted)");
     };
-  }, [currentLocation, workerName, currentUserPhone]); // ✅ REMOVED currentJob - use currentJobRef instead to prevent re-subscription
+  }, [currentLocation, workerName, currentUserPhone, workerType]); // ✅ REMOVED currentJob - use currentJobRef instead to prevent re-subscription
 
   // ---------------- GET ADDRESS ----------------
   const getAddressFromCoords = async (lat: number, lon: number) => {
@@ -1223,6 +1290,9 @@ function WorkerHome() {
     }
 
     const newStatus = !isOnline;
+    if (!togglingStatus) {
+      setTogglingStatus(true);
+    }
 
     try {
       // ✅ Get fresh location when going online
@@ -1269,6 +1339,13 @@ function WorkerHome() {
       }
 
       if (!res.ok) {
+        if (data?.code === "WORKER_BLOCKED") {
+          Alert.alert(
+            "Account Blocked",
+            "You are blocked and cannot go online. Please contact support."
+          );
+          return;
+        }
         const backendMessage = data?.message || "Failed to update availability";
         throw new Error(backendMessage);
       }
@@ -1302,16 +1379,26 @@ function WorkerHome() {
         }
       }
 
-      // Re-register worker location when going online so backend matching map is always fresh.
-      if (newStatus && currentLocation) {
+      // Re-register worker with freshest location so matching map is never stale.
+      const locationToEmit =
+        newStatus && data?.user?.latitude && data?.user?.longitude
+          ? { lat: data.user.latitude, lon: data.user.longitude }
+          : newStatus && locationForToggle
+          ? { lat: locationForToggle.latitude, lon: locationForToggle.longitude }
+          : newStatus && currentLocation
+          ? { lat: currentLocation.lat, lon: currentLocation.lon }
+          : null;
+
+      if (locationToEmit) {
+        setCurrentLocation(locationToEmit);
         socket.emit("registerWorker", {
-          lat: currentLocation.lat,
-          lon: currentLocation.lon,
+          lat: locationToEmit.lat,
+          lon: locationToEmit.lon,
           workerType: workerType || "General",
         });
         socket.emit("updateWorkerLocation", {
-          lat: currentLocation.lat,
-          lon: currentLocation.lon,
+          lat: locationToEmit.lat,
+          lon: locationToEmit.lon,
         });
         console.log("📡 Re-registered worker location after going online");
       }

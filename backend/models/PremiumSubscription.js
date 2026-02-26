@@ -5,7 +5,7 @@ const premiumSubscriptionSchema = new mongoose.Schema(
     subscriptionId: { type: String, required: true, unique: true, index: true },
     userPhone: { type: String, required: true, index: true },
     userName: { type: String, default: "" },
-    premiumTxnId: { type: String, default: null, index: true },
+    premiumTxnId: { type: String, default: null },
     eventType: {
       type: String,
       enum: ["subscription_started", "subscription_renewed", "subscription_cancelled", "subscription_failed"],
@@ -33,7 +33,7 @@ const premiumSubscriptionSchema = new mongoose.Schema(
     gatewaySubscriptionId: { type: String, default: null, index: true },
     providerSubId: { type: String, default: null, index: true },
     invoiceId: { type: String, default: null, index: true },
-    walletTxnId: { type: String, default: null, index: true },
+    walletTxnId: { type: String, default: null },
     idempotencyKey: { type: String, default: null, index: true },
     startAt: { type: Date, default: Date.now, index: true },
     endAt: { type: Date, default: null, index: true },

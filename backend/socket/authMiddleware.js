@@ -25,11 +25,13 @@ function attachSocketAuthMiddleware(io, { jwt, jwtSecret, WorkerModel, User, con
 
               let mainSkill = null;
               let expectedWage = null;
+              let isAvailable = false;
               try {
                 const userRecord = await User.findOne({ phone: user.phone });
                 if (userRecord) {
                   mainSkill = userRecord.mainSkill;
                   expectedWage = userRecord.expectedWage;
+                  isAvailable = !!userRecord.isAvailable;
                 }
               } catch (e) {
                 console.error("Error fetching user mainSkill/expectedWage during reconnection:", e);
@@ -44,7 +46,7 @@ function attachSocketAuthMiddleware(io, { jwt, jwtSecret, WorkerModel, User, con
                 mainSkill,
                 expectedWage,
                 socketId: socket.id,
-                isAvailable: existing.isAvailable,
+                isAvailable,
               });
               console.log(`Re-associated existing worker session for ${user.phone}`);
             }

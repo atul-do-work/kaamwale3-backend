@@ -154,6 +154,101 @@
             box-shadow: 0 6px 16px rgba(239, 68, 68, 0.4);
         }
 
+        .alert-bell-wrap {
+            position: relative;
+        }
+
+        .alert-bell-btn {
+            width: 42px;
+            height: 42px;
+            border: none;
+            border-radius: 10px;
+            cursor: pointer;
+            background: linear-gradient(135deg, #1f2937 0%, #111827 100%);
+            color: #fff;
+            font-size: 16px;
+            box-shadow: 0 4px 10px rgba(17,24,39,0.25);
+            position: relative;
+        }
+
+        .alert-badge {
+            position: absolute;
+            top: -6px;
+            right: -6px;
+            min-width: 18px;
+            height: 18px;
+            border-radius: 999px;
+            background: #ef4444;
+            color: #fff;
+            font-size: 11px;
+            font-weight: 700;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 0 5px;
+        }
+
+        .alert-panel {
+            position: absolute;
+            top: 50px;
+            right: 0;
+            width: 420px;
+            max-height: 460px;
+            overflow: hidden;
+            border-radius: 12px;
+            background: #fff;
+            box-shadow: 0 20px 35px rgba(0,0,0,0.2);
+            border: 1px solid #e5e7eb;
+            display: none;
+            z-index: 1200;
+        }
+
+        .alert-panel.show {
+            display: block;
+        }
+
+        .alert-panel-head {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 12px 14px;
+            border-bottom: 1px solid #e5e7eb;
+        }
+
+        .alert-panel-list {
+            max-height: 390px;
+            overflow-y: auto;
+        }
+
+        .alert-item {
+            padding: 10px 12px;
+            border-bottom: 1px solid #f1f5f9;
+            cursor: pointer;
+        }
+
+        .alert-item.unread {
+            background: #f8fafc;
+            border-left: 3px solid #ef4444;
+        }
+
+        .alert-item-title {
+            font-size: 13px;
+            font-weight: 700;
+            color: #0f172a;
+            margin-bottom: 4px;
+        }
+
+        .alert-item-meta {
+            font-size: 11px;
+            color: #475569;
+            margin-bottom: 4px;
+        }
+
+        .alert-item-msg {
+            font-size: 12px;
+            color: #334155;
+        }
+
         /* Stats Grid */
         .stats-grid {
             display: grid;
@@ -704,6 +799,21 @@
             <div class="header">
                 <h1>Admin Dashboard</h1>
                 <div class="user-info">
+                    <div class="alert-bell-wrap">
+                        <button class="alert-bell-btn" onclick="toggleOpsAlertsPanel(event)" title="Ops Alerts">
+                            <i class="fas fa-bell"></i>
+                            <span id="opsAlertBadge" class="alert-badge" style="display:none;">0</span>
+                        </button>
+                        <div id="opsAlertPanel" class="alert-panel">
+                            <div class="alert-panel-head">
+                                <strong>Ops Alerts</strong>
+                                <button class="btn-small btn-view" onclick="markAllOpsAlertsRead()">Mark all read</button>
+                            </div>
+                            <div id="opsAlertList" class="alert-panel-list">
+                                <div style="padding:12px;color:#64748b;">Loading...</div>
+                            </div>
+                        </div>
+                    </div>
                     <span id="userPhone">Loading...</span>
                     <button class="btn" onclick="logout()">Logout</button>
                 </div>
@@ -937,7 +1047,11 @@
             <div id="jobs" class="data-section">
                 <div class="section-header">
                     <h2>All Jobs</h2>
-                    <input type="text" class="search-box" id="jobSearch" placeholder="Search by title...">
+                    <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+                        <input type="text" class="search-box" id="jobSearch" placeholder="Search by title/phone/job ID..." style="min-width:260px;">
+                        <input type="text" class="search-box" id="jobIdQuickSearch" placeholder="Enter Job ID" style="min-width:220px;">
+                        <button class="btn-small btn-view" onclick="openJobIdQuickView()">Open</button>
+                    </div>
                 </div>
                 <div class="table-wrapper">
                     <table>
@@ -1244,6 +1358,10 @@
                             <input id="opsRiskAdd" class="search-box" placeholder="Add risk flag">
                             <input id="opsRiskRemove" class="search-box" placeholder="Remove risk flag">
                         </div>
+                        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px;">
+                            <button class="btn-small btn-approve" onclick="opsSetWorkerAvailability(true)">Set Online</button>
+                            <button class="btn-small btn-view" onclick="opsSetWorkerAvailability(false)">Set Offline</button>
+                        </div>
                         <button class="btn-small btn-view" style="margin-top:8px;" onclick="opsForceOffline()">Force Offline</button>
                     </div>
                 </div>
@@ -1392,6 +1510,7 @@
         let currentBankAccountId = null;
         let activeWalletDetailsPhone = null;
         let authRedirectInProgress = false;
+        let opsAlertPollTimer = null;
 
         function getAdminToken() {
             let token = localStorage.getItem('adminToken') || localStorage.getItem('token') || '';
@@ -1415,6 +1534,19 @@
             checkAuth();
             setupNavigation();
             loadDashboard();
+            loadOpsAlerts();
+            if (!opsAlertPollTimer) {
+                opsAlertPollTimer = setInterval(loadOpsAlerts, 30000);
+            }
+            document.getElementById('jobSearch')?.addEventListener('input', applyJobSearch);
+            document.getElementById('jobIdQuickSearch')?.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') openJobIdQuickView();
+            });
+            document.addEventListener('click', (e) => {
+                const panel = document.getElementById('opsAlertPanel');
+                const wrap = e.target?.closest?.('.alert-bell-wrap');
+                if (panel && !wrap) panel.classList.remove('show');
+            });
         });
 
         // Check authentication
@@ -1487,6 +1619,70 @@
                 else if (sectionId === 'premium-subscriptions') loadPremiumSubscriptions();
                 else if (sectionId === 'premium-reconciliation') loadPremiumReconciliation();
                 else if (sectionId === 'ops-console') loadOpsConsole();
+            }
+        }
+
+        function toggleOpsAlertsPanel(e) {
+            if (e && typeof e.stopPropagation === 'function') e.stopPropagation();
+            const panel = document.getElementById('opsAlertPanel');
+            if (!panel) return;
+            panel.classList.toggle('show');
+            if (panel.classList.contains('show')) loadOpsAlerts();
+        }
+
+        function alertSeverityColor(severity) {
+            const s = String(severity || '').toLowerCase();
+            if (s === 'critical') return '#dc2626';
+            if (s === 'warning') return '#d97706';
+            return '#2563eb';
+        }
+
+        async function loadOpsAlerts() {
+            try {
+                const data = await adminApi('/admin/ops-alerts?limit=20');
+                const alerts = Array.isArray(data.alerts) ? data.alerts : [];
+                const unreadCount = Number(data.unreadCount || 0);
+
+                const badge = document.getElementById('opsAlertBadge');
+                if (badge) {
+                    badge.style.display = unreadCount > 0 ? 'flex' : 'none';
+                    badge.textContent = unreadCount > 99 ? '99+' : String(unreadCount);
+                }
+
+                const list = document.getElementById('opsAlertList');
+                if (!list) return;
+                if (!alerts.length) {
+                    list.innerHTML = '<div style="padding:12px;color:#64748b;">No alerts</div>';
+                    return;
+                }
+
+                list.innerHTML = alerts.map((a) => `
+                    <div class="alert-item ${a.read ? '' : 'unread'}" onclick="markOpsAlertRead('${a._id}')">
+                        <div class="alert-item-title" style="color:${alertSeverityColor(a.severity)}">${escapeHtml(a.title || 'Ops Alert')}</div>
+                        <div class="alert-item-meta">${escapeHtml(a.alertType || 'general')} | ${escapeHtml(a.severity || 'warning')} | ${new Date(a.createdAt).toLocaleString()}</div>
+                        <div class="alert-item-msg">${escapeHtml((a.message || '').slice(0, 180))}</div>
+                    </div>
+                `).join('');
+            } catch (err) {
+                console.error('Ops alerts load error:', err);
+            }
+        }
+
+        async function markOpsAlertRead(alertId) {
+            try {
+                await adminApi(`/admin/ops-alerts/${encodeURIComponent(alertId)}/read`, { method: 'PATCH' });
+                await loadOpsAlerts();
+            } catch (err) {
+                console.error('Ops alert read error:', err);
+            }
+        }
+
+        async function markAllOpsAlertsRead() {
+            try {
+                await adminApi('/admin/ops-alerts/read-all', { method: 'PATCH' });
+                await loadOpsAlerts();
+            } catch (err) {
+                console.error('Ops alert read-all error:', err);
             }
         }
 
@@ -1729,6 +1925,8 @@
             }
         }
 
+        let cachedAdminJobs = [];
+
         // Load jobs
         async function loadJobs() {
             try {
@@ -1738,28 +1936,66 @@
                 });
 
                 const data = await res.json();
-                const tbody = document.getElementById('jobsTable');
-
                 if (data.success && data.jobs) {
-                    tbody.innerHTML = data.jobs.slice(0, 50).map(job => `
-                        <tr>
-                            <td>${job.title}</td>
-                            <td>${job.contractorName || '-'}</td>
-                            <td>${job.acceptedBy || '-'}</td>
-                            <td>₹${job.amount}</td>
-                            <td><span class="badge pending">${job.status || 'open'}</span></td>
-                            <td><span class="badge ${job.paymentStatus === 'Paid' ? 'approved' : 'pending'}">${job.paymentStatus || 'pending'}</span></td>
-                            <td>${job.contractorRating?.stars ? `${job.contractorRating.stars} ⭐` : '-'}</td>
-                            <td><button class="btn-small btn-view" onclick="showJobDetails('${job._id}')">View</button></td>
-                        </tr>
-                    `).join('');
+                    cachedAdminJobs = Array.isArray(data.jobs) ? data.jobs : [];
+                    renderJobsTable(cachedAdminJobs);
                 } else {
-                    tbody.innerHTML = '<tr><td colspan="8">No jobs found</td></tr>';
+                    cachedAdminJobs = [];
+                    renderJobsTable([]);
                 }
             } catch (err) {
                 console.error('Error loading jobs:', err);
                 document.getElementById('jobsTable').innerHTML = '<tr><td colspan="8">Error loading data</td></tr>';
             }
+        }
+
+        function renderJobsTable(jobs) {
+            const tbody = document.getElementById('jobsTable');
+            const q = String(document.getElementById('jobSearch')?.value || '').trim().toLowerCase();
+            const filtered = (Array.isArray(jobs) ? jobs : []).filter((job) => {
+                if (!q) return true;
+                return [
+                    job._id,
+                    job.id,
+                    job.title,
+                    job.contractorName,
+                    job.contractorPhone,
+                    job.acceptedBy,
+                ]
+                    .filter(Boolean)
+                    .some((v) => String(v).toLowerCase().includes(q));
+            });
+
+            if (!filtered.length) {
+                tbody.innerHTML = '<tr><td colspan="8">No jobs found</td></tr>';
+                return;
+            }
+
+            tbody.innerHTML = filtered.slice(0, 100).map(job => `
+                <tr>
+                    <td>${job.title}</td>
+                    <td>${job.contractorName || '-'}</td>
+                    <td>${job.acceptedBy || '-'}</td>
+                    <td>₹${job.amount}</td>
+                    <td><span class="badge pending">${job.status || 'open'}</span></td>
+                    <td><span class="badge ${job.paymentStatus === 'Paid' ? 'approved' : 'pending'}">${job.paymentStatus || 'pending'}</span></td>
+                    <td>${job.contractorRating?.stars ? `${job.contractorRating.stars} ⭐` : '-'}</td>
+                    <td><button class="btn-small btn-view" onclick="showJobDetails('${job._id}')">View</button></td>
+                </tr>
+            `).join('');
+        }
+
+        function applyJobSearch() {
+            renderJobsTable(cachedAdminJobs);
+        }
+
+        function openJobIdQuickView() {
+            const jobId = String(document.getElementById('jobIdQuickSearch')?.value || '').trim();
+            if (!jobId) {
+                alert('Enter Job ID');
+                return;
+            }
+            showJobDetails(jobId);
         }
 
         // Load bank accounts
@@ -2376,26 +2612,65 @@
         let currentJobData = null;
         async function showJobDetails(jobId) {
             try {
-                const token = localStorage.getItem('adminToken');
-                const res = await fetch(`${API_BASE}/admin/jobs`, {
-                    headers: { 'Authorization': `Bearer ${token}` }
-                });
-
-                const data = await res.json();
-                if (data.success && data.jobs) {
-                    const job = data.jobs.find(j => j._id === jobId);
-                    if (job) {
-                        currentJobData = job;
-                        const content = document.getElementById('jobDetailsContent');
-                        
-                        const formatDate = (date) => date ? new Date(date).toLocaleString() : '-';
-                        const getPaymentStatusClass = (status) => {
-                            if (!status) return 'pending';
-                            if (status.toLowerCase() === 'paid') return 'approved';
-                            return 'pending';
-                        };
-                        
-                        content.innerHTML = `
+                const data = await adminApi(`/admin/jobs/${encodeURIComponent(jobId)}/details`);
+                if (data.success && data.job) {
+                    const job = data.job;
+                    const details = data.details || {};
+                    const payment = details.payment || {};
+                    const timeline = Array.isArray(details.timeline) ? details.timeline : [];
+                    const walletTransactions = Array.isArray(payment.walletTransactions) ? payment.walletTransactions : [];
+                    const webhookEvents = Array.isArray(payment.webhookEvents) ? payment.webhookEvents : [];
+                    const bulkWorkers = Array.isArray(job.acceptedWorkers) ? job.acceptedWorkers : [];
+                    currentJobData = job;
+                    const content = document.getElementById('jobDetailsContent');
+                    
+                    const formatDate = (date) => date ? new Date(date).toLocaleString() : '-';
+                    const getPaymentStatusClass = (status) => {
+                        if (!status) return 'pending';
+                        if (String(status).toLowerCase() === 'paid') return 'approved';
+                        return 'pending';
+                    };
+                    const timelineHtml = timeline.length ? timeline.map((e) => `
+                        <tr>
+                            <td>${e.eventType || '-'}</td>
+                            <td>${e.source || '-'}</td>
+                            <td>${e.actorType || '-'}</td>
+                            <td>${e.actorPhone || '-'}</td>
+                            <td>${formatDate(e.timestamp || e.createdAt)}</td>
+                        </tr>
+                    `).join('') : '<tr><td colspan="5">No timeline events</td></tr>';
+                    const walletTxHtml = walletTransactions.length ? walletTransactions.map((tx) => `
+                        <tr>
+                            <td>${tx.walletPhone || '-'}</td>
+                            <td>${tx.type || '-'}</td>
+                            <td>₹${Number(tx.amount || 0)}</td>
+                            <td>${tx.status || '-'}</td>
+                            <td>${tx.source || '-'} / ${tx.provider || '-'}</td>
+                            <td>${tx.paymentId || '-'}</td>
+                            <td>${tx.orderId || '-'}</td>
+                            <td>${formatDate(tx.date)}</td>
+                        </tr>
+                    `).join('') : '<tr><td colspan="8">No wallet transactions found for this job</td></tr>';
+                    const webhookHtml = webhookEvents.length ? webhookEvents.map((e) => `
+                        <tr>
+                            <td>${e.eventType || '-'}</td>
+                            <td>${e.provider || '-'}</td>
+                            <td>${e.providerEventId || '-'}</td>
+                            <td>${formatDate(e.timestamp || e.createdAt)}</td>
+                        </tr>
+                    `).join('') : '<tr><td colspan="4">No webhook events</td></tr>';
+                    const bulkWorkersHtml = bulkWorkers.length ? bulkWorkers.map((w) => `
+                        <tr>
+                            <td>${w.name || '-'}</td>
+                            <td>${w.phone || '-'}</td>
+                            <td>${w.attendanceStatus || '-'}</td>
+                            <td>${w.paymentStatus || '-'}</td>
+                            <td>${w.paymentMode || '-'}</td>
+                            <td>${formatDate(w.paymentTime)}</td>
+                        </tr>
+                    `).join('') : '<tr><td colspan="6">No bulk worker entries</td></tr>';
+                    
+                    content.innerHTML = `
                             <!-- Basic Job Information -->
                             <div style="margin-bottom: 20px;">
                                 <h4>${job.title}</h4>
@@ -2451,6 +2726,27 @@
                             </div>
                             ` : `<div style="background: #fff3cd; padding: 10px; border-radius: 5px; margin-bottom: 20px;"><strong>⚠️ Not yet accepted by any worker</strong></div>`}
 
+                            ${bulkWorkers.length ? `
+                            <div style="border: 1px solid #ddd; padding: 15px; border-radius: 5px; margin-bottom: 20px;">
+                                <h5 style="margin-top: 0; margin-bottom: 10px;">Bulk Worker Entries</h5>
+                                <div style="overflow-x:auto;">
+                                    <table style="width:100%; border-collapse: collapse;">
+                                        <thead>
+                                            <tr>
+                                                <th style="text-align:left; border-bottom:1px solid #eee; padding:6px;">Name</th>
+                                                <th style="text-align:left; border-bottom:1px solid #eee; padding:6px;">Phone</th>
+                                                <th style="text-align:left; border-bottom:1px solid #eee; padding:6px;">Attendance</th>
+                                                <th style="text-align:left; border-bottom:1px solid #eee; padding:6px;">Payment</th>
+                                                <th style="text-align:left; border-bottom:1px solid #eee; padding:6px;">Mode</th>
+                                                <th style="text-align:left; border-bottom:1px solid #eee; padding:6px;">Payment Time</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>${bulkWorkersHtml}</tbody>
+                                    </table>
+                                </div>
+                            </div>
+                            ` : ''}
+
                             <!-- Attendance Information -->
                             ${job.attendanceStatus ? `
                             <div style="border: 1px solid #ddd; padding: 15px; border-radius: 5px; margin-bottom: 20px;">
@@ -2478,6 +2774,65 @@
                                         <p style="margin: 5px 0;"><strong>Payment Time:</strong> ${formatDate(job.paymentTime)}</p>
                                         <p style="margin: 5px 0;"><strong>Amount:</strong> ₹${job.amount}</p>
                                     </div>
+                                </div>
+                            </div>
+
+                            <!-- Payment Gateway + Wallet Trace -->
+                            <div style="border: 1px solid #ddd; padding: 15px; border-radius: 5px; margin-bottom: 20px;">
+                                <h5 style="margin-top: 0; margin-bottom: 10px;">Payment Trace (Cash/Online)</h5>
+                                <div style="overflow-x:auto;">
+                                    <table style="width:100%; border-collapse: collapse;">
+                                        <thead>
+                                            <tr>
+                                                <th style="text-align:left; border-bottom:1px solid #eee; padding:6px;">Wallet Phone</th>
+                                                <th style="text-align:left; border-bottom:1px solid #eee; padding:6px;">Type</th>
+                                                <th style="text-align:left; border-bottom:1px solid #eee; padding:6px;">Amount</th>
+                                                <th style="text-align:left; border-bottom:1px solid #eee; padding:6px;">Status</th>
+                                                <th style="text-align:left; border-bottom:1px solid #eee; padding:6px;">Source/Provider</th>
+                                                <th style="text-align:left; border-bottom:1px solid #eee; padding:6px;">Payment ID</th>
+                                                <th style="text-align:left; border-bottom:1px solid #eee; padding:6px;">Order ID</th>
+                                                <th style="text-align:left; border-bottom:1px solid #eee; padding:6px;">Time</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>${walletTxHtml}</tbody>
+                                    </table>
+                                </div>
+                            </div>
+
+                            <!-- Webhook Events -->
+                            <div style="border: 1px solid #ddd; padding: 15px; border-radius: 5px; margin-bottom: 20px;">
+                                <h5 style="margin-top: 0; margin-bottom: 10px;">Webhook Events</h5>
+                                <div style="overflow-x:auto;">
+                                    <table style="width:100%; border-collapse: collapse;">
+                                        <thead>
+                                            <tr>
+                                                <th style="text-align:left; border-bottom:1px solid #eee; padding:6px;">Event</th>
+                                                <th style="text-align:left; border-bottom:1px solid #eee; padding:6px;">Provider</th>
+                                                <th style="text-align:left; border-bottom:1px solid #eee; padding:6px;">Provider Event ID</th>
+                                                <th style="text-align:left; border-bottom:1px solid #eee; padding:6px;">Time</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>${webhookHtml}</tbody>
+                                    </table>
+                                </div>
+                            </div>
+
+                            <!-- Full Job Timeline -->
+                            <div style="border: 1px solid #ddd; padding: 15px; border-radius: 5px; margin-bottom: 20px;">
+                                <h5 style="margin-top: 0; margin-bottom: 10px;">Full Job Timeline</h5>
+                                <div style="overflow-x:auto;">
+                                    <table style="width:100%; border-collapse: collapse;">
+                                        <thead>
+                                            <tr>
+                                                <th style="text-align:left; border-bottom:1px solid #eee; padding:6px;">Event</th>
+                                                <th style="text-align:left; border-bottom:1px solid #eee; padding:6px;">Source</th>
+                                                <th style="text-align:left; border-bottom:1px solid #eee; padding:6px;">Actor Type</th>
+                                                <th style="text-align:left; border-bottom:1px solid #eee; padding:6px;">Actor Phone</th>
+                                                <th style="text-align:left; border-bottom:1px solid #eee; padding:6px;">Time</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>${timelineHtml}</tbody>
+                                    </table>
                                 </div>
                             </div>
 
@@ -2515,8 +2870,7 @@
                             </div>
                             ` : ''}
                         `;
-                        document.getElementById('jobModal').classList.add('show');
-                    }
+                    document.getElementById('jobModal').classList.add('show');
                 }
             } catch (err) {
                 console.error('Error showing job details:', err);
@@ -3082,6 +3436,31 @@
                     body: JSON.stringify({ forceOffline: true, forceOfflineReason: 'forced_by_admin_console' }),
                 });
                 renderTable('opsSearchOut', [{ key: 'phone', label: 'Phone' }, { key: 'isAvailable', label: 'Available' }, { key: 'forceOfflineAt', label: 'Forced At' }, { key: 'forceOfflineReason', label: 'Reason' }], [data.worker || {}]);
+            } catch (err) { alert(err.message); }
+        }
+
+        async function opsSetWorkerAvailability(isAvailable) {
+            try {
+                const phone = (document.getElementById('opsWorkerPhone').value || '').trim();
+                if (!phone) return alert('Enter worker phone');
+                const data = await adminApi(`/admin/workers/${encodeURIComponent(phone)}/control`, {
+                    method: 'PATCH',
+                    body: JSON.stringify({
+                        setAvailability: !!isAvailable,
+                        forceOfflineReason: isAvailable ? '' : 'set_offline_by_admin_console',
+                    }),
+                });
+                renderTable(
+                    'opsSearchOut',
+                    [
+                        { key: 'phone', label: 'Phone' },
+                        { key: 'isAvailable', label: 'Available' },
+                        { key: 'isBlocked', label: 'Blocked' },
+                        { key: 'blockedReason', label: 'Blocked Reason' },
+                        { key: 'forceOfflineReason', label: 'Offline Reason' },
+                    ],
+                    [data.worker || {}]
+                );
             } catch (err) { alert(err.message); }
         }
 

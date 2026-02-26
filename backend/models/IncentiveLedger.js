@@ -51,6 +51,16 @@ const incentiveLedgerSchema = new mongoose.Schema({
     consecutiveDays: { type: Number, required: true },
     totalHours: { type: Number, required: true },
     cancellationsInWindow: { type: Number, required: true, default: 0 },
+    requiredDailyHours: { type: Number, default: 8 },
+    requiredDaysFor5: { type: Number, default: 5 },
+    fiveDayWindow: {
+      daysMetMinimumHours: { type: Number, default: 0 },
+      allDaysHaveMinHours: { type: Boolean, default: false },
+      startDate: { type: String, default: null },
+      endDate: { type: String, default: null },
+      failedDates: { type: [String], default: [] },
+      failureReason: { type: String, default: null },
+    },
     lastWorkDate: String, // YYYY-MM-DD format
     verifiedAt: Date
   },

@@ -59,6 +59,13 @@ workerEarningsSchema.index({ workerPhone: 1, earnedAt: -1 });
 workerEarningsSchema.index({ status: 1, payoutRequestedAt: 1 });
 workerEarningsSchema.index({ workerPhone: 1, jobId: 1 }, { unique: true });
 workerEarningsSchema.index({ paymentId: 1 }, { unique: true, sparse: true });
+workerEarningsSchema.index(
+  { workerPhone: 1, jobId: 1, paymentId: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { paymentId: { $type: "string" } },
+  }
+);
 workerEarningsSchema.index({ idempotencyKey: 1 }, { sparse: true });
 workerEarningsSchema.index({ providerEventId: 1 }, { sparse: true });
 

@@ -5,7 +5,7 @@ const workerSchema = new mongoose.Schema({
   skills: { type: [String], default: [] },
   mainSkill: { type: String, default: null }, // ✅ Primary skill for quick display
   rating: { type: Number, default: 5 },
-  isAvailable: { type: Boolean, default: true },
+  isAvailable: { type: Boolean, default: false },
   socketId: { type: String, default: "" },
   isBlocked: { type: Boolean, default: false },
   blockedReason: { type: String, default: "" },

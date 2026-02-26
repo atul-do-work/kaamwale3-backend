@@ -3,10 +3,23 @@ const mongoose = require('mongoose');
 const JOB_STATUS = ['pending', 'posted', 'offered', 'accepted', 'in_progress', 'completed', 'cancelled', 'expired'];
 const PAYMENT_STATUS = ['pending', 'authorized', 'captured', 'failed', 'refunded', 'Paid', 'Pending', 'Failed'];
 
+function normalizePaymentStatusValue(value) {
+  const v = String(value || "").trim();
+  const lower = v.toLowerCase();
+  if (!v) return v;
+  if (lower === "paid") return "Paid";
+  if (lower === "pending") return "Pending";
+  if (lower === "failed") return "Failed";
+  if (lower === "authorized") return "authorized";
+  if (lower === "captured") return "captured";
+  if (lower === "refunded") return "refunded";
+  return v;
+}
+
 const ALLOWED_JOB_STATUS_TRANSITIONS = {
-  pending: ['offered', 'accepted', 'cancelled', 'expired', 'posted'],
-  posted: ['offered', 'accepted', 'cancelled', 'expired'],
-  offered: ['accepted', 'cancelled', 'expired'],
+  pending: ['offered', 'accepted', 'cancelled', 'expired', 'posted', 'completed'],
+  posted: ['offered', 'accepted', 'cancelled', 'expired', 'completed'],
+  offered: ['accepted', 'cancelled', 'expired', 'completed'],
   accepted: ['in_progress', 'cancelled'],
   in_progress: ['completed', 'cancelled'],
   completed: [],
@@ -68,7 +81,7 @@ const jobSchema = new mongoose.Schema(
         acceptedAt: Date,
         attendanceStatus: { type: String, enum: ["Present", "Absent", null], default: null },
         attendanceTime: Date,
-        paymentStatus: { type: String, enum: PAYMENT_STATUS, default: "Pending" },
+        paymentStatus: { type: String, enum: PAYMENT_STATUS, default: "Pending", set: normalizePaymentStatusValue },
         paymentMode: String,
         paymentTime: Date,
         rating: {
@@ -92,7 +105,7 @@ const jobSchema = new mongoose.Schema(
     cancellationReasonDescription: { type: String, default: null },
     attendanceStatus: String,
     attendanceTime: Date,
-    paymentStatus: { type: String, enum: PAYMENT_STATUS, default: 'pending' },
+    paymentStatus: { type: String, enum: PAYMENT_STATUS, default: 'Pending', set: normalizePaymentStatusValue },
     paymentMode: String,
     paymentTime: Date,
     offerExpiresAt: { type: Date, index: true },
@@ -143,9 +156,28 @@ jobSchema.pre('validate', function syncGeoLocation() {
       coordinates: [this.lon, this.lat],
     };
   }
+
+  if (this.paymentStatus) {
+    this.paymentStatus = normalizePaymentStatusValue(this.paymentStatus);
+  }
+  if (Array.isArray(this.acceptedWorkers)) {
+    for (const worker of this.acceptedWorkers) {
+      if (worker && worker.paymentStatus) {
+        worker.paymentStatus = normalizePaymentStatusValue(worker.paymentStatus);
+      }
+    }
+  }
 });
 
 jobSchema.pre('save', async function enforceTransitionsOnSave() {
+  // Enforce terminal consistency: paid jobs should not remain in non-terminal in-flight states.
+  if (String(this.paymentStatus || "").toLowerCase() === "paid") {
+    const currentStatus = String(this.status || "").toLowerCase();
+    if (currentStatus !== "completed" && currentStatus !== "cancelled" && currentStatus !== "expired") {
+      this.status = "completed";
+    }
+  }
+
   if (this.isNew) return;
 
   const existing = await this.constructor.findById(this._id).select('status paymentStatus').lean();
@@ -168,8 +200,28 @@ jobSchema.pre('save', async function enforceTransitionsOnSave() {
 
 jobSchema.pre('findOneAndUpdate', async function enforceTransitions() {
   const update = this.getUpdate() || {};
-  const nextStatus = getUpdatedValue(update, 'status');
-  const nextPaymentStatus = getUpdatedValue(update, 'paymentStatus');
+  const rawNextPaymentStatus = getUpdatedValue(update, 'paymentStatus');
+  const nextPaymentStatus = rawNextPaymentStatus ? normalizePaymentStatusValue(rawNextPaymentStatus) : rawNextPaymentStatus;
+  const requestedStatus = getUpdatedValue(update, 'status');
+  let nextStatus = requestedStatus;
+
+  if (nextPaymentStatus && rawNextPaymentStatus !== nextPaymentStatus) {
+    update.$set = update.$set || {};
+    update.$set.paymentStatus = nextPaymentStatus;
+    this.setUpdate(update);
+  }
+
+  // Enforce terminal consistency for update operations too.
+  if (String(nextPaymentStatus || "").toLowerCase() === "paid") {
+    const existingForPaid = await this.model.findOne(this.getQuery()).select('status').lean();
+    const existingStatus = String(existingForPaid?.status || "").toLowerCase();
+    if (existingStatus !== "cancelled" && existingStatus !== "expired") {
+      update.$set = update.$set || {};
+      update.$set.status = "completed";
+      this.setUpdate(update);
+      nextStatus = "completed";
+    }
+  }
 
   if (!nextStatus && !nextPaymentStatus) {
     return;

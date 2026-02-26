@@ -1,13 +1,35 @@
 const express = require("express");
 const path = require("path");
+const crypto = require("crypto");
 const { scheduleDispatchState, cancelDispatchState } = require("../services/dispatchStateService");
 const { isPremiumEntitled } = require("../utils/premiumEntitlement");
 const { getPlanEntitlements } = require("../config/premiumEntitlements");
+const { buildLogContext, info, error } = require("../utils/logContext");
 
 function getIdempotencyKey(req) {
   const fromHeader = (req.headers["x-idempotency-key"] || "").toString().trim();
   const fromBody = (req.body?.idempotencyKey || "").toString().trim();
   return fromHeader || fromBody || null;
+}
+
+function buildAutoIdempotencyKey({ phone, title, description, amount, lat, lon, date, numberOfDays, bulkHiring, requiredWorkers }) {
+  // 30-second time bucket prevents accidental duplicate retries while allowing legitimate future reposts.
+  const bucket = Math.floor(Date.now() / 30000);
+  const payload = [
+    String(phone || ""),
+    String(title || "").trim().toLowerCase(),
+    String(description || "").trim().toLowerCase(),
+    String(amount || ""),
+    String(lat || ""),
+    String(lon || ""),
+    String(date || ""),
+    String(numberOfDays || "1"),
+    String(Boolean(bulkHiring)),
+    String(requiredWorkers || "1"),
+    String(bucket),
+  ].join("|");
+  const digest = crypto.createHash("sha1").update(payload).digest("hex").slice(0, 20);
+  return `auto:${digest}`;
 }
 
 function createJobsCoreRouter({
@@ -50,29 +72,40 @@ function createJobsCoreRouter({
   router.post("/jobs/post", authenticateToken, async (req, res) => {
     try {
       const { title, description, workerType, amount, lat, lon, date, imageUrl, startTime, endTime, bulkHiring, requiredWorkers, numberOfDays } = req.body;
-      const idempotencyKey = getIdempotencyKey(req);
+      const idempotencyKey =
+        getIdempotencyKey(req) ||
+        buildAutoIdempotencyKey({
+          phone: req.user.phone,
+          title,
+          description,
+          amount,
+          lat,
+          lon,
+          date,
+          numberOfDays,
+          bulkHiring,
+          requiredWorkers,
+        });
       const walletIdempotencyKey = idempotencyKey ? `${req.user.phone}:${idempotencyKey}` : null;
 
       if (!title || !lat || !lon || lat === 0 || lon === 0) {
         return res.status(400).json({ success: false, message: "Missing required fields: title, lat, lon must be provided and non-zero" });
       }
 
-      if (idempotencyKey) {
-        const existingJob = await Job.findOne({ contractorPhone: req.user.phone, idempotencyKey }).sort({ createdAt: -1 });
-        if (existingJob) {
-          let currentWallet = await Wallet.findOne({ phone: req.user.phone });
-          if (!currentWallet) {
-            currentWallet = new Wallet({ phone: req.user.phone, balance: 0, availableBalance: 0, pocketBalance: 0 });
-            await currentWallet.save();
-          }
-          return res.json({
-            success: true,
-            idempotent: true,
-            message: "Job post already processed for this idempotency key",
-            job: existingJob,
-            wallet: currentWallet,
-          });
+      const existingJob = await Job.findOne({ contractorPhone: req.user.phone, idempotencyKey }).sort({ createdAt: -1 });
+      if (existingJob) {
+        let currentWallet = await Wallet.findOne({ phone: req.user.phone });
+        if (!currentWallet) {
+          currentWallet = new Wallet({ phone: req.user.phone, balance: 0, availableBalance: 0, pocketBalance: 0 });
+          await currentWallet.save();
         }
+        return res.json({
+          success: true,
+          idempotent: true,
+          message: "Job post already processed for this idempotency key",
+          job: existingJob,
+          wallet: currentWallet,
+        });
       }
 
       const userRecord = await User.findOne({ phone: req.user.phone }).select("premiumPlan");
@@ -134,6 +167,11 @@ function createJobsCoreRouter({
       );
 
       if (!chargedWallet) {
+        info("Insufficient wallet balance for job post", buildLogContext(req, {
+          requiredBalance,
+          workersCount,
+          spendableBalance,
+        }));
         return res.status(400).json({
           success: false,
           message: `Insufficient wallet balance. You need ₹${requiredBalance} to post this job for ${workersCount} worker(s). Current balance: ₹${spendableBalance}`,
@@ -162,6 +200,12 @@ function createJobsCoreRouter({
         offerExpiresAt: new Date(Date.now() + 60 * 1000),
       });
       await newJob.save();
+      info("Job posted", buildLogContext(req, {
+        jobId: newJob._id?.toString(),
+        amount: newJob.amount,
+        idempotencyKey,
+        bulkHiring: !!newJob.bulkHiring,
+      }));
 
       await logJobEvent({
         jobId: newJob._id,
@@ -251,7 +295,10 @@ function createJobsCoreRouter({
       try {
         await offerJobToNextWorker(newJob);
       } catch (e) {
-        console.error("Error offering job after HTTP post:", e);
+        error("Error offering job after HTTP post", buildLogContext(req, {
+          jobId: newJob?._id?.toString(),
+          error: e?.message || String(e),
+        }));
       }
 
       return res.json({
@@ -262,7 +309,20 @@ function createJobsCoreRouter({
       });
     } catch (err) {
       if (err && err.code === 11000 && err.keyPattern && err.keyPattern.contractorPhone && err.keyPattern.idempotencyKey) {
-        const existingJob = await Job.findOne({ contractorPhone: req.user.phone, idempotencyKey: getIdempotencyKey(req) }).sort({ createdAt: -1 });
+        const fallbackIdempotencyKey = getIdempotencyKey(req) ||
+          buildAutoIdempotencyKey({
+            phone: req.user.phone,
+            title: req.body?.title,
+            description: req.body?.description,
+            amount: req.body?.amount,
+            lat: req.body?.lat,
+            lon: req.body?.lon,
+            date: req.body?.date,
+            numberOfDays: req.body?.numberOfDays,
+            bulkHiring: req.body?.bulkHiring,
+            requiredWorkers: req.body?.requiredWorkers,
+          });
+        const existingJob = await Job.findOne({ contractorPhone: req.user.phone, idempotencyKey: fallbackIdempotencyKey }).sort({ createdAt: -1 });
         const currentWallet = await Wallet.findOne({ phone: req.user.phone });
         return res.json({
           success: true,
@@ -272,7 +332,10 @@ function createJobsCoreRouter({
           wallet: currentWallet,
         });
       }
-      console.error(err);
+      error("jobs/post failed", buildLogContext(req, {
+        idempotencyKey: getIdempotencyKey(req),
+        error: err?.message || String(err),
+      }));
       return res.status(500).json({ success: false, message: "Internal server error" });
     }
   });

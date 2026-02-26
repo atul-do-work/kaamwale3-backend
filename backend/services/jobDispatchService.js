@@ -12,6 +12,18 @@ function createJobDispatchHelpers(deps) {
     logJobEvent,
   } = deps;
   const { scheduleDispatchState } = require("./dispatchStateService");
+  const offerInFlightLocks = new Set();
+  const recentOfferTargets = new Map(); // key: `${jobId}:${phone}` -> ts
+  const RECENT_OFFER_TTL_MS = 15000;
+
+  const cleanupRecentOffers = () => {
+    const now = Date.now();
+    for (const [key, ts] of recentOfferTargets.entries()) {
+      if (now - ts > RECENT_OFFER_TTL_MS) {
+        recentOfferTargets.delete(key);
+      }
+    }
+  };
 
 async function checkJobMatchesForWorker(workerPhone) {
   try {
@@ -96,7 +108,14 @@ async function checkJobMatchesForWorker(workerPhone) {
 
 // ✅ HELPER: Offer job to next available worker (dynamic + skip declined)
 async function offerJobToNextWorker(job) {
+  const jobId = String(job?._id || "");
+  if (!jobId) return;
+  if (offerInFlightLocks.has(jobId)) {
+    return;
+  }
+  offerInFlightLocks.add(jobId);
   try {
+    cleanupRecentOffers();
     const declinedWorkerIds = Array.isArray(job.declinedBy) ? job.declinedBy : [];
     
     // Clear previous timeout
@@ -214,6 +233,10 @@ async function offerJobToNextWorker(job) {
       let offered = 0;
       for (const candidate of candidates) {
         if (offered >= slots) break;
+        const dedupeKey = `${jobId}:${candidate.phone}`;
+        if (recentOfferTargets.has(dedupeKey)) {
+          continue;
+        }
         const workerSocket = io.sockets.sockets.get(candidate.socketId);
         if (!workerSocket) continue;
 
@@ -230,6 +253,7 @@ async function offerJobToNextWorker(job) {
                 totalNearbyWorkers: currentNearbyWorkers.length,
                 bulkOffer: true,
               });
+              recentOfferTargets.set(dedupeKey, Date.now());
               await logJobEvent({
                 jobId: job._id,
                 eventType: "offer_sent",
@@ -303,6 +327,10 @@ async function offerJobToNextWorker(job) {
       console.log(`⚠️ No single candidate found after filtering for job ${job._id}`);
       return;
     }
+    const singleDedupeKey = `${jobId}:${nextWorker.phone}`;
+    if (recentOfferTargets.has(singleDedupeKey)) {
+      return;
+    }
 
     console.log(`📤 Offering job ${job._id} to worker: ${nextWorker.name} (Skill: ${nextWorker.mainSkill}, Wage: ${nextWorker.expectedWage}, Distance: ${nextWorker.distance}km)`);
 
@@ -319,6 +347,7 @@ async function offerJobToNextWorker(job) {
             distance: Math.round(realDist * 10) / 10,
             totalNearbyWorkers: currentNearbyWorkers.length,
           });
+          recentOfferTargets.set(singleDedupeKey, Date.now());
           await logJobEvent({
             jobId: job._id,
             eventType: "offer_sent",
@@ -396,10 +425,16 @@ async function offerJobToNextWorker(job) {
     } else {
       // Worker not connected - try next one
       console.log(`⚠️ Worker ${nextWorker.name} not connected, trying next...`);
-      await offerJobToNextWorker(job);
+      setTimeout(() => {
+        offerJobToNextWorker(job).catch((err) => {
+          console.error("Error retrying offer after disconnected worker:", err);
+        });
+      }, 0);
     }
   } catch (e) {
     console.error('Error offering job to next worker:', e);
+  } finally {
+    offerInFlightLocks.delete(jobId);
   }
 }
 

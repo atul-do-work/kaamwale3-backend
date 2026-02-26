@@ -95,6 +95,32 @@ const activityLogSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
+const ALLOWED_ACTIONS = new Set(
+  ((activityLogSchema.path("action")?.enumValues) || []).map((v) => String(v))
+);
+
+activityLogSchema.pre("validate", function normalizeAction() {
+  const rawAction = this.action;
+  if (!rawAction) return;
+  if (ALLOWED_ACTIONS.has(rawAction)) return;
+
+  const upper = String(rawAction).toUpperCase();
+  const lower = String(rawAction).toLowerCase();
+  if (ALLOWED_ACTIONS.has(upper)) {
+    this.action = upper;
+    return;
+  }
+  if (ALLOWED_ACTIONS.has(lower)) {
+    this.action = lower;
+    return;
+  }
+
+  // Prevent hard failure for unknown action values in production; preserve original in metadata.
+  const existingMeta = (this.metadata && typeof this.metadata === "object") ? this.metadata : {};
+  this.metadata = { ...existingMeta, originalAction: rawAction };
+  this.action = "admin_action";
+});
+
 // Compound index for faster queries by phone and action
 activityLogSchema.index({ phone: 1, timestamp: -1 });
 activityLogSchema.index({ action: 1, timestamp: -1 });

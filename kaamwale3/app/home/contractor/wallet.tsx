@@ -460,19 +460,16 @@ export default function ContractorWalletAttendance() {
   const checkJobPaidOnServer = async (jobId: string | null, workerPhone?: string): Promise<boolean> => {
     if (!jobId) return false;
     try {
-      const res = await api.get(`/jobs`);
-      const allJobs: any[] = Array.isArray(res?.data) ? res.data : [];
-      const job = allJobs.find((j) => String(j?._id) === String(jobId));
-      if (!job) return false;
-
-      if (workerPhone && Array.isArray(job.acceptedWorkers) && job.acceptedWorkers.length > 0) {
-        const workerEntry = job.acceptedWorkers.find((w: any) => String(w?.phone) === String(workerPhone));
-        if (workerEntry) {
-          return String(workerEntry?.paymentStatus || '').toLowerCase() === 'paid';
+      for (let attempt = 1; attempt <= 4; attempt += 1) {
+        const qs = workerPhone ? `?workerPhone=${encodeURIComponent(workerPhone)}` : "";
+        const statusRes = await api.get(`/api/payment/payment-status/${jobId}${qs}`);
+        if (statusRes?.data?.success && statusRes?.data?.isPaid) {
+          return true;
         }
+        // webhook may settle milliseconds after callback failure; short backoff avoids false "failed" modal.
+        await new Promise((resolve) => setTimeout(resolve, attempt * 300));
       }
-
-      return String(job?.paymentStatus || '').toLowerCase() === 'paid';
+      return false;
     } catch (err) {
       console.error("Paid-status reconciliation check failed:", err);
       return false;

@@ -184,6 +184,9 @@ startDispatchStateProcessor({
 
 startBackgroundSchedulers({
   Job,
+  Wallet,
+  User,
+  WorkerModel,
   io,
   pendingJobTimeouts,
   pendingJobExpirations,

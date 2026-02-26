@@ -3,7 +3,7 @@ import * as SplashScreen from 'expo-splash-screen';
 import { useEffect, useRef, useState } from 'react';
 import * as Notifications from 'expo-notifications';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { Alert, Modal, Text, TouchableOpacity, View, type AlertButton, type AlertOptions } from 'react-native';
+import { Alert, AppState, Modal, Text, TouchableOpacity, View, type AlertButton, type AlertOptions } from 'react-native';
 import { registerForPushNotificationsAsync } from '../services/notification';
 import { LanguageProvider } from '../context/LanguageContext';
 import { AuthProvider } from '../context/AuthContext';
@@ -35,6 +35,29 @@ export default function RootLayout() {
     modalOptions?.onDismiss?.();
   };
 
+  const syncFcmTokenWithBackend = async (fcmToken: string, maxRetries = 3) => {
+    const accessToken = await AsyncStorage.getItem('accessToken');
+    if (!accessToken || !fcmToken) return;
+    for (let attempt = 1; attempt <= maxRetries; attempt += 1) {
+      try {
+        const response = await fetch(`${process.env.EXPO_PUBLIC_API_BASE || 'http://localhost:3000'}/auth/refresh-fcm-token`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${accessToken}`
+          },
+          body: JSON.stringify({ fcmToken })
+        });
+        if (response.ok) return;
+      } catch (err) {
+        if (attempt === maxRetries) {
+          console.warn('⚠️ FCM backend sync failed after retries:', err);
+        }
+      }
+      await new Promise((resolve) => setTimeout(resolve, 400 * Math.pow(2, attempt - 1)));
+    }
+  };
+
   useEffect(() => {
     const initializeApp = async () => {
       try {
@@ -49,30 +72,8 @@ export default function RootLayout() {
           
           // ✅ NEW: If user is logged in, update backend with fresh token
           try {
-            const accessToken = await AsyncStorage.getItem('accessToken');
-            if (accessToken) {
-              console.log('📱 User logged in - updating backend with fresh FCM token...');
-              const response = await fetch(`${process.env.EXPO_PUBLIC_API_BASE || 'http://localhost:3000'}/auth/refresh-fcm-token`, {
-                method: 'POST',
-                headers: {
-                  'Content-Type': 'application/json',
-                  'Authorization': `Bearer ${accessToken}`
-                },
-                body: JSON.stringify({ fcmToken })
-              });
-              
-              // ✅ FIX: Check response status before parsing JSON
-              if (response.ok) {
-                const data = await response.json();
-                if (data.success) {
-                  console.log('✅ Backend FCM token updated on startup');
-                } else {
-                  console.warn('⚠️ Backend returned error:', data.message);
-                }
-              } else {
-                console.warn('⚠️ Backend request failed with status:', response.status);
-              }
-            }
+            await syncFcmTokenWithBackend(fcmToken);
+            console.log('✅ Backend FCM token sync attempted on startup');
           } catch (err) {
             console.warn('⚠️ Could not update backend token on startup:', err);
           }
@@ -88,6 +89,24 @@ export default function RootLayout() {
     };
 
     initializeApp();
+  }, []);
+
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', async (state) => {
+      if (state !== 'active') return;
+      try {
+        const latestToken = await registerForPushNotificationsAsync();
+        if (latestToken) {
+          await AsyncStorage.setItem('appFcmToken', latestToken);
+          await syncFcmTokenWithBackend(latestToken, 3);
+        }
+      } catch (err) {
+        console.warn('⚠️ Foreground FCM refresh failed:', err);
+      }
+    });
+    return () => {
+      sub.remove();
+    };
   }, []);
 
   useEffect(() => {

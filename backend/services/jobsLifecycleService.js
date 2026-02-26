@@ -42,6 +42,14 @@ function getPayKey({ jobId, workerPhone, mode, idempotencyKey }) {
   return `${target}:${idempotencyKey || ""}`;
 }
 
+function normalizePaidJobStatus(status) {
+  const normalized = String(status || "").toLowerCase();
+  if (normalized === "cancelled" || normalized === "expired" || normalized === "completed") {
+    return status;
+  }
+  return "completed";
+}
+
 function cleanupIdempotencyCache() {
   const now = Date.now();
   for (const [key, value] of payIdempotencyResults.entries()) {
@@ -241,9 +249,7 @@ async function payJob({ jobId, mode, workerPhone, idempotencyKey, userPhone, use
     if (allPaid) {
       job.paymentStatus = "Paid";
       job.paymentTime = target.paymentTime;
-      if (job.status === "accepted" || job.status === "in_progress") {
-        job.status = "completed";
-      }
+      job.status = normalizePaidJobStatus(job.status);
     } else if (job.paymentStatus !== "Paid") {
       job.paymentStatus = "Pending";
       if (job.status === "accepted") {
@@ -345,9 +351,7 @@ async function payJob({ jobId, mode, workerPhone, idempotencyKey, userPhone, use
   job.paymentStatus = "Paid";
   job.paymentMode = mode;
   job.paymentTime = new Date();
-  if (job.status === "accepted" || job.status === "in_progress") {
-    job.status = "completed";
-  }
+  job.status = normalizePaidJobStatus(job.status);
   if (job.acceptedAt) {
     const timeSpentMs = job.paymentTime - job.acceptedAt;
     job.timeSpentMinutes = Math.round(timeSpentMs / 60000);

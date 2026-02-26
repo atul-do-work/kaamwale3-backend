@@ -169,6 +169,7 @@ export default function NotificationHistoryScreen(): React.ReactElement {
       job_completed: { icon: "task-alt", color: "#10B981" },
       job_cancelled: { icon: "close-circle", color: "#EF4444" },
       review_reminder: { icon: "feedback", color: "#3B82F6" },
+      ops_alert: { icon: "warning", color: "#DC2626" },
       default: { icon: "notifications", color: "#1a2f4d" },
     };
 

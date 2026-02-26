@@ -81,7 +81,7 @@ function createWorkersRouter({
             distanceKm: worker.distanceKm || 0,
             distanceMeters: worker.distanceMeters || 0,
             location: worker.location,
-            isAvailable: worker.isAvailable || false,
+            isAvailable: userProfile.isAvailable ?? worker.isAvailable ?? false,
             createdAt: userProfile.createdAt,
           };
         })
@@ -172,7 +172,7 @@ function createWorkersRouter({
         id: worker._id.toString(),
         phone: worker.phone,
         location: worker.location || null,
-        isAvailable: worker.isAvailable || false,
+        isAvailable: user?.isAvailable ?? worker.isAvailable ?? false,
         profilePhoto: user?.profilePhoto || null,
         skills: worker.skills || [],
       });
@@ -204,7 +204,7 @@ function createWorkersRouter({
           skills: worker.skills || [],
           mainSkill: user?.mainSkill || worker.mainSkill,
           expectedWage: user?.expectedWage || "Negotiable",
-          isAvailable: worker.isAvailable || false,
+          isAvailable: user?.isAvailable ?? worker.isAvailable ?? false,
           rating: worker.rating || 0,
           performanceMetrics: {
             averageRating: worker.performanceMetrics?.averageRating || 0,
@@ -412,8 +412,18 @@ function createWorkersRouter({
         return res.status(400).json({ success: false, message: "isAvailable must be a boolean" });
       }
 
+      const workerState = await WorkerModel.findOne({ phone }).select("isBlocked blockedReason compliance").lean();
+      if (isAvailable === true && workerState?.isBlocked) {
+        return res.status(403).json({
+          success: false,
+          code: "WORKER_BLOCKED",
+          message: "You are blocked and cannot go online. Contact support.",
+          blockedReason: workerState?.blockedReason || "blocked_by_admin",
+        });
+      }
+
       if (isAvailable === true) {
-        const workerRecord = await WorkerModel.findOne({ phone }).select("compliance").lean();
+        const workerRecord = workerState || await WorkerModel.findOne({ phone }).select("compliance").lean();
         const requiresPocketMinimum = !!workerRecord?.compliance?.requiresPocketMinimumForOnline;
         const minPocketAmount = Number(workerRecord?.compliance?.pocketMinimumAmount || 100);
 
@@ -609,11 +619,16 @@ function createWorkersRouter({
   router.get("/debug/workers-locations", authenticateToken, async (req, res) => {
     try {
       const workers = await WorkerModel.find({}).select("phone name location isAvailable").lean();
+      const workerPhones = workers.map((w) => w.phone).filter(Boolean);
+      const users = await User.find({ phone: { $in: workerPhones } }).select("phone isAvailable").lean();
+      const userAvailabilityByPhone = new Map(users.map((u) => [u.phone, !!u.isAvailable]));
       const formattedWorkers = workers.map((w) => ({
         phone: w.phone,
         name: w.name,
         location: w.location?.coordinates || [0, 0],
-        isAvailable: w.isAvailable,
+        isAvailable: userAvailabilityByPhone.has(w.phone)
+          ? userAvailabilityByPhone.get(w.phone)
+          : !!w.isAvailable,
       }));
       return res.json({ success: true, count: workers.length, workers: formattedWorkers });
     } catch (err) {

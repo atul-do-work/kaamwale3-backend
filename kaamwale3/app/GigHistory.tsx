@@ -69,6 +69,25 @@ interface IncentiveProgress {
   consecutiveDays: number;
   totalHours: number;
   cancellationsInWindow: number;
+  requiredDailyHours?: number;
+  requiredDaysFor5?: number;
+  fiveDayWindow?: {
+    requiredDays: number;
+    requiredDailyHours: number;
+    daysMetMinimumHours: number;
+    allDaysHaveMinHours: boolean;
+    startDate: string | null;
+    endDate: string | null;
+    dailyStatus: Array<{
+      date: string;
+      jobsCompleted: number;
+      hoursWorked: number;
+      hasCompletedJob: boolean;
+      meetsMinimumHours: boolean;
+    }>;
+    failedDates: string[];
+    failureReason: string | null;
+  } | null;
   eligibleFor5Days: boolean;
   eligibleFor10Days: boolean;
   eligibleFor20Days: boolean;
@@ -385,6 +404,9 @@ export default function GigHistory() {
 
   const renderConditionsCard = () => {
     if (!incentiveData) return null;
+    const dayRows = Array.isArray(incentiveData.fiveDayWindow?.dailyStatus)
+      ? [...(incentiveData.fiveDayWindow?.dailyStatus || [])].reverse()
+      : [];
 
     return (
       <View style={styles.conditionsCard}>
@@ -404,15 +426,20 @@ export default function GigHistory() {
           </View>
 
           {/* 8 Hours Per Day Requirement */}
-          <View style={[styles.condition, { borderLeftColor: incentiveData.totalHours >= 35 ? '#27AE60' : '#BDC3C7' }]}>
+          <View style={[styles.condition, { borderLeftColor: (incentiveData.fiveDayWindow?.allDaysHaveMinHours || false) ? '#27AE60' : '#BDC3C7' }]}>
             <MaterialIcons 
-              name={incentiveData.totalHours >= 35 ? 'check-circle' : 'cancel'} 
+              name={(incentiveData.fiveDayWindow?.allDaysHaveMinHours || false) ? 'check-circle' : 'cancel'} 
               size={24} 
-              color={incentiveData.totalHours >= 35 ? '#27AE60' : '#E74C3C'}
+              color={(incentiveData.fiveDayWindow?.allDaysHaveMinHours || false) ? '#27AE60' : '#E74C3C'}
             />
             <View style={styles.conditionText}>
               <Text style={styles.conditionLabel}>⏰ 8 Hours Per Day</Text>
-              <Text style={styles.conditionValue}>{incentiveData.totalHours}/40 hours ({Math.round((Math.min(incentiveData.totalHours / 40, 1)) * 100)}%)</Text>
+              <Text style={styles.conditionValue}>
+                {(incentiveData.fiveDayWindow?.daysMetMinimumHours || 0)}/{incentiveData.requiredDaysFor5 || 5} days met ({incentiveData.requiredDailyHours || 8}h/day)
+              </Text>
+              {!!incentiveData.fiveDayWindow?.failureReason && (
+                <Text style={[styles.conditionValue, { color: '#E74C3C' }]}>{incentiveData.fiveDayWindow.failureReason}</Text>
+              )}
             </View>
           </View>
 
@@ -429,6 +456,20 @@ export default function GigHistory() {
             </View>
           </View>
         </View>
+
+        {dayRows.length > 0 && (
+          <View style={styles.dailyBreakdown}>
+            <Text style={styles.dailyBreakdownTitle}>5-Day Breakdown</Text>
+            {dayRows.map((day) => (
+              <View key={day.date} style={styles.dailyRow}>
+                <Text style={styles.dailyDate}>{formatDate(day.date)}</Text>
+                <Text style={[styles.dailyHours, { color: day.meetsMinimumHours ? '#27AE60' : '#E74C3C' }]}>
+                  {Number(day.hoursWorked || 0).toFixed(1)}h / 8h {day.meetsMinimumHours ? '✓' : '✗'}
+                </Text>
+              </View>
+            ))}
+          </View>
+        )}
       </View>
     );
   };
@@ -748,7 +789,7 @@ export default function GigHistory() {
             </View>
           ) : null}
           <FlatList
-            data={[]}
+            data={gigs}
             renderItem={renderGigCard}
             keyExtractor={(item) => item._id}
             ListHeaderComponent={ListHeader}
@@ -900,6 +941,32 @@ const styles = StyleSheet.create({
     fontSize: 11,
     color: '#7F8C8D',
     fontWeight: '500',
+  },
+  dailyBreakdown: {
+    marginTop: 12,
+    paddingTop: 10,
+    borderTopWidth: 1,
+    borderTopColor: '#f0f0f0',
+    gap: 8,
+  },
+  dailyBreakdownTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#111827',
+  },
+  dailyRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  dailyDate: {
+    fontSize: 12,
+    color: '#374151',
+    fontWeight: '600',
+  },
+  dailyHours: {
+    fontSize: 12,
+    fontWeight: '700',
   },
   // Milestone Styles
   section: {
