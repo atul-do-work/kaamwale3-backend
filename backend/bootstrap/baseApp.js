@@ -3,6 +3,7 @@ const express = require("express");
 const path = require("path");
 const fs = require("fs").promises;
 const crypto = require("crypto");
+const { createCriticalRouteLogger } = require("../utils/logContext");
 
 function setupBaseApp(app, { rootDir }) {
   app.set("trust proxy", 1);
@@ -19,6 +20,7 @@ function setupBaseApp(app, { rootDir }) {
   });
   app.use(express.json({ limit: "50mb" }));
   app.use(express.urlencoded({ extended: true, limit: "50mb" }));
+  app.use(createCriticalRouteLogger());
   app.use("/uploads", express.static(path.join(rootDir, "uploads")));
   app.use("/admin", express.static(path.join(rootDir, "public/admin")));
 

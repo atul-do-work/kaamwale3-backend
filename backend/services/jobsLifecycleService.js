@@ -166,7 +166,7 @@ async function markAttendance({ jobId, status, workerPhone, userPhone, deps }) {
     await job.save();
 
     if (trackingJobs.has(jobId)) trackingJobs.delete(jobId);
-    await emitJobUpdatedToUsers(job, [job.contractorName, workerPhone, job.acceptedBy || job.contractorName]);
+    await emitJobUpdatedToUsers(job, [job.contractorPhone, workerPhone, job.acceptedBy || job.contractorPhone]);
     return { code: 200, body: { success: true, job } };
   }
 
@@ -191,9 +191,8 @@ async function markAttendance({ jobId, status, workerPhone, userPhone, deps }) {
 
   if (trackingJobs.has(jobId)) trackingJobs.delete(jobId);
   await emitJobUpdatedToUsers(job, [
-    job.contractorName,
     job.contractorPhone,
-    job.acceptedBy || job.contractorName,
+    job.acceptedBy || job.contractorPhone,
   ]);
   return { code: 200, body: { success: true, job } };
 }
@@ -235,23 +234,23 @@ async function payJob({ jobId, mode, workerPhone, idempotencyKey, userPhone, use
     if (target.attendanceStatus !== "Present") {
       return finalize({ code: 400, body: { success: false, message: "Payment allowed only for PRESENT workers" } });
     }
-    if (target.paymentStatus === "Paid") {
+    if (target.paymentStatus === "paid") {
       return finalize({ code: 400, body: { success: false, message: "This worker is already paid for this job" } });
     }
 
     const oldState = { status: job.status, paymentStatus: job.paymentStatus, paymentMode: job.paymentMode };
-    target.paymentStatus = "Paid";
+    target.paymentStatus = "paid";
     target.paymentMode = mode;
     target.paymentTime = new Date();
 
     const allPaid = (job.acceptedWorkers || []).length > 0 &&
-      (job.acceptedWorkers || []).every((w) => w.paymentStatus === "Paid");
+      (job.acceptedWorkers || []).every((w) => w.paymentStatus === "paid");
     if (allPaid) {
-      job.paymentStatus = "Paid";
+      job.paymentStatus = "paid";
       job.paymentTime = target.paymentTime;
       job.status = normalizePaidJobStatus(job.status);
-    } else if (job.paymentStatus !== "Paid") {
-      job.paymentStatus = "Pending";
+    } else if (job.paymentStatus !== "paid") {
+      job.paymentStatus = "pending";
       if (job.status === "accepted") {
         job.status = "in_progress";
       }
@@ -339,7 +338,7 @@ async function payJob({ jobId, mode, workerPhone, idempotencyKey, userPhone, use
     }
 
     await updateContractorStats(userPhone);
-    await emitJobUpdatedToUsers(job, [job.contractorName, workerPhone, job.acceptedBy || job.contractorName]);
+    await emitJobUpdatedToUsers(job, [job.contractorPhone, workerPhone, job.acceptedBy || job.contractorPhone]);
     return finalize({ code: 200, body: { success: true, message: "Payment successful", job, workerPhone } });
   }
 
@@ -348,7 +347,7 @@ async function payJob({ jobId, mode, workerPhone, idempotencyKey, userPhone, use
   }
 
   const oldState = { status: job.status, paymentStatus: job.paymentStatus, paymentMode: job.paymentMode };
-  job.paymentStatus = "Paid";
+  job.paymentStatus = "paid";
   job.paymentMode = mode;
   job.paymentTime = new Date();
   job.status = normalizePaidJobStatus(job.status);
@@ -460,7 +459,7 @@ async function payJob({ jobId, mode, workerPhone, idempotencyKey, userPhone, use
     if (normalizedMode === "cash" && job.acceptedBy) {
       const totalPaidCompletedJobs = await Job.countDocuments({
         $or: [{ acceptedBy: job.acceptedBy }, { "acceptedWorkers.phone": job.acceptedBy }],
-        paymentStatus: "Paid",
+        paymentStatus: "paid",
         status: "completed",
       });
 
@@ -497,7 +496,7 @@ async function payJob({ jobId, mode, workerPhone, idempotencyKey, userPhone, use
     console.error("Error updating gigs data on completion:", e);
   }
 
-  await emitJobUpdatedToUsers(job, [job.contractorName, job.acceptedBy || job.contractorName]);
+  await emitJobUpdatedToUsers(job, [job.contractorPhone, job.acceptedBy || job.contractorPhone]);
   return finalize({ code: 200, body: { success: true, message: "Payment successful", job } });
   } catch (err) {
     payInFlightLocks.delete(lockKey);
@@ -522,7 +521,7 @@ async function rateJob({ jobId, stars, feedback, workerPhone, userPhone, userNam
     if (!target) {
       return { code: 404, body: { success: false, message: "Worker not found on this bulk job" } };
     }
-    if (target.paymentStatus !== "Paid") {
+    if (target.paymentStatus !== "paid") {
       return { code: 400, body: { success: false, message: "Can only rate workers that have been paid" } };
     }
     if (target.attendanceStatus !== "Present") {
@@ -538,7 +537,7 @@ async function rateJob({ jobId, stars, feedback, workerPhone, userPhone, userNam
       ratedBy: userPhone || job.contractorName,
     };
   } else {
-    if (job.paymentStatus !== "Paid") {
+    if (job.paymentStatus !== "paid") {
       return { code: 400, body: { message: "Can only rate jobs that have been paid" } };
     }
     if (job.attendanceStatus !== "Present") {
@@ -620,7 +619,7 @@ async function rateJob({ jobId, stars, feedback, workerPhone, userPhone, userNam
     console.error("Error creating rating notification:", e);
   }
 
-  await emitJobUpdatedToUsers(job, [job.contractorName, job.acceptedBy || job.contractorName]);
+  await emitJobUpdatedToUsers(job, [job.contractorPhone, job.acceptedBy || job.contractorPhone]);
   return { code: 200, body: { success: true, message: "Rating submitted successfully", job } };
 }
 
@@ -639,7 +638,7 @@ async function rateContractor({ jobId, stars, feedback, userPhone, userName, dep
     return { code: 403, body: { success: false, message: "Only assigned worker can rate this contractor" } };
   }
 
-  if (job.paymentStatus !== "Paid" || job.status !== "completed") {
+  if (job.paymentStatus !== "paid" || job.status !== "completed") {
     return { code: 400, body: { success: false, message: "Contractor can be rated only after paid and completed job" } };
   }
 
@@ -661,7 +660,7 @@ async function rateContractor({ jobId, stars, feedback, userPhone, userName, dep
     if (contractorPhone) {
       const ratedJobs = await Job.find({
         contractorPhone,
-        paymentStatus: "Paid",
+        paymentStatus: "paid",
         "contractorRating.stars": { $exists: true, $ne: null },
       }).select("contractorRating");
 
@@ -707,7 +706,7 @@ async function rateContractor({ jobId, stars, feedback, userPhone, userName, dep
     console.error("Error creating contractor rating notification:", e);
   }
 
-  await emitJobUpdatedToUsers(job, [job.contractorName, job.acceptedBy || job.contractorName]);
+  await emitJobUpdatedToUsers(job, [job.contractorPhone, job.acceptedBy || job.contractorPhone]);
   return { code: 200, body: { success: true, message: "Contractor rated successfully", job } };
 }
 
@@ -941,7 +940,6 @@ async function cancelJob({ jobId, reason, reasonDescription, idempotencyKey, use
   };
   const targetUsers = [
     job.contractorPhone,
-    job.contractorName,
     job.acceptedBy,
     ...(Array.isArray(job.acceptedWorkers) ? job.acceptedWorkers.map((w) => w?.phone).filter(Boolean) : []),
   ];

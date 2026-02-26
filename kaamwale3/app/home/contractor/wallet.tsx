@@ -47,7 +47,7 @@ interface Job {
     name?: string;
     acceptedAt?: string;
     attendanceStatus?: "Present" | "Absent" | null;
-    paymentStatus?: "Paid" | null;
+    paymentStatus?: "paid" | null;
     rating?: {
       stars: number;
       feedback: string;
@@ -58,7 +58,7 @@ interface Job {
   status: string;
   timestamp: string;
   attendanceStatus?: "Present" | "Absent" | null;
-  paymentStatus?: "Paid" | null;
+  paymentStatus?: "paid" | null;
   rating?: {
     stars: number;
     feedback: string;
@@ -211,9 +211,8 @@ export default function ContractorWalletAttendance() {
       const myJobs = data
         .filter(j => {
           const isMineByPhone = !!authUser?.phone && (j as any).contractorPhone === authUser.phone;
-          const isMineByName = !authUser?.phone && j.contractorName === contractorName;
           const hasAnyAcceptedWorker = !!j.acceptedBy || (Array.isArray(j.acceptedWorkers) && j.acceptedWorkers.length > 0);
-          return (isMineByPhone || isMineByName) && attendanceStatuses.has(j.status) && hasAnyAcceptedWorker;
+          return isMineByPhone && attendanceStatuses.has(j.status) && hasAnyAcceptedWorker;
         })
         .sort((a, b) => {
           const aTime = new Date((a as any).timestamp || (a as any).updatedAt || (a as any).createdAt || 0).getTime();
@@ -986,7 +985,7 @@ export default function ContractorWalletAttendance() {
             {item.attendanceStatus}
           </Text>
 
-          {item.attendanceStatus === "Present" && item.paymentStatus !== "Paid" && (
+          {item.attendanceStatus === "Present" && item.paymentStatus !== "paid" && (
             <TouchableOpacity
               style={{
                 marginTop: 15,
@@ -1002,7 +1001,7 @@ export default function ContractorWalletAttendance() {
             </TouchableOpacity>
           )}
 
-          {item.paymentStatus === "Paid" && !item.rating && (
+          {item.paymentStatus === "paid" && !item.rating && (
             <TouchableOpacity
               style={{
                 marginTop: 15,

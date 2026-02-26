@@ -58,7 +58,18 @@ const workerSchema = new mongoose.Schema({
     // Last update timestamp
     lastUpdated: { type: Date, default: Date.now },
     // Work history - sliding window to evaluate consecutive-day milestones
-    workHistory: [{ date: Date, hours: Number, cancelled: { type: Boolean, default: false } }],
+    workHistory: [{
+      date: Date,
+      hours: Number,
+      jobsCompleted: { type: Number, default: 0 },
+      declinesCount: { type: Number, default: 0 },
+      hasCompletedJob: { type: Boolean, default: false },
+      meetsMinimumHours: { type: Boolean, default: false },
+      meetsNoDeclines: { type: Boolean, default: true },
+      qualified: { type: Boolean, default: false },
+      cancelled: { type: Boolean, default: false },
+      snapshotAt: { type: Date, default: Date.now },
+    }],
   },
 
   // ✅ Recent gigs summary (last 10 gigs)
@@ -68,7 +79,7 @@ const workerSchema = new mongoose.Schema({
     amount: Number,
     date: Date,
     status: { type: String, enum: ['accepted', 'completed', 'cancelled', 'pending'], default: 'pending' },
-    paymentStatus: { type: String, enum: ['Paid', 'Pending', 'Failed'], default: 'Pending' },
+    paymentStatus: { type: String, enum: ['paid', 'pending', 'failed'], default: 'pending' },
     contractorName: String,
     rating: {
       stars: { type: Number, min: 1, max: 5 },

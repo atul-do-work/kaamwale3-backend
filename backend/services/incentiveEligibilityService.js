@@ -9,6 +9,7 @@ function emptyEligibility() {
     eligibleFor20Days: false,
     requiredDailyHours: 8,
     requiredDaysFor5: 5,
+    dailyQualificationTrail: [],
     fiveDayWindow: {
       requiredDays: 5,
       requiredDailyHours: 8,
@@ -31,6 +32,8 @@ function calculateEligibility(events) {
   try {
     const completedByDay = new Map();
     const cancellationEvents = [];
+    const cancellationDays = new Set();
+    const cancellationCountByDay = new Map();
     const REQUIRED_DAILY_HOURS = 8;
     const REQUIRED_DAYS_FOR_5 = 5;
 
@@ -49,10 +52,12 @@ function calculateEligibility(events) {
 
       if (e.eventType === "job_declined_offer" || e.eventType === "job_cancelled_by_worker") {
         cancellationEvents.push(day);
+        cancellationDays.add(day);
+        cancellationCountByDay.set(day, Number(cancellationCountByDay.get(day) || 0) + 1);
       }
     }
 
-    const workDays = Array.from(completedByDay.entries())
+    const completedWorkDays = Array.from(completedByDay.entries())
       .filter(([, info]) => Number(info?.jobs || 0) > 0)
       .map(([day, info]) => ({
         dateObj: new Date(`${day}T00:00:00.000Z`),
@@ -61,34 +66,68 @@ function calculateEligibility(events) {
       }))
       .sort((a, b) => b.dateObj - a.dateObj);
 
-    if (workDays.length === 0) {
+    if (completedWorkDays.length === 0) {
       return emptyEligibility();
     }
 
+    // Daily audit trail (latest first) used by support/admin to explain eligibility.
+    const allDays = new Set([
+      ...Array.from(completedByDay.keys()),
+      ...Array.from(cancellationCountByDay.keys()),
+    ]);
+    const dailyQualificationTrail = Array.from(allDays)
+      .map((day) => {
+        const info = completedByDay.get(day) || { hours: 0, jobs: 0 };
+        const hoursWorked = Number(info.hours || 0);
+        const jobsCompleted = Number(info.jobs || 0);
+        const declinesCount = Number(cancellationCountByDay.get(day) || 0);
+        const hasCompletedJob = jobsCompleted > 0;
+        const meetsMinimumHours = hasCompletedJob && hoursWorked >= REQUIRED_DAILY_HOURS;
+        const meetsNoDeclines = declinesCount === 0;
+        const qualified = hasCompletedJob && meetsMinimumHours && meetsNoDeclines;
+        return {
+          date: day,
+          jobsCompleted,
+          hoursWorked: Number(hoursWorked.toFixed(2)),
+          declinesCount,
+          hasCompletedJob,
+          meetsMinimumHours,
+          meetsNoDeclines,
+          qualified,
+        };
+      })
+      .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+
+    // A day counts toward streak progress only if:
+    // 1) at least one completed paid job, 2) >=8 hours total, 3) no decline/cancel on that day.
+    const qualifiedDays = completedWorkDays.filter(
+      (d) => d.hours >= REQUIRED_DAILY_HOURS && !cancellationDays.has(d.dateStr)
+    );
+
     let consecutiveDays = 0;
     let streakHours = 0;
-    for (let i = 0; i < workDays.length; i++) {
+    for (let i = 0; i < qualifiedDays.length; i++) {
       if (i === 0) {
-        consecutiveDays = 1;
-        streakHours += workDays[i].hours;
+        consecutiveDays = qualifiedDays.length > 0 ? 1 : 0;
+        streakHours += Number(qualifiedDays[i]?.hours || 0);
         continue;
       }
 
-      const prevDay = workDays[i - 1].dateObj;
-      const currDay = workDays[i].dateObj;
+      const prevDay = qualifiedDays[i - 1].dateObj;
+      const currDay = qualifiedDays[i].dateObj;
       const dayDiff = Math.floor((prevDay - currDay) / (1000 * 60 * 60 * 24));
 
       if (dayDiff === 1) {
         consecutiveDays++;
-        streakHours += workDays[i].hours;
+        streakHours += qualifiedDays[i].hours;
       } else {
         break;
       }
     }
 
-    const latest = workDays[0].dateObj;
+    const latest = (qualifiedDays[0] || completedWorkDays[0]).dateObj;
     const streakStart = new Date(latest);
-    streakStart.setUTCDate(streakStart.getUTCDate() - (consecutiveDays - 1));
+    streakStart.setUTCDate(streakStart.getUTCDate() - Math.max(0, consecutiveDays - 1));
 
     const cancellationsInWindow = cancellationEvents.filter((day) => {
       const d = new Date(`${day}T00:00:00.000Z`);
@@ -105,16 +144,23 @@ function calculateEligibility(events) {
       const hoursWorked = Number(info.hours || 0);
       const jobsCompleted = Number(info.jobs || 0);
       const meetsMinimumHours = jobsCompleted > 0 && hoursWorked >= REQUIRED_DAILY_HOURS;
+      const declinesCount = Number(cancellationCountByDay.get(day) || 0);
+      const meetsNoDeclines = declinesCount === 0;
+      const dayQualified = meetsMinimumHours && meetsNoDeclines;
       fiveDayDailyStatus.push({
         date: day,
         jobsCompleted,
         hoursWorked,
+        declinesCount,
         hasCompletedJob: jobsCompleted > 0,
         meetsMinimumHours,
+        meetsNoDeclines,
+        dayQualified,
       });
     }
     const daysWithCompletedJob = fiveDayDailyStatus.filter((d) => d.hasCompletedJob).length;
     const daysMetMinimumHours = fiveDayDailyStatus.filter((d) => d.meetsMinimumHours).length;
+    const daysQualified = fiveDayDailyStatus.filter((d) => d.dayQualified).length;
     const failedDates = fiveDayDailyStatus.filter((d) => !d.meetsMinimumHours).map((d) => d.date);
     const allDaysHaveMinHours = daysMetMinimumHours === REQUIRED_DAYS_FOR_5;
 
@@ -125,22 +171,23 @@ function calculateEligibility(events) {
       failureReason = failedDates.length
         ? `Daily minimum ${REQUIRED_DAILY_HOURS}h not met on: ${failedDates.join(", ")}`
         : `Need ${REQUIRED_DAYS_FOR_5} consecutive days with at least ${REQUIRED_DAILY_HOURS} hours`;
-    } else if (cancellationsInWindow > 0) {
+    } else if (cancellationsInWindow > 0 || daysQualified < REQUIRED_DAYS_FOR_5) {
       failureReason = `Declines/cancellations found in streak window (${cancellationsInWindow})`;
     }
 
-    const baseEligible = allDaysHaveMinHours && cancellationsInWindow === 0;
+    const baseEligible = daysQualified === REQUIRED_DAYS_FOR_5;
 
     return {
       consecutiveDays,
       totalHours: streakHours,
       cancellationsInWindow,
-      lastWorkDate: workDays[0]?.dateStr || null,
+      lastWorkDate: (qualifiedDays[0] || completedWorkDays[0])?.dateStr || null,
       eligibleFor5Days: consecutiveDays >= 5 && baseEligible,
-      eligibleFor10Days: consecutiveDays >= 10 && cancellationsInWindow === 0,
-      eligibleFor20Days: consecutiveDays >= 20 && cancellationsInWindow === 0,
+      eligibleFor10Days: consecutiveDays >= 10,
+      eligibleFor20Days: consecutiveDays >= 20,
       requiredDailyHours: REQUIRED_DAILY_HOURS,
       requiredDaysFor5: REQUIRED_DAYS_FOR_5,
+      dailyQualificationTrail,
       fiveDayWindow: {
         requiredDays: REQUIRED_DAYS_FOR_5,
         requiredDailyHours: REQUIRED_DAILY_HOURS,

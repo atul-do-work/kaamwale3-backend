@@ -21,7 +21,7 @@ async function hydrateEventsWithPaidJobs(phone, events) {
 
   const paidJobs = await Job.find({
     $or: [{ acceptedBy: phone }, { 'acceptedWorkers.phone': phone }],
-    paymentStatus: { $in: ['Paid', 'paid'] },
+    paymentStatus: { $in: ['paid'] },
   })
     .select('_id title contractorPhone contractorName status paymentStatus paymentTime hoursWorked timeSpentMinutes createdAt')
     .lean();
@@ -40,12 +40,35 @@ async function hydrateEventsWithPaidJobs(phone, events) {
       hoursWorked: Math.round(derivedHours * 10) / 10,
       timeSpentMinutes,
       status: job?.status || '',
-      paymentStatus: job?.paymentStatus || 'Paid',
+      paymentStatus: job?.paymentStatus || 'paid',
       metadata: { source: 'jobs-fallback' },
     });
   }
 
   return baseEvents;
+}
+
+async function persistEligibilityAuditSnapshot(worker, eligibilityData) {
+  if (!worker || !eligibilityData) return;
+  const rows = Array.isArray(eligibilityData.dailyQualificationTrail)
+    ? eligibilityData.dailyQualificationTrail.slice(0, 35)
+    : [];
+
+  worker.gigsData = worker.gigsData || {};
+  worker.gigsData.workHistory = rows.map((r) => ({
+    date: r?.date ? new Date(`${r.date}T00:00:00.000Z`) : new Date(),
+    hours: Number(r?.hoursWorked || 0),
+    jobsCompleted: Number(r?.jobsCompleted || 0),
+    declinesCount: Number(r?.declinesCount || 0),
+    hasCompletedJob: Boolean(r?.hasCompletedJob),
+    meetsMinimumHours: Boolean(r?.meetsMinimumHours),
+    meetsNoDeclines: Boolean(r?.meetsNoDeclines),
+    qualified: Boolean(r?.qualified),
+    cancelled: Number(r?.declinesCount || 0) > 0,
+    snapshotAt: new Date(),
+  }));
+  worker.gigsData.lastUpdated = new Date();
+  await worker.save();
 }
 
 router.get('/progress', authenticateToken, async (req, res) => {
@@ -66,6 +89,7 @@ router.get('/progress', authenticateToken, async (req, res) => {
       .lean();
     const hydratedEvents = await hydrateEventsWithPaidJobs(phone, events);
     const eligibilityData = calculateEligibility(hydratedEvents);
+    await persistEligibilityAuditSnapshot(worker, eligibilityData);
 
     const claimedMilestones = await IncentiveLedger.find({
       phone,
@@ -86,6 +110,7 @@ router.get('/progress', authenticateToken, async (req, res) => {
       cancellationsInWindow: eligibilityData.cancellationsInWindow,
       requiredDailyHours: eligibilityData.requiredDailyHours || 8,
       requiredDaysFor5: eligibilityData.requiredDaysFor5 || 5,
+      dailyQualificationTrail: eligibilityData.dailyQualificationTrail || [],
       fiveDayWindow: eligibilityData.fiveDayWindow || null,
       eligibleFor5Days: eligibilityData.eligibleFor5Days,
       eligibleFor10Days: eligibilityData.eligibleFor10Days,
@@ -134,6 +159,7 @@ router.post('/claim/:milestoneId', authenticateToken, async (req, res) => {
       .lean();
     const hydratedEvents = await hydrateEventsWithPaidJobs(phone, events);
     const eligibilityData = calculateEligibility(hydratedEvents);
+    await persistEligibilityAuditSnapshot(worker, eligibilityData);
 
     let rewardAmount = 0;
     if (milestoneId === '5days' && eligibilityData.eligibleFor5Days) rewardAmount = 50;
@@ -192,6 +218,9 @@ router.post('/claim/:milestoneId', authenticateToken, async (req, res) => {
               failedDates: Array.isArray(eligibilityData.fiveDayWindow?.failedDates) ? eligibilityData.fiveDayWindow.failedDates : [],
               failureReason: eligibilityData.fiveDayWindow?.failureReason || null,
             },
+            dailyQualificationTrail: Array.isArray(eligibilityData.dailyQualificationTrail)
+              ? eligibilityData.dailyQualificationTrail.slice(0, 35)
+              : [],
             lastWorkDate: eligibilityData.lastWorkDate,
             verifiedAt: new Date(),
           },

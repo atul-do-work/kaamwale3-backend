@@ -118,7 +118,6 @@ function startDispatchStateProcessor({
               };
               const targetUsers = [
                 job.contractorPhone,
-                job.contractorName,
                 job.acceptedBy,
                 ...(Array.isArray(job.acceptedWorkers) ? job.acceptedWorkers.map((w) => w?.phone).filter(Boolean) : []),
               ];
@@ -171,4 +170,3 @@ module.exports = {
   cancelDispatchState,
   startDispatchStateProcessor,
 };
-

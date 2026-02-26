@@ -1,15 +1,15 @@
 const mongoose = require('mongoose');
 
 const JOB_STATUS = ['pending', 'posted', 'offered', 'accepted', 'in_progress', 'completed', 'cancelled', 'expired'];
-const PAYMENT_STATUS = ['pending', 'authorized', 'captured', 'failed', 'refunded', 'Paid', 'Pending', 'Failed'];
+const PAYMENT_STATUS = ['pending', 'authorized', 'captured', 'failed', 'refunded', 'paid'];
 
 function normalizePaymentStatusValue(value) {
   const v = String(value || "").trim();
   const lower = v.toLowerCase();
   if (!v) return v;
-  if (lower === "paid") return "Paid";
-  if (lower === "pending") return "Pending";
-  if (lower === "failed") return "Failed";
+  if (lower === "paid") return "paid";
+  if (lower === "pending") return "pending";
+  if (lower === "failed") return "failed";
   if (lower === "authorized") return "authorized";
   if (lower === "captured") return "captured";
   if (lower === "refunded") return "refunded";
@@ -28,14 +28,12 @@ const ALLOWED_JOB_STATUS_TRANSITIONS = {
 };
 
 const ALLOWED_PAYMENT_STATUS_TRANSITIONS = {
-  pending: ['authorized', 'captured', 'failed', 'refunded', 'Paid', 'Failed'],
+  pending: ['authorized', 'captured', 'failed', 'refunded', 'paid'],
   authorized: ['captured', 'failed', 'refunded'],
   captured: ['refunded'],
   failed: [],
   refunded: [],
-  Pending: ['Paid', 'Failed'],
-  Paid: ['refunded'],
-  Failed: [],
+  paid: ['refunded'],
 };
 
 const jobSchema = new mongoose.Schema(
@@ -81,7 +79,7 @@ const jobSchema = new mongoose.Schema(
         acceptedAt: Date,
         attendanceStatus: { type: String, enum: ["Present", "Absent", null], default: null },
         attendanceTime: Date,
-        paymentStatus: { type: String, enum: PAYMENT_STATUS, default: "Pending", set: normalizePaymentStatusValue },
+        paymentStatus: { type: String, enum: PAYMENT_STATUS, default: "pending", set: normalizePaymentStatusValue },
         paymentMode: String,
         paymentTime: Date,
         rating: {
@@ -105,7 +103,7 @@ const jobSchema = new mongoose.Schema(
     cancellationReasonDescription: { type: String, default: null },
     attendanceStatus: String,
     attendanceTime: Date,
-    paymentStatus: { type: String, enum: PAYMENT_STATUS, default: 'Pending', set: normalizePaymentStatusValue },
+    paymentStatus: { type: String, enum: PAYMENT_STATUS, default: 'pending', set: normalizePaymentStatusValue },
     paymentMode: String,
     paymentTime: Date,
     offerExpiresAt: { type: Date, index: true },

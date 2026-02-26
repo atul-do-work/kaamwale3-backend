@@ -53,7 +53,7 @@ exports.updateGigDataOnCompletion = async (workerPhone, jobData) => {
       amount: jobData.amount,
       date: new Date(),
       status: 'completed',
-      paymentStatus: 'Paid',
+      paymentStatus: 'paid',
       contractorName: jobData.contractorName,
       completedAt: new Date(),
       hoursWorked: hours,

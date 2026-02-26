@@ -28,7 +28,7 @@ async function runJobReconciliation() {
   try {
     const mismatches = [];
     const paidJobs = await Job.find({
-      paymentStatus: "Paid",
+      paymentStatus: "paid",
       paymentTime: { $gte: since },
     }).select("_id acceptedBy amount paymentTime");
 

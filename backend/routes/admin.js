@@ -133,11 +133,11 @@ const buildWorkerGigSummary = (jobs, phone) => {
         return j.acceptedBy === phone || inBulk;
     });
 
-    const completed = workerJobs.filter((j) => j.paymentStatus === 'Paid').length;
+    const completed = workerJobs.filter((j) => String(j.paymentStatus || '').toLowerCase() === 'paid').length;
     const cancelled = workerJobs.filter((j) => j.status === 'cancelled' || j.isCancelled === true).length;
-    const pending = workerJobs.filter((j) => j.paymentStatus !== 'Paid' && j.status !== 'cancelled').length;
+    const pending = workerJobs.filter((j) => String(j.paymentStatus || '').toLowerCase() !== 'paid' && j.status !== 'cancelled').length;
     const earnings = workerJobs
-        .filter((j) => j.paymentStatus === 'Paid')
+        .filter((j) => String(j.paymentStatus || '').toLowerCase() === 'paid')
         .reduce((sum, j) => sum + (Number(j.amount) || 0), 0);
 
     return {
@@ -265,7 +265,7 @@ router.get('/dashboard', authenticateToken, checkAdmin, async (req, res) => {
         const totalUsers = await User.countDocuments({ role: 'contractor' });
         const totalWorkers = await Worker.countDocuments();
         const totalJobs = await Job.countDocuments();
-        const completedJobs = await Job.countDocuments({ status: 'completed', paymentStatus: 'Paid' });
+        const completedJobs = await Job.countDocuments({ status: 'completed', paymentStatus: 'paid' });
         
         const wallets = await Wallet.find().select('balance');
         const totalWalletBalance = wallets.reduce((sum, w) => sum + (w.balance || 0), 0);
@@ -345,7 +345,7 @@ router.get('/dashboard', authenticateToken, checkAdmin, async (req, res) => {
         
         // Platform revenue (paid jobs amount)
         const platformRevenue = await Job.aggregate([
-            { $match: { paymentStatus: 'Paid' } },
+            { $match: { paymentStatus: 'paid' } },
             { $group: { _id: null, total: { $sum: '$amount' } } }
         ]);
 
@@ -818,6 +818,32 @@ router.get('/jobs/:jobId/details', authenticateToken, checkAdmin, async (req, re
 
         const webhookEvents = timeline.filter((e) => String(e?.source || '').toLowerCase() === 'webhook' || String(e?.actorType || '').toLowerCase() === 'webhook');
         const paymentEvents = timeline.filter((e) => String(e?.eventType || '').toLowerCase().includes('payment') || e?.oldState?.paymentStatus !== undefined || e?.newState?.paymentStatus !== undefined);
+        const timelineObservability = (timeline || []).map((event) => {
+            const md = event?.metadata || {};
+            const source = event?.source || null;
+            const actor = event?.actorPhone || event?.actorId || event?.actorType || null;
+            const paymentId =
+                md?.paymentId ||
+                event?.providerEventId ||
+                null;
+            const orderId = md?.orderId || null;
+            const webhookTime = String(source || '').toLowerCase() === 'webhook'
+                ? (md?.webhookTime || event?.timestamp || event?.createdAt || null)
+                : null;
+            return {
+                eventType: event?.eventType || null,
+                timestamp: event?.timestamp || event?.createdAt || null,
+                actor,
+                actorType: event?.actorType || null,
+                source,
+                idempotencyKey: event?.idempotencyKey || md?.idempotencyKey || null,
+                orderId,
+                paymentId,
+                webhookTime,
+                provider: event?.provider || null,
+                providerEventId: event?.providerEventId || null,
+            };
+        });
         const providerIds = new Set();
         for (const tx of walletTxRows || []) {
             if (tx?.paymentId) providerIds.add(String(tx.paymentId));
@@ -878,6 +904,7 @@ router.get('/jobs/:jobId/details', authenticateToken, checkAdmin, async (req, re
                     workerEarnings,
                     paymentEvents,
                     webhookEvents,
+                    timelineObservability,
                     reconciliation: {
                         matchedProviderIds: providerIdList,
                         runs: reconciliationRuns.map((run) => ({
@@ -1401,7 +1428,7 @@ router.post('/jobs/:jobId/bulk/payment', authenticateToken, checkAdmin, async (r
         if (!job) return res.status(404).json({ success: false, message: 'Job not found' });
         const acceptedWorker = (job.acceptedWorkers || []).find((w) => w.phone === workerPhone);
         if (!acceptedWorker) return res.status(404).json({ success: false, message: 'Worker entry not found in bulk job' });
-        if (acceptedWorker.paymentStatus === 'Paid') return res.status(409).json({ success: false, message: 'Already paid' });
+        if (String(acceptedWorker.paymentStatus || '').toLowerCase() === 'paid') return res.status(409).json({ success: false, message: 'Already paid' });
 
         const workerWallet = await Wallet.findOne({ phone: workerPhone });
         if (!workerWallet) return res.status(404).json({ success: false, message: 'Worker wallet not found' });
@@ -1475,7 +1502,7 @@ router.post('/jobs/:jobId/bulk/payment', authenticateToken, checkAdmin, async (r
             { _id: job._id, 'acceptedWorkers.phone': workerPhone },
             {
                 $set: {
-                    'acceptedWorkers.$.paymentStatus': 'Paid',
+                    'acceptedWorkers.$.paymentStatus': 'paid',
                     'acceptedWorkers.$.paymentMode': paymentMode,
                     'acceptedWorkers.$.paymentTime': new Date(),
                 },
@@ -1492,7 +1519,7 @@ router.post('/jobs/:jobId/bulk/payment', authenticateToken, checkAdmin, async (r
             metadata: { workerPhone, amount, paymentMode },
         });
 
-        await logAdminAudit({ req, action: 'job_payment_admin', phone: workerPhone, description: `Bulk payment marked paid`, before: acceptedWorker, after: { paymentStatus: 'Paid', paymentMode }, metadata: { idempotencyKey, jobId: String(job._id) } });
+        await logAdminAudit({ req, action: 'job_payment_admin', phone: workerPhone, description: `Bulk payment marked paid`, before: acceptedWorker, after: { paymentStatus: 'paid', paymentMode }, metadata: { idempotencyKey, jobId: String(job._id) } });
 
         return res.json({ success: true, amount, workerPhone, idempotencyKey });
     } catch (error) {
@@ -2043,7 +2070,7 @@ router.get('/analytics/funnel', authenticateToken, checkAdmin, async (req, res) 
         const posted = filteredJobs.filter((j) => ['pending', 'posted', 'offered', 'accepted', 'in_progress', 'completed'].includes(j.status) && !j.isCancelled).length;
         const accepted = filteredJobs.filter((j) => ['accepted', 'in_progress', 'completed'].includes(j.status)).length;
         const present = filteredJobs.filter((j) => (j.attendanceStatus || '').toLowerCase() === 'present').length;
-        const paid = filteredJobs.filter((j) => j.paymentStatus === 'Paid').length;
+        const paid = filteredJobs.filter((j) => String(j.paymentStatus || '').toLowerCase() === 'paid').length;
         const cancelled = filteredJobs.filter((j) => j.status === 'cancelled' || j.isCancelled === true).length;
 
         return res.json({
@@ -2708,10 +2735,10 @@ router.get('/lookup/:phone', authenticateToken, checkAdmin, async (req, res) => 
 
         const contractorSummary = {
             totalJobsPosted: jobsAsContractor.length,
-            totalPaidJobs: jobsAsContractor.filter((j) => j.paymentStatus === 'Paid').length,
+            totalPaidJobs: jobsAsContractor.filter((j) => String(j.paymentStatus || '').toLowerCase() === 'paid').length,
             totalCancelledJobs: jobsAsContractor.filter((j) => j.status === 'cancelled' || j.isCancelled === true).length,
             totalSpending: jobsAsContractor
-                .filter((j) => j.paymentStatus === 'Paid')
+                .filter((j) => String(j.paymentStatus || '').toLowerCase() === 'paid')
                 .reduce((sum, j) => sum + (Number(j.amount) || 0), 0)
         };
 

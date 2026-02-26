@@ -36,7 +36,7 @@ interface Job {
   date?: string;
   isCancelled?: boolean;
   attendanceStatus?: 'Present' | 'Absent' | null;
-  paymentStatus?: 'Paid' | null;
+  paymentStatus?: 'paid' | null;
   acceptedWorker?: {
     id: string;
     name: string;
@@ -213,7 +213,7 @@ export default function DashboardScreen() {
         if (savedToken && isAdmin) {
           await loadAdminData(savedToken);
         } else if (savedToken) {
-          const currentJobs = await fetchJobs(savedToken, userStr ? JSON.parse(userStr).name : '');
+          const currentJobs = await fetchJobs(savedToken);
           await fetchStats(savedToken, 'today', currentJobs);
         }
       } catch (err) {
@@ -456,7 +456,7 @@ export default function DashboardScreen() {
     }
   };
 
-  const fetchJobs = async (savedToken: string, name: string): Promise<Job[]> => {
+  const fetchJobs = async (savedToken: string): Promise<Job[]> => {
     setLoading(true);
     try {
       const res = await fetch(`${API_BASE}/jobs`, {
@@ -473,9 +473,8 @@ export default function DashboardScreen() {
       const authPhone = authUser?.phone;
       const myJobs = data.filter((j) => {
         const isMineByPhone = !!authPhone && j.contractorPhone === authPhone;
-        const isMineByName = !authPhone && j.contractorName === name;
         const isCancelled = j.isCancelled === true || String(j.status || '').toLowerCase() === 'cancelled';
-        return (isMineByPhone || isMineByName) && !isCancelled;
+        return isMineByPhone && !isCancelled;
       });
 
       setJobs(myJobs);
@@ -589,7 +588,7 @@ export default function DashboardScreen() {
   // Open worker details modal
   const handleJobCardClick = async (job: Job) => {
     // Don't show modal if job is already paid
-    if (job.paymentStatus === 'Paid') {
+    if (String(job.paymentStatus || '').toLowerCase() === 'paid') {
       showModal('info', 'Job Completed', 'This job has already been paid.');
       return;
     }
@@ -825,7 +824,7 @@ export default function DashboardScreen() {
                 </View>
 
                 <View style={styles.paymentBadge}>
-                  {job.paymentStatus === 'Paid' ? (
+                  {String(job.paymentStatus || '').toLowerCase() === 'paid' ? (
                     <>
                       <MaterialIcons name="check-circle" size={20} color="#00b894" />
                       <Text style={{ color: '#00b894', fontWeight: '700' }}>Paid</Text>
@@ -870,12 +869,12 @@ export default function DashboardScreen() {
                     styles.statusBadge,
                     {
                       backgroundColor:
-                        job.paymentStatus === 'Paid' ? '#00b894' : '#f39c12',
+                        String(job.paymentStatus || '').toLowerCase() === 'paid' ? '#00b894' : '#f39c12',
                     },
                   ]}
                 >
                   <Text style={styles.statusText}>
-                    {job.paymentStatus || 'Pending'}
+                    {(String(job.paymentStatus || '').toLowerCase() === 'paid' ? 'paid' : 'pending')}
                   </Text>
                 </View>
               </View>

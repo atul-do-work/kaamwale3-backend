@@ -11,7 +11,7 @@ function createUpdateContractorStats({ Job, ContractorStats }) {
       });
 
       const jobsPosted = todayJobs.length;
-      const jobsCompleted = todayJobs.filter((j) => j.attendanceStatus && j.paymentStatus === "Paid").length;
+      const jobsCompleted = todayJobs.filter((j) => j.attendanceStatus && String(j.paymentStatus || "").toLowerCase() === "paid").length;
       const workersList = [
         ...new Set(
           todayJobs.flatMap((j) => [
@@ -65,7 +65,7 @@ function createEmitEventToUsers({ io, connectedWorkers }, eventName) {
 
       for (const [socketId, worker] of connectedWorkers.entries()) {
         if (!worker) continue;
-        if (ids.includes(worker.name?.toString()) || ids.includes(worker.phone?.toString())) {
+        if (ids.includes(worker.phone?.toString()) || ids.includes(worker.id?.toString())) {
           const targetSocket = io.sockets.sockets.get(socketId);
           if (targetSocket) {
             targetSocket.emit(eventName, payload);
@@ -79,7 +79,7 @@ function createEmitEventToUsers({ io, connectedWorkers }, eventName) {
 
         try {
           const user = socket.data?.user;
-          if (user && (ids.includes(user.name?.toString()) || ids.includes(user.phone?.toString()))) {
+          if (user && (ids.includes(user.phone?.toString()) || ids.includes(user.id?.toString()))) {
             socket.emit(eventName, payload);
             sentSockets.add(socketId);
           }

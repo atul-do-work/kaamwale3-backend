@@ -46,7 +46,7 @@ function createContractorStatsRouter() {
 
   router.get("/contractor/stats", authenticateToken, async (req, res) => {
     try {
-      const { phone, name } = req.user;
+      const { phone } = req.user;
       const { range = "today" } = req.query;
 
       const now = new Date();
@@ -63,12 +63,7 @@ function createContractorStatsRouter() {
 
       const jobQuery = {
         $and: [
-          {
-            $or: [
-              { contractorPhone: phone },
-              ...(name ? [{ contractorName: name }] : []),
-            ],
-          },
+          { contractorPhone: phone },
           {
             $or: [{ isCancelled: { $exists: false } }, { isCancelled: { $ne: true } }],
           },
@@ -97,7 +92,7 @@ function createContractorStatsRouter() {
 
         const bucket = dayMap.get(dayKey);
         bucket.jobsPosted += 1;
-        if (job.paymentStatus === "Paid") {
+        if (String(job.paymentStatus || "").toLowerCase() === "paid") {
           bucket.jobsCompleted += 1;
           bucket.totalSpending += Number(job.amount) || 0;
         }
@@ -183,7 +178,7 @@ function createContractorStatsRouter() {
         return jDate.getTime() === today.getTime();
       });
       const jobsPosted = todayJobs.length;
-      const jobsCompleted = todayJobs.filter((j) => j.attendanceStatus && j.paymentStatus === "Paid").length;
+      const jobsCompleted = todayJobs.filter((j) => j.attendanceStatus && String(j.paymentStatus || "").toLowerCase() === "paid").length;
       const workersList = [
         ...new Set(
           todayJobs.flatMap((j) => [

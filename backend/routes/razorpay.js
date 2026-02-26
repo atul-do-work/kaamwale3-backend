@@ -205,7 +205,7 @@ router.post('/verify-payment', authenticateToken, async (req, res) => {
     info('✅ Contractor identity verified', buildLogContext(req, { orderId, paymentId, jobId, workerPhone, contractorPhone: req.user.phone }));
 
     // 🔐 Idempotent success: if webhook/client already marked job paid, return success
-    if (job.paymentStatus === 'Paid') {
+    if (job.paymentStatus === 'paid') {
       const existingWallet = await Wallet.findOne({ phone: workerPhone }).session(session);
       await session.commitTransaction();
       return res.status(200).json({
@@ -329,7 +329,7 @@ router.post('/verify-payment', authenticateToken, async (req, res) => {
     const updatedJobFromWebhook = await Job.findByIdAndUpdate(
       jobId,
       {
-        paymentStatus: 'Paid',
+        paymentStatus: 'paid',
         paymentTime,
         status: nextJobStatus,
         timeSpentMinutes: computedTimeSpentMinutes,
@@ -351,7 +351,15 @@ router.post('/verify-payment', authenticateToken, async (req, res) => {
         idempotencyKey: paymentId,
         provider: 'razorpay',
         providerEventId: paymentId,
-        metadata: { orderId, amount: actualAmount }
+        metadata: {
+          orderId,
+          paymentId,
+          amount: actualAmount,
+          paymentCapturedAt: updatedJobFromWebhook.paymentTime,
+          actor: req.user.phone || 'contractor',
+          source: 'app',
+          idempotencyKey: paymentId,
+        }
       }],
       { session }
     );
@@ -434,7 +442,7 @@ router.post('/webhook', async (req, res) => {
     // CRITICAL: Webhook secret is different from API key secret
     const webhookSecret = process.env.RAZORPAY_WEBHOOK_SECRET;
     if (!webhookSecret) {
-      error('🚨 CRITICAL: RAZORPAY_WEBHOOK_SECRET not configured', { requestId: req.requestId || null, route: req.originalUrl || req.url });
+      error('🚨 CRITICAL: RAZORPAY_WEBHOOK_SECRET not configured', buildLogContext(req));
       // Don't crash, just acknowledge (Razorpay will retry)
       return res.status(200).json({ received: true });
     }
@@ -446,12 +454,12 @@ router.post('/webhook', async (req, res) => {
       .digest('hex');
 
     if (expectedSignature !== webhookSignature) {
-      error('🔴 WEBHOOK SIGNATURE MISMATCH - Unauthorized webhook call', { requestId: req.requestId || null, route: req.originalUrl || req.url });
+      error('🔴 WEBHOOK SIGNATURE MISMATCH - Unauthorized webhook call', buildLogContext(req));
       await session.abortTransaction();
       return res.status(403).json({ success: false, message: 'Invalid webhook signature' });
     }
 
-    info('✅ Webhook signature verified', { requestId: req.requestId || null, route: req.originalUrl || req.url });
+    info('✅ Webhook signature verified', buildLogContext(req));
 
     // Extract event type and payment data
     const event = req.body.event;
@@ -459,13 +467,13 @@ router.post('/webhook', async (req, res) => {
 
     // Only process payment.captured events
     if (event !== 'payment.captured') {
-      warn('⚠️ Webhook event ignored (only payment.captured processed)', { requestId: req.requestId || null, event });
+      warn('⚠️ Webhook event ignored (only payment.captured processed)', buildLogContext(req, { event }));
       await session.commitTransaction();
       return res.status(200).json({ received: true, ignored: true });
     }
 
     if (!payment) {
-      error('🔴 Payment data missing from webhook', { requestId: req.requestId || null, event });
+      error('🔴 Payment data missing from webhook', buildLogContext(req, { event }));
       await session.abortTransaction();
       return res.status(400).json({ success: false, message: 'Invalid webhook payload' });
     }
@@ -474,7 +482,7 @@ router.post('/webhook', async (req, res) => {
 
     // Validate payment status
     if (status !== 'captured') {
-      warn('⚠️ Payment status is not captured', { requestId: req.requestId || null, paymentId, orderId, status });
+      warn('⚠️ Payment status is not captured', buildLogContext(req, { paymentId, orderId, status, idempotencyKey: paymentId }));
       await session.commitTransaction();
       return res.status(200).json({ received: true });
     }
@@ -486,30 +494,30 @@ router.post('/webhook', async (req, res) => {
 
     // Wallet deposits are handled by /wallet/deposit/webhook route.
     if (String(notes?.type || "").toLowerCase() === "wallet_deposit") {
-      info('ℹ️ Ignoring wallet deposit event on payment webhook', { requestId: req.requestId || null, paymentId, orderId });
+      info('ℹ️ Ignoring wallet deposit event on payment webhook', buildLogContext(req, { paymentId, orderId, idempotencyKey: paymentId }));
       await session.commitTransaction();
       return res.status(200).json({ received: true, ignored: "wallet_deposit" });
     }
 
     if (!workerPhone || !jobId) {
-      warn('⚠️ Ignoring payment webhook without workerPhone/jobId notes', { requestId: req.requestId || null, paymentId, orderId });
+      warn('⚠️ Ignoring payment webhook without workerPhone/jobId notes', buildLogContext(req, { paymentId, orderId, idempotencyKey: paymentId }));
       await session.commitTransaction();
       return res.status(200).json({ received: true, ignored: "missing_job_notes" });
     }
 
-    info('💰 Webhook processing payment', { requestId: req.requestId || null, paymentId, orderId, jobId, workerPhone, amount: actualAmount });
+    info('💰 Webhook processing payment', buildLogContext(req, { paymentId, orderId, jobId, workerPhone, amount: actualAmount, idempotencyKey: paymentId }));
 
     // Get job details
     const job = await Job.findById(jobId).session(session);
     if (!job) {
-      warn('⚠️ Job not found for webhook payment', { requestId: req.requestId || null, paymentId, orderId, jobId, workerPhone });
+      warn('⚠️ Job not found for webhook payment', buildLogContext(req, { paymentId, orderId, jobId, workerPhone, idempotencyKey: paymentId }));
       await session.commitTransaction();
       return res.status(200).json({ received: true, message: 'Job not found' });
     }
 
     // Check if job already paid
-    if (job.paymentStatus === 'Paid') {
-      info('⚠️ Job already paid (idempotency)', { requestId: req.requestId || null, paymentId, orderId, jobId, workerPhone });
+    if (job.paymentStatus === 'paid') {
+      info('⚠️ Job already paid (idempotency)', buildLogContext(req, { paymentId, orderId, jobId, workerPhone, idempotencyKey: paymentId }));
       await session.commitTransaction();
       return res.status(200).json({ received: true, message: 'Job already paid' });
     }
@@ -540,7 +548,7 @@ router.post('/webhook', async (req, res) => {
 
     // If wallet is null, payment already processed (idempotency)
     if (!updatedWallet) {
-      info('⚠️ WEBHOOK IDEMPOTENCY: Payment already processed', { requestId: req.requestId || null, paymentId, orderId, jobId, workerPhone });
+      info('⚠️ WEBHOOK IDEMPOTENCY: Payment already processed', buildLogContext(req, { paymentId, orderId, jobId, workerPhone, idempotencyKey: paymentId }));
       await session.commitTransaction();
       return res.status(200).json({ received: true, message: 'Payment already processed' });
     }
@@ -601,10 +609,24 @@ router.post('/webhook', async (req, res) => {
     );
 
     // Update job payment status
+    const webhookPaymentTime = new Date();
+    const webhookAcceptedAt = job.acceptedAt ? new Date(job.acceptedAt) : null;
+    const webhookTimeSpentMinutes =
+      webhookAcceptedAt && !Number.isNaN(webhookAcceptedAt.getTime())
+        ? Math.max(0, Math.round((webhookPaymentTime.getTime() - webhookAcceptedAt.getTime()) / 60000))
+        : Number(job.timeSpentMinutes || 0);
+    const webhookHoursWorked = Math.round(((webhookTimeSpentMinutes || 0) / 60) * 10) / 10;
+
     const nextJobStatus = computeFinalJobStatusForPaid(job.status);
     const updatedJobFromWebhook = await Job.findByIdAndUpdate(
       jobId,
-      { paymentStatus: 'Paid', paymentTime: new Date(), status: nextJobStatus },
+      {
+        paymentStatus: 'paid',
+        paymentTime: webhookPaymentTime,
+        status: nextJobStatus,
+        timeSpentMinutes: webhookTimeSpentMinutes,
+        hoursWorked: webhookHoursWorked,
+      },
       { new: true, session }
     );
 
@@ -620,7 +642,15 @@ router.post('/webhook', async (req, res) => {
         idempotencyKey: paymentId,
         provider: 'razorpay',
         providerEventId: paymentId,
-        metadata: { orderId, amount: actualAmount }
+        metadata: {
+          orderId,
+          paymentId,
+          amount: actualAmount,
+          webhookTime: new Date(),
+          actor: 'webhook',
+          source: 'webhook',
+          idempotencyKey: paymentId,
+        }
       }],
       { session }
     );
@@ -638,9 +668,9 @@ router.post('/webhook', async (req, res) => {
           eventType: 'job_completed',
           status: updatedJobFromWebhook.status,
           paymentStatus: updatedJobFromWebhook.paymentStatus,
-          hoursWorked: Number(updatedJobFromWebhook.hoursWorked || computedHoursWorked || 0),
-          timeSpentMinutes: Number(updatedJobFromWebhook.timeSpentMinutes || computedTimeSpentMinutes || 0),
-          eventTime: updatedJobFromWebhook.paymentTime || paymentTime,
+          hoursWorked: Number(updatedJobFromWebhook.hoursWorked || webhookHoursWorked || 0),
+          timeSpentMinutes: Number(updatedJobFromWebhook.timeSpentMinutes || webhookTimeSpentMinutes || 0),
+          eventTime: updatedJobFromWebhook.paymentTime || webhookPaymentTime,
           metadata: { source: 'payment-webhook', paymentId, orderId },
         });
 
@@ -650,8 +680,8 @@ router.post('/webhook', async (req, res) => {
           amount: Number(updatedJobFromWebhook.amount || actualAmount || 0),
           workerType: updatedJobFromWebhook.workerType,
           contractorName: updatedJobFromWebhook.contractorName,
-          hoursWorked: Number(updatedJobFromWebhook.hoursWorked || computedHoursWorked || 0),
-          timeSpentMinutes: Number(updatedJobFromWebhook.timeSpentMinutes || computedTimeSpentMinutes || 0),
+          hoursWorked: Number(updatedJobFromWebhook.hoursWorked || webhookHoursWorked || 0),
+          timeSpentMinutes: Number(updatedJobFromWebhook.timeSpentMinutes || webhookTimeSpentMinutes || 0),
         });
       }
     } catch (gigErr) {
@@ -674,7 +704,7 @@ router.post('/webhook', async (req, res) => {
     // Commit transaction
     await session.commitTransaction();
 
-    info('✅ Webhook payment processed successfully', { requestId: req.requestId || null, paymentId, orderId, jobId, workerPhone, amount: actualAmount });
+    info('✅ Webhook payment processed successfully', buildLogContext(req, { paymentId, orderId, jobId, workerPhone, amount: actualAmount, idempotencyKey: paymentId }));
 
     // Emit socket event to notify worker (if connected)
     const io = req.app.get('io');
@@ -696,7 +726,7 @@ router.post('/webhook', async (req, res) => {
       io.to(workerPhone).emit('jobUpdated', updatedJobFromWebhook);
       // ✅ Emit to contractor too so their job list shows payment complete
       io.to(job.contractorPhone).emit('jobUpdated', updatedJobFromWebhook);
-      info('📤 Emitted wallet/notification/jobUpdated via webhook', { requestId: req.requestId || null, paymentId, orderId, jobId, workerPhone });
+      info('📤 Emitted wallet/notification/jobUpdated via webhook', buildLogContext(req, { paymentId, orderId, jobId, workerPhone, idempotencyKey: paymentId }));
     }
 
     // Return 200 OK to Razorpay (acknowledges receipt)
@@ -708,7 +738,14 @@ router.post('/webhook', async (req, res) => {
 
   } catch (error) {
     await session.abortTransaction();
-    error('Webhook processing error', { requestId: req.requestId || null, paymentId: req.body?.payload?.payment?.entity?.id || null, orderId: req.body?.payload?.payment?.entity?.order_id || null, jobId: req.body?.payload?.payment?.entity?.notes?.jobId || null, workerPhone: req.body?.payload?.payment?.entity?.notes?.workerPhone || null, error: error?.message || String(error) });
+    error('Webhook processing error', buildLogContext(req, {
+      paymentId: req.body?.payload?.payment?.entity?.id || null,
+      orderId: req.body?.payload?.payment?.entity?.order_id || null,
+      jobId: req.body?.payload?.payment?.entity?.notes?.jobId || null,
+      workerPhone: req.body?.payload?.payment?.entity?.notes?.workerPhone || null,
+      idempotencyKey: req.body?.payload?.payment?.entity?.id || null,
+      error: error?.message || String(error),
+    }));
     await sendOpsAlert('Razorpay payment webhook failed', { error: error && error.message });
     
     // Return non-2xx so Razorpay retries webhook delivery.

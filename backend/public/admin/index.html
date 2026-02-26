@@ -1732,7 +1732,7 @@
                     // Payment status breakdown
                     const paymentStatusHtml = Object.entries(stats.paymentBreakdown || {}).map(([status, count]) => `
                         <div style="background: white; padding: 12px; border-radius: 6px; border-left: 4px solid ${
-                            status === 'Paid' || status === 'paid' ? '#27ae60' : '#e74c3c'
+                            String(status || '').toLowerCase() === 'paid' ? '#27ae60' : '#e74c3c'
                         };">
                             <div style="font-size: 12px; color: #666; text-transform: capitalize;">${status}</div>
                             <div style="font-size: 24px; font-weight: bold; color: #333;">${count}</div>
@@ -1978,7 +1978,7 @@
                     <td>${job.acceptedBy || '-'}</td>
                     <td>₹${job.amount}</td>
                     <td><span class="badge pending">${job.status || 'open'}</span></td>
-                    <td><span class="badge ${job.paymentStatus === 'Paid' ? 'approved' : 'pending'}">${job.paymentStatus || 'pending'}</span></td>
+                    <td><span class="badge ${String(job.paymentStatus || '').toLowerCase() === 'paid' ? 'approved' : 'pending'}">${String(job.paymentStatus || '').toLowerCase() === 'paid' ? 'paid' : 'pending'}</span></td>
                     <td>${job.contractorRating?.stars ? `${job.contractorRating.stars} ⭐` : '-'}</td>
                     <td><button class="btn-small btn-view" onclick="showJobDetails('${job._id}')">View</button></td>
                 </tr>
@@ -2767,7 +2767,7 @@
                                 <h5 style="margin-top: 0; margin-bottom: 10px;">Payment Details</h5>
                                 <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
                                     <div>
-                                        <p style="margin: 5px 0;"><strong>Status:</strong> <span class="badge ${getPaymentStatusClass(job.paymentStatus)}">${job.paymentStatus || 'Pending'}</span></p>
+                                       <p style="margin: 5px 0;"><strong>Status:</strong> <span class="badge ${getPaymentStatusClass(job.paymentStatus)}">${String(job.paymentStatus || '').toLowerCase() === 'paid' ? 'paid' : 'pending'}</span></p>
                                         <p style="margin: 5px 0;"><strong>Mode:</strong> ${job.paymentMode || '-'}</p>
                                     </div>
                                     <div>

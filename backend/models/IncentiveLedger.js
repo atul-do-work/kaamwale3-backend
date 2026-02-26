@@ -61,6 +61,16 @@ const incentiveLedgerSchema = new mongoose.Schema({
       failedDates: { type: [String], default: [] },
       failureReason: { type: String, default: null },
     },
+    dailyQualificationTrail: [{
+      date: { type: String, default: null },
+      jobsCompleted: { type: Number, default: 0 },
+      hoursWorked: { type: Number, default: 0 },
+      declinesCount: { type: Number, default: 0 },
+      hasCompletedJob: { type: Boolean, default: false },
+      meetsMinimumHours: { type: Boolean, default: false },
+      meetsNoDeclines: { type: Boolean, default: true },
+      qualified: { type: Boolean, default: false },
+    }],
     lastWorkDate: String, // YYYY-MM-DD format
     verifiedAt: Date
   },

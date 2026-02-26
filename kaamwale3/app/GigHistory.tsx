@@ -122,6 +122,7 @@ export default function GigHistory() {
   const [gigError, setGigError] = useState<string | null>(null);
   const [incentiveLoading, setIncentiveLoading] = useState(false);
   const [incentiveError, setIncentiveError] = useState<string | null>(null);
+  const [dayTick, setDayTick] = useState(0);
   const [page, setPage] = useState(1);
   const [hasMore, setHasMore] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -145,6 +146,47 @@ export default function GigHistory() {
       if (incentiveAbortRef.current) incentiveAbortRef.current.abort();
     };
   }, []);
+
+  // Re-render at local midnight so today's hours reset automatically.
+  useEffect(() => {
+    const now = new Date();
+    const nextMidnight = new Date(now);
+    nextMidnight.setHours(24, 0, 0, 0);
+    const ms = Math.max(1000, nextMidnight.getTime() - now.getTime());
+    const timer = setTimeout(() => setDayTick((v) => v + 1), ms);
+    return () => clearTimeout(timer);
+  }, [dayTick]);
+
+  const formatHoursDotMinutes = (totalMinutes: number) => {
+    const safe = Math.max(0, Number(totalMinutes) || 0);
+    const hours = Math.floor(safe / 60);
+    const minutes = safe % 60;
+    return `${hours}.${String(minutes).padStart(2, '0')}`;
+  };
+
+  const todayWorkedMinutes = React.useMemo(() => {
+    const now = new Date();
+    const y = now.getFullYear();
+    const m = now.getMonth();
+    const d = now.getDate();
+
+    return gigs.reduce((sum, gig) => {
+      const isPaid = String(gig.paymentStatus || '').toLowerCase() === 'paid';
+      const isCompleted = String(gig.status || '').toLowerCase() === 'completed';
+      if (!isPaid && !isCompleted) return sum;
+
+      const sourceDate = gig.paymentTime || gig.date || gig.acceptedAt;
+      if (!sourceDate) return sum;
+      const ts = new Date(sourceDate);
+      if (Number.isNaN(ts.getTime())) return sum;
+      if (ts.getFullYear() !== y || ts.getMonth() !== m || ts.getDate() !== d) return sum;
+
+      const explicitMinutes = Number(gig.timeSpentMinutes || 0);
+      if (explicitMinutes > 0) return sum + explicitMinutes;
+      const fallbackMinutes = Math.round((Number(gig.hoursWorked || 0) || 0) * 60);
+      return sum + Math.max(0, fallbackMinutes);
+    }, 0);
+  }, [gigs, dayTick]);
 
   // ✅ Fetch gigs and incentive progress when screen focuses
   useFocusEffect(
@@ -393,7 +435,7 @@ export default function GigHistory() {
             </View>
             <View style={styles.statDivider} />
             <View style={styles.statItem}>
-              <Text style={styles.statValue}>{incentiveData.totalHours}</Text>
+              <Text style={styles.statValue}>{formatHoursDotMinutes(todayWorkedMinutes)}</Text>
               <Text style={styles.statLabel}>{t('hours')}</Text>
             </View>
           </View>
@@ -404,9 +446,6 @@ export default function GigHistory() {
 
   const renderConditionsCard = () => {
     if (!incentiveData) return null;
-    const dayRows = Array.isArray(incentiveData.fiveDayWindow?.dailyStatus)
-      ? [...(incentiveData.fiveDayWindow?.dailyStatus || [])].reverse()
-      : [];
 
     return (
       <View style={styles.conditionsCard}>
@@ -457,19 +496,6 @@ export default function GigHistory() {
           </View>
         </View>
 
-        {dayRows.length > 0 && (
-          <View style={styles.dailyBreakdown}>
-            <Text style={styles.dailyBreakdownTitle}>5-Day Breakdown</Text>
-            {dayRows.map((day) => (
-              <View key={day.date} style={styles.dailyRow}>
-                <Text style={styles.dailyDate}>{formatDate(day.date)}</Text>
-                <Text style={[styles.dailyHours, { color: day.meetsMinimumHours ? '#27AE60' : '#E74C3C' }]}>
-                  {Number(day.hoursWorked || 0).toFixed(1)}h / 8h {day.meetsMinimumHours ? '✓' : '✗'}
-                </Text>
-              </View>
-            ))}
-          </View>
-        )}
       </View>
     );
   };
@@ -789,14 +815,11 @@ export default function GigHistory() {
             </View>
           ) : null}
           <FlatList
-            data={gigs}
+            data={[]}
             renderItem={renderGigCard}
             keyExtractor={(item) => item._id}
             ListHeaderComponent={ListHeader}
             ListEmptyComponent={null}
-            ListFooterComponent={ListFooter}
-            onEndReached={handleLoadMore}
-            onEndReachedThreshold={0.5}
             refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
             showsVerticalScrollIndicator={false}
             scrollIndicatorInsets={{ right: 1 }}

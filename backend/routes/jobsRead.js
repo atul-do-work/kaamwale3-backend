@@ -2,6 +2,20 @@ const express = require("express");
 
 function createJobsReadRouter({ authenticateToken, Job, getDistanceFromLatLonInKm }) {
   const router = express.Router();
+  const normalizeStatus = (v) => String(v || "").trim().toLowerCase();
+  const normalizeJobForApi = (job) => {
+    if (!job || typeof job !== "object") return job;
+    const copy = { ...job };
+    copy.status = normalizeStatus(copy.status);
+    copy.paymentStatus = normalizeStatus(copy.paymentStatus);
+    if (Array.isArray(copy.acceptedWorkers)) {
+      copy.acceptedWorkers = copy.acceptedWorkers.map((w) => ({
+        ...w,
+        paymentStatus: normalizeStatus(w?.paymentStatus),
+      }));
+    }
+    return copy;
+  };
 
   router.post("/jobs/nearby", authenticateToken, async (req, res) => {
     try {
@@ -24,7 +38,7 @@ function createJobsReadRouter({ authenticateToken, Job, getDistanceFromLatLonInK
               { "acceptedWorkers.phone": workerPhone },
             ],
           },
-          { paymentStatus: { $ne: "Paid" } },
+          { paymentStatus: { $ne: "paid" } },
           { status: { $nin: ["cancelled", "expired"] } },
         ],
       });
@@ -38,7 +52,7 @@ function createJobsReadRouter({ authenticateToken, Job, getDistanceFromLatLonInK
         $and: [
           { status: { $in: ["pending", "posted", "offered"] } },
           { isCancelled: { $ne: true } },
-          { paymentStatus: { $ne: "Paid" } },
+          { paymentStatus: { $ne: "paid" } },
           // Canonical decline identity is worker phone.
           { declinedBy: { $nin: [workerPhone] } },
           {
@@ -99,14 +113,13 @@ function createJobsReadRouter({ authenticateToken, Job, getDistanceFromLatLonInK
         jobs = await Job.find({
           $or: [
             { contractorPhone: req.user.phone },
-            { contractorName: req.user.name },
           ],
         });
       } else {
         return res.json([]);
       }
 
-      res.json(jobs);
+      res.json((jobs || []).map(normalizeJobForApi));
     } catch (err) {
       console.error("Failed to load jobs", err);
       res.status(500).json({ message: "Failed to load jobs" });
@@ -156,7 +169,10 @@ function createJobsReadRouter({ authenticateToken, Job, getDistanceFromLatLonInK
         hasMore: skip + pageSize < totalCount,
       };
 
-      res.json(response);
+      res.json({
+        ...response,
+        gigs: (response.gigs || []).map(normalizeJobForApi),
+      });
     } catch (err) {
       console.error("Failed to load worker's accepted jobs:", err);
       res.status(500).json({ success: false, message: "Failed to load jobs", error: err.message });
@@ -185,7 +201,7 @@ function createJobsReadRouter({ authenticateToken, Job, getDistanceFromLatLonInK
         return res.status(404).json({ success: false, message: "Job not available" });
       }
 
-      return res.json({ success: true, job });
+      return res.json({ success: true, job: normalizeJobForApi(job) });
     } catch (err) {
       console.error("Failed to fetch job by id", err);
       return res.status(500).json({ success: false, message: "Failed to fetch job" });

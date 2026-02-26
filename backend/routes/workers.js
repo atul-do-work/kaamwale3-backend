@@ -297,7 +297,7 @@ function createWorkersRouter({
       const completedJobs = await Job.find({
         $and: [
           workerJobQuery,
-          { paymentStatus: { $in: ["Paid", "paid"] } },
+          { paymentStatus: { $in: ["paid"] } },
           {
             $or: [
               { status: "completed" },
@@ -366,7 +366,7 @@ function createWorkersRouter({
       }
 
       const historyCount = await Job.countDocuments({
-        $and: [workerJobQuery, { paymentStatus: { $in: ["Paid", "paid"] } }],
+        $and: [workerJobQuery, { paymentStatus: { $in: ["paid"] } }],
       });
 
       const wallet = await Wallet.findOne({ phone: workerPhone }).select("transactions").lean();

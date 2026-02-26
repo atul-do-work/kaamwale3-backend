@@ -27,6 +27,9 @@ interface FullContainerProps {
   offersClaimed?: number;
   averageRating?: number;
   activeBonuses?: number;
+  loading?: boolean;
+  errorText?: string | null;
+  lastUpdatedAt?: Date | null;
   onRefresh?: () => void;
 }
 
@@ -54,6 +57,7 @@ const StatCard = React.memo(({ icon, label, value, color = '#667eea', isLarge = 
     <Text style={[styles.statValue, isLarge && styles.statValueLarge]}>{value}</Text>
   </LinearGradient>
 ));
+StatCard.displayName = 'StatCard';
 
 export default function FullContainer({
   todayEarnings = 0,
@@ -64,6 +68,9 @@ export default function FullContainer({
   offersClaimed = 0,
   averageRating = 0,
   activeBonuses = 0,
+  loading = false,
+  errorText = null,
+  lastUpdatedAt = null,
   onRefresh,
 }: FullContainerProps) {
   const [refreshing, setRefreshing] = useState(false);
@@ -105,8 +112,27 @@ export default function FullContainer({
     >
       {/* Welcome Section */}
       <View style={styles.welcomeSection}>
-        <Text style={styles.welcomeText}>Today's Overview</Text>
+        <Text style={styles.welcomeText}>Today&apos;s Overview</Text>
+        <Text style={{ color: '#7c8aa3', fontSize: 12, marginTop: 4 }}>
+          {lastUpdatedAt ? `Last updated: ${lastUpdatedAt.toLocaleTimeString('en-IN', { hour12: true })}` : 'Last updated: --'}
+        </Text>
+        <Text style={{ color: '#94a3b8', fontSize: 11, marginTop: 2 }}>Pull down to refresh</Text>
       </View>
+
+      {errorText ? (
+        <View style={{ marginHorizontal: 4, marginBottom: 12, backgroundColor: '#FEE2E2', borderRadius: 10, padding: 10 }}>
+          <Text style={{ color: '#991B1B', fontWeight: '600' }}>{errorText}</Text>
+        </View>
+      ) : null}
+
+      {loading ? (
+        <View style={{ gap: 12 }}>
+          <View style={{ height: 140, borderRadius: 16, backgroundColor: '#dbe2ee' }} />
+          <View style={{ height: 140, borderRadius: 16, backgroundColor: '#e2e8f4' }} />
+          <View style={{ height: 200, borderRadius: 16, backgroundColor: '#cfd9e8' }} />
+        </View>
+      ) : (
+        <>
 
       {/* Today's Progress - Grid Layout */}
       <View style={styles.gridContainer}>
@@ -191,6 +217,8 @@ export default function FullContainer({
         <Text style={styles.tipText}>⏱️ Complete jobs on time for bonus rewards</Text>
         <Text style={styles.tipText}>⭐ Maintain high ratings for premium job offers</Text>
       </View>
+        </>
+      )}
     </ScrollView>
   );
 }

@@ -102,7 +102,7 @@ interface Job {
   numberOfDays?: number; // ✅ Job duration in days
   distanceKm?: number;
   attendanceStatus?: "Present" | "Absent" | null;
-  paymentStatus?: "Paid" | null;
+  paymentStatus?: "paid" | null;
   workerType?: string;
   declinedBy?: string[];
   status?: string;
@@ -146,7 +146,7 @@ const JobItem = memo(({ item, onAccept, onDecline, timer, t }: JobItemProps) => 
       </Text>
     )}
 
-    {item.paymentStatus === "Paid" && (
+    {String(item.paymentStatus || "").toLowerCase() === "paid" && (
       <Text style={{ marginTop: 5, fontWeight: "700", color: "#3498db" }}>Paid</Text>
     )}
 
@@ -192,6 +192,9 @@ function WorkerHome() {
   const [jobsCompleted, setJobsCompleted] = useState<number>(0);
   const [avgCompletedRating, setAvgCompletedRating] = useState<number>(0);
   const [todayIncentiveEarnings, setTodayIncentiveEarnings] = useState<number>(0);
+  const [overviewLoading, setOverviewLoading] = useState<boolean>(false);
+  const [overviewError, setOverviewError] = useState<string | null>(null);
+  const [overviewLastUpdatedAt, setOverviewLastUpdatedAt] = useState<Date | null>(null);
   const [notificationCount, setNotificationCount] = useState<number>(0);
   const [workerProfilePhoto, setWorkerProfilePhoto] = useState<string | null>(null); // ✅ Worker profile photo
 
@@ -817,7 +820,7 @@ function WorkerHome() {
 
     // ✅ PRODUCTION LOGIC: Only fetch location if:
     // 1. Job is accepted (acceptedBy !== null)
-    // 2. Job NOT paid (paymentStatus !== "Paid")
+    // 2. Job NOT paid (paymentStatus !== "paid")
     // 3. Attendance NOT marked (attendanceStatus !== "Present" && "Absent")
 
     const startLocationTracking = () => {
@@ -888,7 +891,7 @@ function WorkerHome() {
         console.log("📩 SOCKET: Job updated", data);
         
         // If job is paid OR attendance marked → stop location tracking
-        if (data.paymentStatus === "Paid" || data.attendanceStatus) {
+        if (String(data.paymentStatus || "").toLowerCase() === "paid" || data.attendanceStatus) {
           stopLocationTracking();
           console.log("✅ Location tracking stopped: Job paid or attendance marked");
         }
@@ -1096,11 +1099,16 @@ function WorkerHome() {
     if (!token) return;
 
     try {
+      setOverviewLoading(true);
+      setOverviewError(null);
       const res = await fetch(`${API_BASE}/worker/overview-stats`, {
         headers: { Authorization: `Bearer ${token}` },
       });
 
-      if (!res.ok) return;
+      if (!res.ok) {
+        setOverviewError('Failed to load overview stats');
+        return;
+      }
 
       const payload = await res.json();
       const stats = payload?.stats || {};
@@ -1113,8 +1121,12 @@ function WorkerHome() {
       setJobsCompleted(Number(stats.jobsCompleted) || 0);
       setAvgCompletedRating(Number(stats.avgCompletedRating) || 0);
       setTodayIncentiveEarnings(Number(stats.activeBonuses) || 0);
+      setOverviewLastUpdatedAt(new Date());
     } catch (err) {
       console.error("Failed to calculate metrics:", err);
+      setOverviewError('Failed to load overview stats');
+    } finally {
+      setOverviewLoading(false);
     }
   }, [token]);
 
@@ -1569,7 +1581,10 @@ function WorkerHome() {
       const updatedJob = await fetchJobById(job._id);
       if (!updatedJob) return;
 
-      if (updatedJob.paymentStatus === "Paid" && job.paymentStatus !== "Paid") {
+      if (
+        String(updatedJob.paymentStatus || "").toLowerCase() === "paid" &&
+        String(job.paymentStatus || "").toLowerCase() !== "paid"
+      ) {
         Alert.alert("Payment Received", `You have received payment for ${updatedJob.title}`);
       }
 
@@ -2243,6 +2258,9 @@ function WorkerHome() {
         offersClaimed={jobsCompleted}
         averageRating={avgCompletedRating}
         activeBonuses={todayIncentiveEarnings}
+        loading={overviewLoading}
+        errorText={overviewError}
+        lastUpdatedAt={overviewLastUpdatedAt}
         onRefresh={calculateMetrics}
       />
         </>

@@ -168,12 +168,12 @@ async function offerJobToNextWorker(job) {
         $and: [
           {
             $or: [
-              { acceptedBy: worker.phone, paymentStatus: { $ne: "Paid" } }, // Single job
+              { acceptedBy: worker.phone, paymentStatus: { $ne: "paid" } }, // Single job
               {
                 acceptedWorkers: {
                   $elemMatch: {
                     phone: worker.phone,
-                    paymentStatus: { $ne: "Paid" },
+                    paymentStatus: { $ne: "paid" },
                   },
                 },
               }, // Bulk job (per-worker)

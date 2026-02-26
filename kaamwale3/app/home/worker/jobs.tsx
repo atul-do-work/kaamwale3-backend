@@ -33,7 +33,7 @@ interface Job {
   date: string; // ✅ Job date from backend
   status?: "pending" | "accepted" | "declined" | "cancelled" | "expired";
   acceptedBy?: string;
-  paymentStatus?: "Paid" | null;
+  paymentStatus?: "paid" | null;
   rating?: {
     stars: number;
     feedback?: string;
@@ -63,6 +63,21 @@ const getWeekWindow = () => {
   const weekEnd = new Date(weekStart);
   weekEnd.setDate(weekEnd.getDate() + 7);
   return { weekStart, weekEnd };
+};
+
+const isPaid = (job: Job): boolean => String(job?.paymentStatus || "").toLowerCase() === "paid";
+const isPaidStatus = (status?: string | null): boolean => String(status || "").toLowerCase() === "paid";
+
+const isJobDayExpired = (job: Job): boolean => {
+  const sourceDate = job?.date || job?.createdAt || job?.paymentTime;
+  if (!sourceDate) return false;
+  const parsed = new Date(sourceDate);
+  if (Number.isNaN(parsed.getTime())) return false;
+
+  // Local-time day boundary: card moves after local midnight of job day.
+  const nextMidnight = new Date(parsed);
+  nextMidnight.setHours(24, 0, 0, 0);
+  return new Date() >= nextMidnight;
 };
 
 export default function Jobs(): React.ReactElement {
@@ -317,7 +332,7 @@ export default function Jobs(): React.ReactElement {
       
       // Alert for new payments - only show if not already notified
       jobsWithLocation.forEach((job) => {
-        if (previousPaymentState.current[job._id] !== "Paid" && job.paymentStatus === "Paid") {
+        if (!isPaidStatus(previousPaymentState.current[job._id]) && isPaid(job)) {
           // Only show notification if we haven't already notified for this job
           if (!paymentNotifiedJobs.current.has(job._id)) {
             paymentNotifiedJobs.current.add(job._id);
@@ -429,7 +444,7 @@ export default function Jobs(): React.ReactElement {
         return prev;
       });
 
-      if (previousPaymentState.current[job._id] !== "Paid" && job.paymentStatus === "Paid") {
+      if (!isPaidStatus(previousPaymentState.current[job._id]) && isPaid(job)) {
         if (!paymentNotifiedJobs.current.has(job._id)) {
           paymentNotifiedJobs.current.add(job._id);
           setPaymentJobData({
@@ -590,7 +605,7 @@ export default function Jobs(): React.ReactElement {
             elevation: 4,
           }}
         >
-          {job.paymentStatus !== "Paid" && (
+          {!isPaid(job) && (
             <View
               style={{
                 position: "absolute",
@@ -721,7 +736,7 @@ export default function Jobs(): React.ReactElement {
             {/* Bottom Row: [Paid] Badge & Rating */}
             <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
               {/* Paid Badge */}
-              {job.paymentStatus === "Paid" ? (
+              {isPaid(job) ? (
                 <View style={{ 
                   flexDirection: "row", 
                   alignItems: "center",
@@ -789,7 +804,7 @@ export default function Jobs(): React.ReactElement {
               </View>
             )}
 
-            {job.paymentStatus === "Paid" && (
+            {isPaid(job) && (
               <View style={{ marginTop: 12 }}>
                 {job.contractorRating?.stars ? (
                   <View style={{ backgroundColor: "#EEF6FF", borderRadius: 8, padding: 10 }}>
@@ -829,7 +844,9 @@ export default function Jobs(): React.ReactElement {
     );
   };
 
-  const pendingJobs = acceptedJobs.filter((job) => job.paymentStatus !== "Paid");
+  // Keep card in main list until BOTH conditions are true:
+  // 1) payment completed, 2) day expired (past local midnight).
+  const pendingJobs = acceptedJobs.filter((job) => !(isPaid(job) && isJobDayExpired(job)));
   const previewJobs = pendingJobs.slice(0, 3);
   const { weekStart, weekEnd } = getWeekWindow();
   const weeklyJobs = acceptedJobs.filter((job) => {

@@ -184,7 +184,7 @@ io.on("connection", (socket) => {
                 job.acceptedWorker.location = updatedWorker.location;
                 await job.save();
                 // Targeted: notify contractor and accepted worker only
-                await emitJobUpdatedToUsers(job, [job.contractorName, job.contractorPhone || job.contractorName]);
+                await emitJobUpdatedToUsers(job, [job.contractorPhone]);
                 console.log(`🔄 Forwarded updated location for worker ${workerIdStr} on job ${job._id}`);
               }
 
@@ -332,7 +332,6 @@ io.on("connection", (socket) => {
                 const payload = { ...jobCheck.toObject(), _id: jobCheck._id.toString(), id: jobCheck._id.toString(), status: 'expired', expiredAt: new Date() };
                 const targetUsers = [
                   jobCheck.contractorPhone,
-                  jobCheck.contractorName,
                   jobCheck.acceptedBy,
                   ...(Array.isArray(jobCheck.acceptedWorkers) ? jobCheck.acceptedWorkers.map((w) => w?.phone).filter(Boolean) : []),
                 ];
@@ -405,9 +404,9 @@ io.on("connection", (socket) => {
       const payload = {
         ...job.toObject(),
         _targetedUpdate: true,
-        targetedFor: [job.contractorName, job.acceptedBy || job.contractorName]
+        targetedFor: [job.contractorPhone, job.acceptedBy || job.contractorPhone]
       };
-      await emitJobUpdatedToUsers(payload, [job.contractorName, job.acceptedBy || job.contractorName]);
+      await emitJobUpdatedToUsers(payload, [job.contractorPhone, job.acceptedBy || job.contractorPhone]);
     }
   });
 

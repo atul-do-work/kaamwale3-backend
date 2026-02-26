@@ -63,12 +63,12 @@ function createJobsLifecycleCoreRouter({
         $and: [
           {
             $or: [
-              { acceptedBy: workerPhone, paymentStatus: { $ne: "Paid" } },
+              { acceptedBy: workerPhone, paymentStatus: { $ne: "paid" } },
               {
                 acceptedWorkers: {
                   $elemMatch: {
                     phone: workerPhone,
-                    paymentStatus: { $ne: "Paid" },
+                    paymentStatus: { $ne: "paid" },
                   },
                 },
               },
@@ -100,7 +100,7 @@ function createJobsLifecycleCoreRouter({
           acceptedAt: new Date(),
           attendanceStatus: null,
           attendanceTime: null,
-          paymentStatus: "Pending",
+          paymentStatus: "pending",
           paymentMode: null,
           paymentTime: null,
         };
@@ -115,14 +115,14 @@ function createJobsLifecycleCoreRouter({
 
       const hasUnpaidJobSingle = await Job.findOne({
         acceptedBy: workerPhone,
-        paymentStatus: { $ne: "Paid" },
+        paymentStatus: { $ne: "paid" },
         status: { $nin: ["cancelled", "expired", "completed"] },
       });
       const hasUnpaidJobBulk = await Job.findOne({
         acceptedWorkers: {
           $elemMatch: {
             phone: workerPhone,
-            paymentStatus: { $ne: "Paid" },
+            paymentStatus: { $ne: "paid" },
           },
         },
         status: { $nin: ["cancelled", "expired", "completed"] },
@@ -257,7 +257,7 @@ function createJobsLifecycleCoreRouter({
           console.error("Error creating job acceptance notification for contractor:", e);
         }
 
-        const payload = { ...bulkJob.toObject(), _targetedUpdate: true, targetedFor: [bulkJob.contractorName] };
+        const payload = { ...bulkJob.toObject(), _targetedUpdate: true, targetedFor: [bulkJob.contractorPhone] };
         await emitJobUpdatedToUsers(payload, [bulkJob.contractorPhone, workerPhone, bulkJob.acceptedBy]);
         try {
           if (typeof updateContractorStats === "function" && bulkJob.contractorPhone) {
@@ -542,7 +542,7 @@ function createJobsLifecycleCoreRouter({
         metadata: { declinedBy: workerPhone, bulkHiring: !!job.bulkHiring },
       });
 
-      await emitJobUpdatedToUsers(job, [job.contractorName, workerPhone]);
+      await emitJobUpdatedToUsers(job, [job.contractorPhone, workerPhone]);
 
       if (job.status === "pending") {
         try {

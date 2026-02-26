@@ -30,57 +30,29 @@ export default function ContractorHome() {
   const [postedCount, setPostedCount] = React.useState(0);
   const [totalSpending, setTotalSpending] = React.useState(0);
   const [workersEngaged, setWorkersEngaged] = React.useState(0);
-  const [notificationCount, setNotificationCount] = React.useState<number>(0); // ✅ Add notification count state
-  const [showLocationModal, setShowLocationModal] = React.useState<boolean>(false); // ✅ Location modal state
-  const [requestingLocation, setRequestingLocation] = React.useState<boolean>(false); // ✅ Loading state for location request
+  const [notificationCount, setNotificationCount] = React.useState<number>(0); // ? Add notification count state
+  const [showLocationModal, setShowLocationModal] = React.useState<boolean>(false); // ? Location modal state
+  const [requestingLocation, setRequestingLocation] = React.useState<boolean>(false); // ? Loading state for location request
   const [supportModalVisible, setSupportModalVisible] = React.useState(false);
-  // ✅ Removed dead token state - use accessToken from context instead
+  // ? Removed dead token state - use accessToken from context instead
 
-  // ✅ Separate premium listener effect - runs on login, not on every tab focus
+  // ? Separate premium listener effect - runs on login, not on every tab focus
   React.useEffect(() => {
     if (!accessToken) return;
 
     const handlePremiumSubscriptionUpdate = async (data: any) => {
-      console.log(`📢 Premium subscription update received from contractor ${data.contractorPhone}`);
+      console.log(`Premium subscription update received from contractor ${data.contractorPhone}`);
       
       try {
         const userStr = await AsyncStorage.getItem('user');
-        let latitude = 0, longitude = 0;
-        if (userStr) {
-          const u = JSON.parse(userStr);
-          latitude = u.latitude || 0;
-          longitude = u.longitude || 0;
-        }
-        
-        const leaderboardRes = await fetch(
-          `${SERVER_URL}/leaderboard/contractors/by-district?lat=${latitude}&lon=${longitude}`,
-          {
-            headers: { Authorization: `Bearer ${accessToken}` },
-          }
-        );
-        
-        if (!leaderboardRes.ok) {
-          console.warn(`⚠️ Leaderboard refresh failed with status ${leaderboardRes.status}`);
-          return;
-        }
-        
-        const leaderboardData = await leaderboardRes.json();
-        
-        if (leaderboardData.leaderboard && Array.isArray(leaderboardData.leaderboard)) {
-          const formattedLeaderboard = leaderboardData.leaderboard.map((contractor: any) => ({
-            id: contractor.phone || contractor._id || 'unknown',
-            phone: contractor.phone || contractor._id || 'unknown', // ✅ Use phone as ID, fall back to _id
-            name: contractor.name || 'Unknown',
-            points: contractor.score || 0,
-            profile: contractor.profilePhoto ? contractor.profilePhoto : null,
-            rank: contractor.rank || 0,
-            rating: contractor.rating ?? contractor.averageRating ?? 0, // ✅ Default 0 instead of undefined
-            jobsPosted: contractor.jobCount ?? contractor.totalJobsPosted ?? 0, // ✅ Default 0 instead of undefined
-            tier: contractor.tier || 'new',
-          }));
-          setLeaderboard(formattedLeaderboard);
-          console.log('✅ Leaderboard refreshed after premium subscription update:', formattedLeaderboard);
-        }
+        const user = userStr ? JSON.parse(userStr) : null;
+        const formattedLeaderboard = await fetchLeaderboardByDistrict({
+          latitude: Number(user?.latitude || 0),
+          longitude: Number(user?.longitude || 0),
+          token: accessToken,
+        });
+        setLeaderboard(formattedLeaderboard);
+        console.log('Leaderboard refreshed after premium subscription update:', formattedLeaderboard);
       } catch (err) {
         console.error('Error refreshing leaderboard on subscription update:', (err as Error).message);
       }
@@ -91,9 +63,10 @@ export default function ContractorHome() {
     return () => {
       socket.off('premiumSubscriptionUpdate', handlePremiumSubscriptionUpdate);
     };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [accessToken]);
 
-  // ✅ Memoize sorted leaderboard to prevent re-sorting on every render
+  // ? Memoize sorted leaderboard to prevent re-sorting on every render
   // CRITICAL: Clone array before sorting to avoid mutating React state
   const sortedLeaderboard = React.useMemo(() => {
     return [...leaderboard].sort((a, b) => {
@@ -120,6 +93,53 @@ export default function ContractorHome() {
       tier: contractor.tier || 'new',
     }));
   }, []);
+
+  const fetchLeaderboardByDistrict = React.useCallback(async ({
+    latitude,
+    longitude,
+    token = accessToken,
+    useCacheFallback = false,
+  }: {
+    latitude?: number;
+    longitude?: number;
+    token?: string | null;
+    useCacheFallback?: boolean;
+  } = {}) => {
+    if (!token) return [];
+
+    const lat = Number(latitude ?? authUser?.latitude ?? 0);
+    const lon = Number(longitude ?? authUser?.longitude ?? 0);
+
+    try {
+      const leaderboardRes = await fetch(
+        `${SERVER_URL}/leaderboard/contractors/by-district?lat=${lat}&lon=${lon}`,
+        {
+          headers: { Authorization: `Bearer ${token}` },
+        }
+      );
+
+      if (!leaderboardRes.ok) {
+        throw new Error(`Leaderboard fetch failed with status ${leaderboardRes.status}`);
+      }
+
+      const leaderboardData = await leaderboardRes.json();
+      const boardData = Array.isArray(leaderboardData) ? leaderboardData : leaderboardData?.leaderboard || [];
+      const formattedLeaderboard = mapLeaderboardRows(boardData);
+
+      if (!Array.isArray(leaderboardData)) {
+        await AsyncStorage.setItem('leaderboard', JSON.stringify(leaderboardData));
+      }
+
+      return formattedLeaderboard;
+    } catch (err) {
+      if (!useCacheFallback) throw err;
+      const cachedLeaderboard = await AsyncStorage.getItem('leaderboard');
+      if (!cachedLeaderboard) return [];
+      const leaderboardData = JSON.parse(cachedLeaderboard);
+      const boardData = Array.isArray(leaderboardData) ? leaderboardData : leaderboardData.leaderboard || [];
+      return mapLeaderboardRows(boardData);
+    }
+  }, [accessToken, authUser?.latitude, authUser?.longitude, mapLeaderboardRows]);
 
   const fetchPremiumStatus = React.useCallback(async (): Promise<boolean> => {
     if (!accessToken) {
@@ -189,28 +209,28 @@ export default function ContractorHome() {
       const data = await res.json();
 
       // Filter jobs posted by this contractor
-      const myJobs = data.filter((job: any) => job.contractorName === authUser?.name && !job.isCancelled); // ✅ Use authUser.name to avoid stale userName state
+      const myJobs = data.filter((job: any) => job.contractorPhone === currentUserPhone && !job.isCancelled);
       setPostedCount(myJobs.length);
 
       // Count active/unpaid workers for contractor jobs
-      const unpaidJobs = myJobs.filter((job: any) => job.paymentStatus !== 'Paid' && (job.acceptedBy || (job.acceptedWorkers && job.acceptedWorkers.length > 0)));
+      const unpaidJobs = myJobs.filter((job: any) => String(job.paymentStatus || '').toLowerCase() !== 'paid' && (job.acceptedBy || (job.acceptedWorkers && job.acceptedWorkers.length > 0)));
       const uniqueUnpaidWorkers = new Set(unpaidJobs.flatMap((job: any) => job.acceptedWorkers && job.acceptedWorkers.length ? job.acceptedWorkers.map((w: any) => w.phone || w) : (job.acceptedBy ? [job.acceptedBy] : [])));
       setWorkersEngaged(uniqueUnpaidWorkers.size);
 
       // Count jobs done (paid jobs for this contractor)
-      const paidJobs = myJobs.filter((job: any) => job.paymentStatus === 'Paid');
+      const paidJobs = myJobs.filter((job: any) => String(job.paymentStatus || '').toLowerCase() === 'paid');
       setJobsDoneCount(paidJobs.length);
 
       // Total spending by contractor (sum of amounts for paid jobs)
       const spending = paidJobs.reduce((sum: number, j: any) => sum + (Number(j.amount) || 0), 0);
       setTotalSpending(spending);
       
-      // ✅ Save last posted job ID for waiting screen access
+      // ? Save last posted job ID for waiting screen access
       if (myJobs.length > 0) {
         const lastJob = myJobs[myJobs.length - 1]; // Most recent job
         try {
           await AsyncStorage.setItem('lastJobId', lastJob._id);
-          console.log('✅ Last job ID saved:', lastJob._id);
+          console.log('? Last job ID saved:', lastJob._id);
         } catch (err) {
           console.warn('Could not save lastJobId:', err);
         }
@@ -218,9 +238,9 @@ export default function ContractorHome() {
     } catch (err) {
       console.error('Job fetch error:', err);
     }
-  }, [accessToken, authUser?.name]);
+  }, [accessToken, currentUserPhone]);
 
-  // ✅ Fetch notification count
+  // ? Fetch notification count
   const fetchNotificationCount = React.useCallback(async () => {
     try {
       if (!accessToken) {
@@ -268,7 +288,7 @@ export default function ContractorHome() {
                     await AsyncStorage.setItem('user', JSON.stringify(currentUser));
                   }
                 } else {
-                  console.warn(`⚠️ Profile fetch returned status ${response.status}`);
+                  console.warn(`Profile fetch returned status ${response.status}`);
                 }
               } catch (err) {
                 console.warn('Could not fetch fresh user data:', err);
@@ -282,36 +302,14 @@ export default function ContractorHome() {
 
             if (hasActivePremium) {
               try {
-                try {
-                  const leaderboardRes = await fetch(
-                    `${SERVER_URL}/leaderboard/contractors/by-district?lat=${currentUser?.latitude || 0}&lon=${currentUser?.longitude || 0}`,
-                    {
-                      headers: { Authorization: `Bearer ${savedToken}` },
-                    }
-                  );
-                  const leaderboardData = await leaderboardRes.json();
-
-                  if (leaderboardData.leaderboard && Array.isArray(leaderboardData.leaderboard)) {
-                    const formattedLeaderboard = mapLeaderboardRows(leaderboardData.leaderboard);
-                    setLeaderboard(formattedLeaderboard);
-                    await AsyncStorage.setItem('leaderboard', JSON.stringify(leaderboardData));
-                    console.log('✅ Fetched fresh leaderboard from API:', formattedLeaderboard);
-                  } else {
-                    setLeaderboard([]);
-                  }
-                } catch (err) {
-                  console.warn('Could not fetch fresh leaderboard, trying cache:', (err as Error).message);
-                  const cachedLeaderboard = await AsyncStorage.getItem('leaderboard');
-                  if (cachedLeaderboard) {
-                    const leaderboardData = JSON.parse(cachedLeaderboard);
-                    const boardData = Array.isArray(leaderboardData) ? leaderboardData : leaderboardData.leaderboard || [];
-                    const formattedLeaderboard = mapLeaderboardRows(boardData);
-                    setLeaderboard(formattedLeaderboard);
-                    console.log('⚠️ Showing cached leaderboard fallback:', formattedLeaderboard);
-                  } else {
-                    setLeaderboard([]);
-                  }
-                }
+                const formattedLeaderboard = await fetchLeaderboardByDistrict({
+                  latitude: Number(currentUser?.latitude || 0),
+                  longitude: Number(currentUser?.longitude || 0),
+                  token: savedToken,
+                  useCacheFallback: true,
+                });
+                setLeaderboard(formattedLeaderboard);
+                console.log('Loaded leaderboard:', formattedLeaderboard);
               } catch (err) {
                 console.warn('Error loading leaderboard:', (err as Error).message);
               }
@@ -333,26 +331,26 @@ export default function ContractorHome() {
       })();
 
       return () => {
-        // ✅ Socket listener cleanup is now handled in separate useEffect
+        // ? Socket listener cleanup is now handled in separate useEffect
         // This useFocusEffect focuses on data fetching
       };
-    }, [accessToken, authUser, fetchJobs, fetchNotificationCount, fetchPremiumStatus, mapLeaderboardRows])
+    }, [accessToken, authUser, fetchJobs, fetchLeaderboardByDistrict, fetchNotificationCount, fetchPremiumStatus])
   );
 
-  // ✅ REQUEST AND UPDATE LOCATION FOR CONTRACTOR
+  // ? REQUEST AND UPDATE LOCATION FOR CONTRACTOR
   const requestAndUpdateLocation = async (): Promise<boolean> => {
     try {
       setRequestingLocation(true);
-      console.log('📍 Requesting location permission for contractor...');
+      console.log('Requesting location permission for contractor...');
 
       const { status } = await Location.requestForegroundPermissionsAsync();
       
       if (status !== 'granted') {
-        console.warn('⚠️ Location permission denied');
+        console.warn('Location permission denied');
         return false;
       }
 
-      console.log('✅ Location permission granted, getting position...');
+      console.log('? Location permission granted, getting position...');
       const location = await Location.getCurrentPositionAsync({
         accuracy: Location.Accuracy.Balanced,
       });
@@ -360,10 +358,10 @@ export default function ContractorHome() {
       const latitude = location.coords.latitude;
       const longitude = location.coords.longitude;
 
-      console.log(`📍 Location obtained: lat=${latitude}, lon=${longitude}`);
+      console.log(`Location obtained: lat=${latitude}, lon=${longitude}`);
 
       // Update location on backend
-      console.log(`🌐 Sending location update to ${API_BASE}/user/update-location`);
+      console.log(`Sending location update to ${API_BASE}/user/update-location`);
       const response = await fetch(`${API_BASE}/user/update-location`, {
         method: 'POST',
         headers: {
@@ -373,21 +371,21 @@ export default function ContractorHome() {
         body: JSON.stringify({ latitude, longitude }),
       });
 
-      console.log(`📊 Backend response status: ${response.status}`);
+      console.log(`Backend response status: ${response.status}`);
       const data = await response.json();
-      console.log(`📦 Backend response data:`, data);
+      console.log(`Backend response data:`, data);
 
       if (!response.ok) {
-        console.error('❌ Backend returned error status:', response.status, data.message);
+        console.error('? Backend returned error status:', response.status, data.message);
         return false;
       }
 
       if (!data.success) {
-        console.error('❌ Backend returned success=false:', data.message);
+        console.error('? Backend returned success=false:', data.message);
         return false;
       }
 
-      console.log('✅ Location updated on backend:', data.user);
+      console.log('? Location updated on backend:', data.user);
       
       // Update local user data
       const userStr = await AsyncStorage.getItem('user');
@@ -398,26 +396,26 @@ export default function ContractorHome() {
         user.city = data.user.city;
         user.state = data.user.state;
         await AsyncStorage.setItem('user', JSON.stringify(user));
-        console.log('✅ Contractor location data updated in local storage');
+        console.log('? Contractor location data updated in local storage');
       }
 
       // Close modal after successful location update
-      console.log('🔄 Closing location modal...');
+      console.log('Closing location modal...');
       setShowLocationModal(false);
-      console.log(`✅ Location enabled! City: ${data.user.city}, State: ${data.user.state}`);
+      console.log(`? Location enabled! City: ${data.user.city}, State: ${data.user.state}`);
       return true;
     } catch (err) {
-      console.error('❌ Error requesting location:', err);
+      console.error('? Error requesting location:', err);
       const errorMsg = err instanceof Error ? err.message : String(err);
       console.error(`Error details: ${errorMsg}`);
       return false;
     } finally {
-      console.log('🟢 Cleanup: Setting requestingLocation to false');
+      console.log('Cleanup: Setting requestingLocation to false');
       setRequestingLocation(false);
     }
   };
 
-  // ✅ CHECK FOR DEFAULT LOCATION AND SHOW MODAL POST-LOGIN
+  // ? CHECK FOR DEFAULT LOCATION AND SHOW MODAL POST-LOGIN
   useEffect(() => {
     (async () => {
       if (!accessToken) return;
@@ -435,10 +433,10 @@ export default function ContractorHome() {
         const shouldPromptForLocation = locationProvidedOnLogin !== 'true' && hasDefaultLocation;
 
         if (shouldPromptForLocation) {
-          console.log("📍 Contractor has default location (0,0) - showing location permission modal");
+          console.log("Contractor has default location (0,0) - showing location permission modal");
           setShowLocationModal(true);
         } else {
-          console.log("✅ Contractor already has location set:", { lat: user.latitude, lon: user.longitude });
+          console.log("? Contractor already has location set:", { lat: user.latitude, lon: user.longitude });
         }
       } catch (err) {
         console.error("Error checking contractor location:", err);
@@ -456,7 +454,7 @@ export default function ContractorHome() {
       // Optimistic UI so contractor sees premium section immediately after successful payment.
       setHasPremium(true);
       
-      // ✅ Fetch updated user data from backend and save to AsyncStorage with premium plan info
+      // ? Fetch updated user data from backend and save to AsyncStorage with premium plan info
       try {
         const response = await fetch(`${SERVER_URL}/users/profile`, {
           headers: { Authorization: `Bearer ${accessToken}` },
@@ -466,7 +464,7 @@ export default function ContractorHome() {
           if (data.success && data.user) {
             // Update user in AsyncStorage with fresh data including premium plan
             await AsyncStorage.setItem('user', JSON.stringify(data.user));
-            console.log('✅ Updated user data with premium plan:', data.user.premiumPlan);
+            console.log('? Updated user data with premium plan:', data.user.premiumPlan);
           }
         }
       } catch (err) {
@@ -484,51 +482,16 @@ export default function ContractorHome() {
         return;
       }
       
-      // ✅ FETCH FRESH LEADERBOARD FROM NEW DISTRICT ENDPOINT AFTER PREMIUM PURCHASE
       try {
         const userStr = await AsyncStorage.getItem('user');
-        let latitude = 0, longitude = 0;
-        if (userStr) {
-          const u = JSON.parse(userStr);
-          latitude = u.latitude || 0;
-          longitude = u.longitude || 0;
-        }
-        
-        const leaderboardRes = await fetch(
-          `${SERVER_URL}/leaderboard/contractors/by-district?lat=${latitude}&lon=${longitude}`,
-          {
-            headers: { Authorization: `Bearer ${accessToken}` },
-          }
-        );
-        
-        if (!leaderboardRes.ok) {
-          console.warn(`⚠️ Leaderboard fetch failed with status ${leaderboardRes.status}`);
-          setLeaderboard([]);
-          return;
-        }
-        
-        const leaderboardData = await leaderboardRes.json();
-        
-        if (leaderboardData.leaderboard && Array.isArray(leaderboardData.leaderboard)) {
-          const formattedLeaderboard = leaderboardData.leaderboard.map((contractor: any) => ({
-            id: contractor.phone,
-            phone: contractor.phone,
-            name: contractor.name,
-            points: contractor.score || 0,
-            profile: contractor.profilePhoto ? { uri: contractor.profilePhoto } : userProfilePhoto,
-            rank: contractor.rank,
-            rating: contractor.rating,
-            jobsPosted: contractor.jobCount,
-            tier: contractor.tier,
-          }));
-          setLeaderboard(formattedLeaderboard);
-          
-          // ✅ ALSO CACHE THE FRESH DATA FOR LATER USE
-          await AsyncStorage.setItem('leaderboard', JSON.stringify(leaderboardData));
-          console.log('✅ Fresh leaderboard fetched from new district endpoint after premium purchase:', formattedLeaderboard);
-        } else {
-          console.warn('⚠️ No leaderboard data from backend after premium purchase');
-        }
+        const u = userStr ? JSON.parse(userStr) : null;
+        const formattedLeaderboard = await fetchLeaderboardByDistrict({
+          latitude: Number(u?.latitude || 0),
+          longitude: Number(u?.longitude || 0),
+          token: accessToken,
+        });
+        setLeaderboard(formattedLeaderboard);
+        console.log('Fresh leaderboard fetched after premium purchase:', formattedLeaderboard);
       } catch (err) {
         console.error('Error fetching fresh leaderboard after premium purchase:', (err as Error).message);
       }
@@ -550,7 +513,7 @@ export default function ContractorHome() {
         style={styles.headerContainer}
       >
         <View style={styles.headerContent}>
-          {/* ✅ Circular Profile Photo on Left */}
+          {/* ? Circular Profile Photo on Left */}
           <TouchableOpacity 
             onPress={() => router.push('/home/contractor/profile' as any)}
             style={styles.headerProfileContainer}
@@ -569,7 +532,7 @@ export default function ContractorHome() {
               onPress={() => router.push("/NotificationHistory" as any)}
             >
               <MaterialIcons name="notifications-none" size={28} color="#000" />
-              {notificationCount > 0 && ( // ✅ Show badge if unread notifications exist
+              {notificationCount > 0 && ( // ? Show badge if unread notifications exist
                 <View style={styles.badge}>
                   <Text style={styles.badgeText}>
                     {notificationCount > 9 ? '9+' : notificationCount}
@@ -688,7 +651,7 @@ export default function ContractorHome() {
                 const isCurrentUser = Boolean(
                   currentUserPhone && (person.id === currentUserPhone || person.phone === currentUserPhone)
                 );
-                // ✅ No need to .find() - rank is already set correctly after sorting
+                // ? No need to .find() - rank is already set correctly after sorting
                 const displayRank = isCurrentUser ? person.rank : person.rank || index + 1;
                 
                 return (
@@ -764,7 +727,7 @@ export default function ContractorHome() {
         </TouchableOpacity>
       </Modal>
 
-      {/* ✅ POST-LOGIN LOCATION PERMISSION MODAL FOR CONTRACTOR */}
+      {/* ? POST-LOGIN LOCATION PERMISSION MODAL FOR CONTRACTOR */}
       <Modal visible={showLocationModal} transparent animationType="fade">
         <TouchableOpacity 
           style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.6)' }}

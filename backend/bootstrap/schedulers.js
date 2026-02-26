@@ -82,7 +82,7 @@ function startBackgroundSchedulers({
     setInterval(async () => {
       try {
         const stuckPaidJobs = await Job.find({
-          paymentStatus: "Paid",
+          paymentStatus: "paid",
           status: { $in: ["pending", "posted", "offered", "accepted", "in_progress"] },
         }).select("_id status paymentStatus").limit(200);
         if (!stuckPaidJobs.length) return;
@@ -96,8 +96,8 @@ function startBackgroundSchedulers({
             eventType: "paid_state_normalized",
             actorType: "system",
             source: "scheduler",
-            oldState: { status: oldStatus, paymentStatus: "Paid" },
-            newState: { status: "completed", paymentStatus: "Paid" },
+            oldState: { status: oldStatus, paymentStatus: "paid" },
+            newState: { status: "completed", paymentStatus: "paid" },
             metadata: { reason: "paid_status_terminal_guard" },
           });
         }
@@ -127,7 +127,7 @@ function startBackgroundSchedulers({
         const stuckSince = new Date(Date.now() - 6 * 60 * 60 * 1000);
         const stuckJobs = await Job.find({
           status: { $in: ["accepted", "in_progress"] },
-          paymentStatus: { $ne: "Paid" },
+          paymentStatus: { $ne: "paid" },
           updatedAt: { $lt: stuckSince },
         }).select("_id contractorPhone acceptedBy status paymentStatus updatedAt").limit(20).lean();
         if (stuckJobs.length > 0 && shouldSend("stuck_jobs")) {
@@ -145,7 +145,7 @@ function startBackgroundSchedulers({
         }
 
         // 2) Payment mismatch (Paid job but no payment transaction found)
-        const paidJobs = await Job.find({ paymentStatus: "Paid", updatedAt: { $gte: new Date(Date.now() - 24 * 60 * 60 * 1000) } })
+        const paidJobs = await Job.find({ paymentStatus: "paid", updatedAt: { $gte: new Date(Date.now() - 24 * 60 * 60 * 1000) } })
           .select("_id contractorPhone acceptedBy paymentStatus status").limit(30).lean();
         const mismatches = [];
         for (const j of paidJobs) {

@@ -249,7 +249,6 @@ function createJobsCoreRouter({
               };
               const targetUsers = [
                 jobCheck.contractorPhone,
-                jobCheck.contractorName,
                 jobCheck.acceptedBy,
                 ...(Array.isArray(jobCheck.acceptedWorkers) ? jobCheck.acceptedWorkers.map((w) => w?.phone).filter(Boolean) : []),
               ];
