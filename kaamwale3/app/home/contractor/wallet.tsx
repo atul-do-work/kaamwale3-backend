@@ -200,19 +200,22 @@ export default function ContractorWalletAttendance() {
 
   // ✅ Memoize fetchJobs to prevent re-creation on every render
   const fetchJobs = React.useCallback(async () => {
-    if (!contractorName || !accessToken) return;
+    if (!accessToken) return;
 
     setLoading(true);
     try {
       const res = await api.get(`/jobs`);
       const data: Job[] = res.data;
 
-      const attendanceStatuses = new Set(["offered", "accepted", "in_progress", "completed"]);
+      const normalizePhone = (value?: string | null) => String(value || "").replace(/\D/g, "").slice(-10);
       const myJobs = data
         .filter(j => {
-          const isMineByPhone = !!authUser?.phone && (j as any).contractorPhone === authUser.phone;
+          const authPhone = normalizePhone(authUser?.phone);
+          const jobPhone = normalizePhone((j as any).contractorPhone);
+          const isMineByPhone = !!authPhone && !!jobPhone && jobPhone === authPhone;
           const hasAnyAcceptedWorker = !!j.acceptedBy || (Array.isArray(j.acceptedWorkers) && j.acceptedWorkers.length > 0);
-          return isMineByPhone && attendanceStatuses.has(j.status) && hasAnyAcceptedWorker;
+          const isCancelled = j.status === "cancelled" || (j as any).isCancelled === true;
+          return isMineByPhone && hasAnyAcceptedWorker && !isCancelled;
         })
         .sort((a, b) => {
           const aTime = new Date((a as any).timestamp || (a as any).updatedAt || (a as any).createdAt || 0).getTime();
@@ -220,7 +223,7 @@ export default function ContractorWalletAttendance() {
           return bTime - aTime;
         });
 
-      console.log(`📥 Fetched ${data.length} total jobs, filtered to ${myJobs.length} attendance jobs for contractor: ${contractorName}`);
+      console.log(`📥 Fetched ${data.length} total jobs, filtered to ${myJobs.length} attendance jobs`);
 
       const expandedJobs: Job[] = myJobs.flatMap((j): Job[] => {
         const bulkWorkers = Array.isArray(j.acceptedWorkers) ? j.acceptedWorkers : [];
@@ -259,7 +262,7 @@ export default function ContractorWalletAttendance() {
     } finally {
       setLoading(false);
     }
-  }, [contractorName, accessToken, authUser?.phone]);
+  }, [accessToken, authUser?.phone]);
 
   // SOCKET LISTENER FOR REALTIME UPDATES
   useEffect(() => {

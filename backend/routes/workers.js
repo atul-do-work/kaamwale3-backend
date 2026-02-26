@@ -331,6 +331,15 @@ function createWorkersRouter({
         .select("amount paymentTime timeSpentMinutes acceptedAt createdAt updatedAt rating acceptedWorkers")
         .lean();
 
+      const operationalJobs = await Job.find({
+        $and: [
+          workerJobQuery,
+          { status: { $nin: ["cancelled", "expired"] } },
+        ],
+      })
+        .select("status timeSpentMinutes hoursWorked acceptedAt paymentTime createdAt updatedAt acceptedWorkers")
+        .lean();
+
       const getPaidEntryForWorker = (job) => {
         if (!Array.isArray(job?.acceptedWorkers)) return null;
         return job.acceptedWorkers.find(
@@ -344,6 +353,25 @@ function createWorkersRouter({
         if (paidAtFromWorker && !Number.isNaN(paidAtFromWorker.getTime())) return paidAtFromWorker;
         const paidAt = job?.paymentTime ? new Date(job.paymentTime) : null;
         if (paidAt && !Number.isNaN(paidAt.getTime())) return paidAt;
+        const updatedAt = job?.updatedAt ? new Date(job.updatedAt) : null;
+        if (updatedAt && !Number.isNaN(updatedAt.getTime())) return updatedAt;
+        const createdAt = job?.createdAt ? new Date(job.createdAt) : null;
+        if (createdAt && !Number.isNaN(createdAt.getTime())) return createdAt;
+        return null;
+      };
+
+      const getOperationalAnchorTime = (job) => {
+        const acceptedEntry = Array.isArray(job?.acceptedWorkers)
+          ? job.acceptedWorkers.find((w) => w?.phone === workerPhone)
+          : null;
+        const acceptedAtFromWorker = acceptedEntry?.acceptedAt ? new Date(acceptedEntry.acceptedAt) : null;
+        if (acceptedAtFromWorker && !Number.isNaN(acceptedAtFromWorker.getTime())) return acceptedAtFromWorker;
+        const acceptedAt = job?.acceptedAt ? new Date(job.acceptedAt) : null;
+        if (acceptedAt && !Number.isNaN(acceptedAt.getTime())) return acceptedAt;
+        const paymentAtFromWorker = acceptedEntry?.paymentTime ? new Date(acceptedEntry.paymentTime) : null;
+        if (paymentAtFromWorker && !Number.isNaN(paymentAtFromWorker.getTime())) return paymentAtFromWorker;
+        const paymentAt = job?.paymentTime ? new Date(job.paymentTime) : null;
+        if (paymentAt && !Number.isNaN(paymentAt.getTime())) return paymentAt;
         const updatedAt = job?.updatedAt ? new Date(job.updatedAt) : null;
         if (updatedAt && !Number.isNaN(updatedAt.getTime())) return updatedAt;
         const createdAt = job?.createdAt ? new Date(job.createdAt) : null;
@@ -366,14 +394,32 @@ function createWorkersRouter({
         const d = getEffectivePaidAt(j);
         return d && d >= todayStart && d < todayEnd;
       });
-      const weeklyCompletedJobs = completedJobs.filter((j) => {
-        const d = getEffectivePaidAt(j);
-        return d && d >= weekStart && d < weekEnd;
+      const todayOperationalJobs = operationalJobs.filter((j) => {
+        const d = getOperationalAnchorTime(j);
+        return d && d >= todayStart && d < todayEnd;
       });
 
+      const resolveOperationalTimeMinutes = (job) => {
+        const explicit = Number(job?.timeSpentMinutes || 0);
+        if (explicit > 0) return explicit;
+
+        const acceptedAt = job?.acceptedAt ? new Date(job.acceptedAt) : null;
+        if (!acceptedAt || Number.isNaN(acceptedAt.getTime())) {
+          return Math.max(0, Math.round((Number(job?.hoursWorked || 0) || 0) * 60));
+        }
+
+        const status = String(job?.status || "").toLowerCase();
+        const endAt =
+          status === "accepted" || status === "in_progress"
+            ? new Date()
+            : (job?.paymentTime ? new Date(job.paymentTime) : new Date(job?.updatedAt || Date.now()));
+        if (!endAt || Number.isNaN(endAt.getTime())) return 0;
+        return Math.max(0, Math.round((endAt.getTime() - acceptedAt.getTime()) / 60000));
+      };
+
       const todayEarnings = todayCompletedJobs.reduce((sum, j) => sum + (Number(j.amount) || 0), 0);
-      const timeOnOrder = todayCompletedJobs.reduce((sum, j) => sum + resolveTimeSpentMinutes(j), 0);
-      const todayJobs = todayCompletedJobs.length;
+      const timeOnOrder = todayOperationalJobs.reduce((sum, j) => sum + resolveOperationalTimeMinutes(j), 0);
+      const todayJobs = todayOperationalJobs.length;
       const totalEarnings = completedJobs.reduce((sum, j) => sum + (Number(j.amount) || 0), 0);
       const jobsCompleted = completedJobs.length;
 
@@ -398,7 +444,7 @@ function createWorkersRouter({
       }
 
       const historyCount = await Job.countDocuments({
-        $and: [workerJobQuery, paidJobCondition],
+        $and: [workerJobQuery, { status: { $nin: ["cancelled", "expired"] } }],
       });
 
       const wallet = await Wallet.findOne({ phone: workerPhone }).select("transactions").lean();
