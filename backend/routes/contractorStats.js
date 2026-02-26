@@ -5,6 +5,11 @@ const Job = require("../models/Jobs");
 
 function createContractorStatsRouter() {
   const router = express.Router();
+  const resolveJobDate = (job, fallback = new Date(0)) => {
+    const raw = job?.createdAt || job?.timestamp || job?.date || job?.updatedAt;
+    const parsed = raw ? new Date(raw) : fallback;
+    return Number.isNaN(parsed.getTime()) ? fallback : parsed;
+  };
 
   router.post("/contractor/stats/save", authenticateToken, async (req, res) => {
     try {
@@ -61,22 +66,24 @@ function createContractorStatsRouter() {
         startDate.setDate(startDate.getDate() - 29);
       }
 
-      const jobQuery = {
+      const baseJobQuery = {
         $and: [
           { contractorPhone: phone },
           {
             $or: [{ isCancelled: { $exists: false } }, { isCancelled: { $ne: true } }],
           },
           { status: { $ne: "cancelled" } },
-          { createdAt: { $gte: startDate, $lte: endDate } },
         ],
       };
 
-      const jobs = await Job.find(jobQuery).lean();
+      const jobs = (await Job.find(baseJobQuery).lean()).filter((job) => {
+        const jobDate = resolveJobDate(job);
+        return jobDate >= startDate && jobDate <= endDate;
+      });
 
       const dayMap = new Map();
       for (const job of jobs) {
-        const day = new Date(job.createdAt || now);
+        const day = resolveJobDate(job, now);
         day.setHours(0, 0, 0, 0);
         const dayKey = day.toISOString();
         if (!dayMap.has(dayKey)) {
@@ -173,7 +180,7 @@ function createContractorStatsRouter() {
       today.setHours(0, 0, 0, 0);
 
       const todayJobs = jobs.filter((j) => {
-        const jDate = new Date(j.createdAt);
+        const jDate = resolveJobDate(j);
         jDate.setHours(0, 0, 0, 0);
         return jDate.getTime() === today.getTime();
       });

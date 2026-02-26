@@ -55,6 +55,7 @@ interface Job {
   acceptedWorkers?: Array<{
     phone?: string;
     name?: string;
+    acceptedAt?: string;
     profilePhoto?: string;
     isAvailable?: boolean;
     lastSeenAt?: string;
@@ -471,13 +472,17 @@ export default function DashboardScreen() {
 
       if (!res.ok) throw new Error('Failed to fetch jobs');
 
-      const data: Job[] = await res.json();
-      const authPhone = normalizePhone(authUser?.phone);
+      const raw = await res.json();
+      const data: Job[] = Array.isArray(raw)
+        ? raw
+        : Array.isArray(raw?.jobs)
+        ? raw.jobs
+        : [];
+      console.log('RAW JOB RESPONSE:', raw);
+      console.log('NORMALIZED JOB ARRAY:', data.length);
       const myJobs = data.filter((j) => {
-        const jobPhone = normalizePhone((j as any).contractorPhone);
-        const isMineByPhone = !!authPhone && !!jobPhone && jobPhone === authPhone;
         const isCancelled = j.isCancelled === true || String(j.status || '').toLowerCase() === 'cancelled';
-        return isMineByPhone && !isCancelled;
+        return !isCancelled;
       });
 
       setJobs(myJobs);
@@ -521,7 +526,8 @@ export default function DashboardScreen() {
     const now = new Date();
     const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
     const resolveJobDate = (j: Job) => {
-      const raw = j.acceptedAt || j.timestamp || j.updatedAt || j.createdAt || j.date;
+      // Posted-job stats should use posting timestamp, not acceptance timestamp.
+      const raw = j.timestamp || j.createdAt || j.updatedAt || j.date;
       const parsed = raw ? new Date(raw) : new Date(0);
       return Number.isNaN(parsed.getTime()) ? new Date(0) : parsed;
     };
@@ -715,7 +721,8 @@ export default function DashboardScreen() {
   }
 
   const getJobDate = (job: Job) => {
-    const raw = job.acceptedAt || job.timestamp || job.updatedAt || job.createdAt || job.date;
+    // All Posted Jobs section should be based on posted date.
+    const raw = job.timestamp || job.createdAt || job.updatedAt || job.date;
     const parsed = raw ? new Date(raw) : new Date(0);
     return Number.isNaN(parsed.getTime()) ? new Date(0) : parsed;
   };
@@ -745,9 +752,15 @@ export default function DashboardScreen() {
   const today = new Date().toDateString();
   // ✅ Show jobs that were ACCEPTED today (not just jobs with attendance marked)
   const jobsWithAttendance = jobs.filter((j) => {
-    if (!j.acceptedBy) return false;
+    const hasSingleAccepted = !!j.acceptedBy;
+    const hasBulkAccepted = Array.isArray(j.acceptedWorkers) && j.acceptedWorkers.length > 0;
+    if (!hasSingleAccepted && !hasBulkAccepted) return false;
     if (String(j.paymentStatus || '').toLowerCase() === 'paid') return false;
-    const acceptedDateRaw = j.acceptedAt || j.updatedAt || j.timestamp || j.createdAt || j.date;
+    const bulkAcceptedAt =
+      Array.isArray(j.acceptedWorkers)
+        ? (j.acceptedWorkers.find((w: any) => !!w?.acceptedAt)?.acceptedAt || null)
+        : null;
+    const acceptedDateRaw = j.acceptedAt || bulkAcceptedAt || j.updatedAt || j.timestamp || j.createdAt || j.date;
     const acceptedDate = acceptedDateRaw ? new Date(acceptedDateRaw) : new Date(0);
     if (Number.isNaN(acceptedDate.getTime())) return false;
     return acceptedDate.toDateString() === today;
@@ -1654,4 +1667,3 @@ const styles = StyleSheet.create({
     fontWeight: "700",
   },
 });
-  const normalizePhone = (value?: string | null) => String(value || '').replace(/\D/g, '').slice(-10);

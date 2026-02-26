@@ -205,17 +205,21 @@ export default function ContractorWalletAttendance() {
     setLoading(true);
     try {
       const res = await api.get(`/jobs`);
-      const data: Job[] = res.data;
+      const raw = res.data;
+      const data: Job[] = Array.isArray(raw)
+        ? raw
+        : Array.isArray(raw?.jobs)
+        ? raw.jobs
+        : [];
+      console.log("RAW JOB RESPONSE:", raw);
+      console.log("NORMALIZED JOB ARRAY:", data.length);
 
-      const normalizePhone = (value?: string | null) => String(value || "").replace(/\D/g, "").slice(-10);
       const myJobs = data
         .filter(j => {
-          const authPhone = normalizePhone(authUser?.phone);
-          const jobPhone = normalizePhone((j as any).contractorPhone);
-          const isMineByPhone = !!authPhone && !!jobPhone && jobPhone === authPhone;
           const hasAnyAcceptedWorker = !!j.acceptedBy || (Array.isArray(j.acceptedWorkers) && j.acceptedWorkers.length > 0);
-          const isCancelled = j.status === "cancelled" || (j as any).isCancelled === true;
-          return isMineByPhone && hasAnyAcceptedWorker && !isCancelled;
+          const isCancelled =
+            String(j.status || "").toLowerCase() === "cancelled" || (j as any).isCancelled === true;
+          return hasAnyAcceptedWorker && !isCancelled;
         })
         .sort((a, b) => {
           const aTime = new Date((a as any).timestamp || (a as any).updatedAt || (a as any).createdAt || 0).getTime();
@@ -1059,7 +1063,7 @@ export default function ContractorWalletAttendance() {
                 <Text style={{ fontSize: 16 }}>{"⭐".repeat(item.rating.stars)}</Text>
               </View>
               {item.rating.feedback && (
-                <Text style={{ fontSize: 12, color: "#666", fontStyle: "italic" }}>"{item.rating.feedback}"</Text>
+                <Text style={{ fontSize: 12, color: "#666", fontStyle: "italic" }}>{"\""}{item.rating.feedback}{"\""}</Text>
               )}
             </View>
           )}
