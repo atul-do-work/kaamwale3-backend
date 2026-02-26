@@ -1107,6 +1107,15 @@ function WorkerHome() {
     }
   }, [token]);
 
+  // Refresh worker dashboard cards on every focus so webhook/socket timing does not leave stale values.
+  useFocusEffect(
+    React.useCallback(() => {
+      if (!token) return;
+      calculateMetrics();
+      fetchNotificationCount();
+    }, [token, calculateMetrics])
+  );
+
   // Set up metrics calculation on component mount
   useEffect(() => {
     if (token) {

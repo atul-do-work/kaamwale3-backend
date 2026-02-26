@@ -293,9 +293,16 @@ function createWorkersRouter({
       };
 
       const completedJobs = await Job.find({
-        ...workerJobQuery,
-        status: "completed",
-        paymentStatus: "Paid",
+        $and: [
+          workerJobQuery,
+          { paymentStatus: { $in: ["Paid", "paid"] } },
+          {
+            $or: [
+              { status: "completed" },
+              { paymentTime: { $exists: true, $ne: null } },
+            ],
+          },
+        ],
       })
         .select("amount paymentTime timeSpentMinutes rating")
         .lean();

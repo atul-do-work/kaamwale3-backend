@@ -2,7 +2,7 @@ const express = require("express");
 const mongoose = require("mongoose");
 const crypto = require("crypto");
 const { authenticateToken } = require("../utils/auth");
-const { requirePremium, isPremiumEntitled } = require("../utils/premiumEntitlement");
+const { isPremiumEntitled } = require("../utils/premiumEntitlement");
 const { getPlanEntitlements } = require("../config/premiumEntitlements");
 const User = require("../models/User");
 const Wallet = require("../models/Wallet");
@@ -534,34 +534,6 @@ function createPremiumWalletRouter({ io }) {
       return res.json({ success: true, plans });
     } catch (err) {
       return res.status(500).json({ success: false, message: "Failed to load plans" });
-    }
-  });
-
-  router.get("/leaderboard", authenticateToken, requirePremium("canViewLeaderboard"), async (req, res) => {
-    try {
-      const { limit = 10 } = req.query;
-      const filter = { role: "contractor", points: { $gt: 0 } };
-      if (req.user?.phone) {
-        filter.phone = { $ne: req.user.phone };
-      }
-
-      const topUsers = await User.find(filter)
-        .select("name phone profilePhoto points")
-        .sort({ points: -1 })
-        .limit(parseInt(limit, 10));
-
-      return res.json({
-        success: true,
-        leaderboard: topUsers.map((user) => ({
-          _id: user._id,
-          phone: user.phone,
-          name: user.name,
-          profilePhoto: user.profilePhoto,
-          points: user.points || 0,
-        })),
-      });
-    } catch (err) {
-      return res.status(500).json({ success: false, message: "Failed to fetch leaderboard" });
     }
   });
 

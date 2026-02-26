@@ -107,6 +107,20 @@ export default function ContractorHome() {
     });
   }, [leaderboard, currentUserPhone]);
 
+  const mapLeaderboardRows = React.useCallback((rows: any[] = []) => {
+    return rows.map((contractor: any) => ({
+      id: contractor.contractorId || contractor._id || contractor.phone,
+      phone: contractor.phone || contractor.contractorPhone || contractor.contractorId || contractor._id,
+      name: contractor.name || 'Unknown',
+      points: Number(contractor.score ?? contractor.points ?? 0),
+      profile: contractor.profilePhoto ? contractor.profilePhoto : null,
+      rank: Number(contractor.rank || 0),
+      rating: Number(contractor.rating ?? contractor.avgRating ?? contractor.averageRating ?? 0),
+      jobsPosted: Number(contractor.jobCount ?? contractor.totalJobsPosted ?? 0),
+      tier: contractor.tier || 'new',
+    }));
+  }, []);
+
   const fetchPremiumStatus = React.useCallback(async (): Promise<boolean> => {
     if (!accessToken) {
       setHasPremium(false);
@@ -268,54 +282,34 @@ export default function ContractorHome() {
 
             if (hasActivePremium) {
               try {
-                const cachedLeaderboard = await AsyncStorage.getItem('leaderboard');
-                if (cachedLeaderboard) {
-                  const leaderboardData = JSON.parse(cachedLeaderboard);
-                  console.log('📊 Cached leaderboard data:', leaderboardData);
-
-                  const boardData = Array.isArray(leaderboardData) ? leaderboardData : leaderboardData.leaderboard || [];
-
-                  const formattedLeaderboard = boardData.map((contractor: any) => ({
-                    id: contractor.contractorId || contractor._id || contractor.phone,
-                    phone: contractor.phone || contractor.contractorPhone || contractor.contractorId || contractor._id,
-                    name: contractor.name,
-                    points: contractor.score || contractor.points || 0,
-                    profile: contractor.profilePhoto ? contractor.profilePhoto : null,
-                    rank: contractor.rank,
-                    rating: contractor.avgRating,
-                    jobsPosted: contractor.totalJobsPosted,
-                    tier: contractor.tier,
-                  }));
-
-                  console.log('✅ Formatted leaderboard:', formattedLeaderboard);
-                  setLeaderboard(formattedLeaderboard);
-                } else {
-                  try {
-                    const leaderboardRes = await fetch(
-                      `${SERVER_URL}/leaderboard/contractors/by-district?lat=${currentUser?.latitude || 0}&lon=${currentUser?.longitude || 0}`,
-                      {
-                        headers: { Authorization: `Bearer ${savedToken}` },
-                      }
-                    );
-                    const leaderboardData = await leaderboardRes.json();
-
-                    if (leaderboardData.leaderboard && Array.isArray(leaderboardData.leaderboard)) {
-                      const formattedLeaderboard = leaderboardData.leaderboard.map((contractor: any) => ({
-                        id: contractor.contractorId || contractor._id || contractor.phone,
-                    phone: contractor.phone || contractor.contractorPhone || contractor.contractorId || contractor._id,
-                        name: contractor.name,
-                        points: contractor.score || 0,
-                        profile: contractor.profilePhoto ? contractor.profilePhoto : null,
-                        rank: contractor.rank,
-                        rating: contractor.rating,
-                        jobsPosted: contractor.jobCount,
-                        tier: contractor.tier,
-                      }));
-                      setLeaderboard(formattedLeaderboard);
-                      console.log('✅ Fetched leaderboard from API:', formattedLeaderboard);
+                try {
+                  const leaderboardRes = await fetch(
+                    `${SERVER_URL}/leaderboard/contractors/by-district?lat=${currentUser?.latitude || 0}&lon=${currentUser?.longitude || 0}`,
+                    {
+                      headers: { Authorization: `Bearer ${savedToken}` },
                     }
-                  } catch (err) {
-                    console.warn('Could not fetch leaderboard:', (err as Error).message);
+                  );
+                  const leaderboardData = await leaderboardRes.json();
+
+                  if (leaderboardData.leaderboard && Array.isArray(leaderboardData.leaderboard)) {
+                    const formattedLeaderboard = mapLeaderboardRows(leaderboardData.leaderboard);
+                    setLeaderboard(formattedLeaderboard);
+                    await AsyncStorage.setItem('leaderboard', JSON.stringify(leaderboardData));
+                    console.log('✅ Fetched fresh leaderboard from API:', formattedLeaderboard);
+                  } else {
+                    setLeaderboard([]);
+                  }
+                } catch (err) {
+                  console.warn('Could not fetch fresh leaderboard, trying cache:', (err as Error).message);
+                  const cachedLeaderboard = await AsyncStorage.getItem('leaderboard');
+                  if (cachedLeaderboard) {
+                    const leaderboardData = JSON.parse(cachedLeaderboard);
+                    const boardData = Array.isArray(leaderboardData) ? leaderboardData : leaderboardData.leaderboard || [];
+                    const formattedLeaderboard = mapLeaderboardRows(boardData);
+                    setLeaderboard(formattedLeaderboard);
+                    console.log('⚠️ Showing cached leaderboard fallback:', formattedLeaderboard);
+                  } else {
+                    setLeaderboard([]);
                   }
                 }
               } catch (err) {
@@ -342,7 +336,7 @@ export default function ContractorHome() {
         // ✅ Socket listener cleanup is now handled in separate useEffect
         // This useFocusEffect focuses on data fetching
       };
-    }, [accessToken, authUser, fetchJobs, fetchNotificationCount, fetchPremiumStatus])
+    }, [accessToken, authUser, fetchJobs, fetchNotificationCount, fetchPremiumStatus, mapLeaderboardRows])
   );
 
   // ✅ REQUEST AND UPDATE LOCATION FOR CONTRACTOR

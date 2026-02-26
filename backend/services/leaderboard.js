@@ -445,7 +445,7 @@ router.get('/my-city', authenticateToken, async (req, res) => {
       totalContractors: leaderboard.totalContractors,
       leaderboard: leaderboard.leaderboard,
       myRank: currentUserRank?.rank || null,
-      myPoints: currentUserRank?.points || 0,
+      myPoints: currentUserRank?.score ?? currentUserRank?.points ?? 0,
       myTier: currentUserRank?.tier || 'new',
     });
   } catch (err) {
@@ -535,7 +535,7 @@ router.get('/city', authenticateToken, async (req, res) => {
       totalContractors: leaderboard.totalContractors,
       leaderboard: leaderboard.leaderboard,
       myRank: currentUserRank?.rank || null,
-      myPoints: currentUserRank?.points || 0,
+      myPoints: currentUserRank?.score ?? currentUserRank?.points ?? 0,
       myTier: currentUserRank?.tier || 'new',
     });
   } catch (err) {
@@ -616,7 +616,7 @@ router.get('/city/:cityName', authenticateToken, async (req, res) => {
       totalContractors: leaderboard.totalContractors,
       leaderboard: leaderboard.leaderboard,
       myRank: currentUserRank?.rank || null,
-      myPoints: currentUserRank?.points || 0,
+      myPoints: currentUserRank?.score ?? currentUserRank?.points ?? 0,
       myTier: currentUserRank?.tier || 'new',
     });
   } catch (err) {
@@ -725,7 +725,7 @@ router.put('/update-location', authenticateToken, async (req, res) => {
       },
       leaderboard: leaderboard.leaderboard,
       myRank: currentUserRank?.rank || null,
-      myPoints: currentUserRank?.points || 0,
+      myPoints: currentUserRank?.score ?? currentUserRank?.points ?? 0,
       myTier: currentUserRank?.tier || 'new',
     });
   } catch (err) {
@@ -986,6 +986,7 @@ router.get('/contractors/by-district', authenticateToken, async (req, res) => {
           contractorId: '$_id',
           phone: '$phone',
           name: 1,
+          score: '$score',
           points: '$score',
           totalJobsPosted: '$jobCount',
           completedJobs: '$completedJobs',
@@ -1030,7 +1031,7 @@ router.get('/contractors/by-district', authenticateToken, async (req, res) => {
       totalContractors: rankedLeaderboard.length,
       leaderboard: rankedLeaderboard,
       myRank: currentUserRank?.rank || null,
-      myPoints: currentUserRank?.points || 0,
+      myPoints: currentUserRank?.score ?? currentUserRank?.points ?? 0,
       myTier: currentUserRank?.tier || 'new',
     });
 
@@ -1048,7 +1049,7 @@ router.get('/contractors/by-district', authenticateToken, async (req, res) => {
               phone: c.phone,
               rank: c.rank,
               name: c.name,
-              points: c.points,
+              score: c.score ?? c.points ?? 0,
               totalJobsPosted: c.totalJobsPosted,
               completedJobs: c.completedJobs,
               completionRate: c.completionRate,
