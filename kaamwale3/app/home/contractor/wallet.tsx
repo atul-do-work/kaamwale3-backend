@@ -270,6 +270,7 @@ export default function ContractorWalletAttendance() {
 
     // ✅ Use named handlers for safe cleanup
     const handleJobUpdated = () => fetchJobs();
+    const handleJobAccepted = () => fetchJobs();
     const handleWalletUpdated = (data: number | any) => {
       // 🔐 SECURITY: Only update wallet if this event is for the current user
       if (data && typeof data === 'object') {
@@ -289,14 +290,31 @@ export default function ContractorWalletAttendance() {
     };
 
     socket.on("jobUpdated", handleJobUpdated);
+    socket.on("jobAccepted", handleJobAccepted);
     socket.on("walletUpdated", handleWalletUpdated);
 
     return () => {
       // ✅ Remove listeners with handler references (screen-safe cleanup)
       socket.off("jobUpdated", handleJobUpdated);
+      socket.off("jobAccepted", handleJobAccepted);
       socket.off("walletUpdated", handleWalletUpdated);
     };
   }, [fetchJobs, accessToken, authUser?.phone]);
+
+  // Refresh attendance list whenever user opens the Attendance tab.
+  useEffect(() => {
+    if (activeTab === "Attendance") {
+      fetchJobs();
+    }
+  }, [activeTab, fetchJobs]);
+
+  // Refresh on screen focus as fallback when socket event is missed.
+  useFocusEffect(
+    React.useCallback(() => {
+      fetchJobs();
+      return () => {};
+    }, [fetchJobs])
+  );
 
   // Mark attendance
   const markAttendance = async (jobId: string, status: "Present" | "Absent", workerPhone?: string) => {
@@ -1261,6 +1279,13 @@ export default function ContractorWalletAttendance() {
                 keyExtractor={item => item._id.toString()}
                 renderItem={renderJob}
                 contentContainerStyle={{ paddingBottom: 16 }}
+                ListEmptyComponent={
+                  <View style={{ paddingHorizontal: 16, paddingTop: 24 }}>
+                    <Text style={{ color: "#6b7280", textAlign: "center" }}>
+                      No attendance jobs found yet.
+                    </Text>
+                  </View>
+                }
                 initialNumToRender={5}
                 maxToRenderPerBatch={5}
                 windowSize={5}

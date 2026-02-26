@@ -14,6 +14,7 @@ import {
 import { MaterialIcons, Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
+import { useFocusEffect } from '@react-navigation/native';
 import { useLanguage } from '../../context/LanguageContext';
 import { useAuth } from '../../context/AuthContext';
 import { API_BASE } from '../../utils/config';
@@ -33,6 +34,7 @@ interface Job {
   timestamp: string;
   acceptedAt?: string;
   createdAt?: string;
+  updatedAt?: string;
   date?: string;
   isCancelled?: boolean;
   attendanceStatus?: 'Present' | 'Absent' | null;
@@ -470,9 +472,10 @@ export default function DashboardScreen() {
       if (!res.ok) throw new Error('Failed to fetch jobs');
 
       const data: Job[] = await res.json();
-      const authPhone = authUser?.phone;
+      const authPhone = normalizePhone(authUser?.phone);
       const myJobs = data.filter((j) => {
-        const isMineByPhone = !!authPhone && j.contractorPhone === authPhone;
+        const jobPhone = normalizePhone((j as any).contractorPhone);
+        const isMineByPhone = !!authPhone && !!jobPhone && jobPhone === authPhone;
         const isCancelled = j.isCancelled === true || String(j.status || '').toLowerCase() === 'cancelled';
         return isMineByPhone && !isCancelled;
       });
@@ -518,7 +521,7 @@ export default function DashboardScreen() {
     const now = new Date();
     const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
     const resolveJobDate = (j: Job) => {
-      const raw = j.timestamp || j.createdAt || j.date;
+      const raw = j.acceptedAt || j.timestamp || j.updatedAt || j.createdAt || j.date;
       const parsed = raw ? new Date(raw) : new Date(0);
       return Number.isNaN(parsed.getTime()) ? new Date(0) : parsed;
     };
@@ -645,6 +648,31 @@ export default function DashboardScreen() {
     setWorkerLastSeenAt(null);
   };
 
+  useFocusEffect(
+    React.useCallback(() => {
+      if (!token || isAdmin) return;
+      (async () => {
+        const currentJobs = await fetchJobs(token);
+        await fetchStats(token, dateRange, currentJobs);
+      })();
+      return () => {};
+    }, [token, isAdmin, dateRange, authUser?.phone])
+  );
+
+  useEffect(() => {
+    if (!token || isAdmin) return;
+    const refreshDashboard = async () => {
+      const currentJobs = await fetchJobs(token);
+      await fetchStats(token, dateRange, currentJobs);
+    };
+    socket.on('jobUpdated', refreshDashboard);
+    socket.on('jobAccepted', refreshDashboard);
+    return () => {
+      socket.off('jobUpdated', refreshDashboard);
+      socket.off('jobAccepted', refreshDashboard);
+    };
+  }, [token, isAdmin, dateRange, authUser?.phone]);
+
   // Single source of truth for admin: web admin panel.
   if (isAdmin) {
     const webAdminUrl = `${API_BASE}/admin/index.html`;
@@ -687,7 +715,7 @@ export default function DashboardScreen() {
   }
 
   const getJobDate = (job: Job) => {
-    const raw = job.timestamp || job.createdAt || job.date;
+    const raw = job.acceptedAt || job.timestamp || job.updatedAt || job.createdAt || job.date;
     const parsed = raw ? new Date(raw) : new Date(0);
     return Number.isNaN(parsed.getTime()) ? new Date(0) : parsed;
   };
@@ -719,7 +747,7 @@ export default function DashboardScreen() {
   const jobsWithAttendance = jobs.filter((j) => {
     if (!j.acceptedBy) return false;
     if (String(j.paymentStatus || '').toLowerCase() === 'paid') return false;
-    const acceptedDateRaw = j.acceptedAt || j.timestamp || j.createdAt || j.date;
+    const acceptedDateRaw = j.acceptedAt || j.updatedAt || j.timestamp || j.createdAt || j.date;
     const acceptedDate = acceptedDateRaw ? new Date(acceptedDateRaw) : new Date(0);
     if (Number.isNaN(acceptedDate.getTime())) return false;
     return acceptedDate.toDateString() === today;
@@ -1626,3 +1654,4 @@ const styles = StyleSheet.create({
     fontWeight: "700",
   },
 });
+  const normalizePhone = (value?: string | null) => String(value || '').replace(/\D/g, '').slice(-10);
