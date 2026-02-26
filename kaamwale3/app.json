@@ -1,7 +1,7 @@
 {
   "expo": {
     "name": "indianworker",
-    "slug": "indianji",
+    "slug": "indiwork",
     "version": "1.0.0",
     "orientation": "portrait",
     "scheme": "kaamwale3",
@@ -53,9 +53,9 @@
     },
     "extra": {
       "eas": {
-        "projectId": "d4e2ab4a-d64c-43a9-b107-42ab777e6a60"
+        "projectId": "57b2869a-b170-4935-b24c-c70cca55690a"
       }
     },
-    "owner": "vsadmin"
+    "owner": "indiworkin"
   }
 }
