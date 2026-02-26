@@ -1,8 +1,10 @@
 const express = require("express");
+const fs = require("fs").promises;
 const { authenticateToken } = require("../utils/auth");
 const User = require("../models/User");
+const { uploadImagePathToCloudinary } = require("../utils/cloudinaryUpload");
 
-function createUsersProfileRouter({ upload, io, connectedWorkers, getPublicBaseUrl }) {
+function createUsersProfileRouter({ upload, io, connectedWorkers }) {
   const router = express.Router();
 
   router.post("/users/photo", authenticateToken, upload.single("photo"), async (req, res) => {
@@ -12,8 +14,13 @@ function createUsersProfileRouter({ upload, io, connectedWorkers, getPublicBaseU
       const user = await User.findOne({ phone: req.user.phone });
       if (!user) return res.status(404).json({ success: false, message: "User not found" });
 
-      const serverURL = getPublicBaseUrl(req);
-      user.profilePhoto = `${serverURL}/uploads/${req.file.filename}`;
+      const uploaded = await uploadImagePathToCloudinary({
+        filePath: req.file.path,
+        mimeType: req.file.mimetype || "image/jpeg",
+        folder: "kaamwale/profile",
+        publicId: `profile-${req.user.phone}-${Date.now()}`,
+      });
+      user.profilePhoto = uploaded.secure_url;
       await user.save();
 
       io.emit("profilePhotoUpdated", {
@@ -25,6 +32,10 @@ function createUsersProfileRouter({ upload, io, connectedWorkers, getPublicBaseU
     } catch (err) {
       console.error("Profile photo upload error", err);
       return res.status(500).json({ success: false, message: "Internal server error" });
+    } finally {
+      if (req.file?.path) {
+        fs.rm(req.file.path, { force: true }).catch(() => {});
+      }
     }
   });
 

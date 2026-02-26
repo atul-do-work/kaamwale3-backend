@@ -1,0 +1,100 @@
+const crypto = require("crypto");
+const fs = require("fs").promises;
+
+function parseCloudinaryUrl(cloudinaryUrl) {
+  if (!cloudinaryUrl || typeof cloudinaryUrl !== "string") return {};
+  const trimmed = cloudinaryUrl.trim();
+  const match = trimmed.match(/^cloudinary:\/\/([^:]+):([^@]+)@(.+)$/);
+  if (!match) return {};
+  return {
+    apiKey: decodeURIComponent(match[1]),
+    apiSecret: decodeURIComponent(match[2]),
+    cloudName: decodeURIComponent(match[3]),
+  };
+}
+
+function getCloudinaryConfig() {
+  const parsedFromUrl = parseCloudinaryUrl(process.env.CLOUDINARY_URL || process.env.CLOUDINARY_API_URL);
+  const cloudName = process.env.CLOUDINARY_CLOUD_NAME || parsedFromUrl.cloudName || "";
+  const apiKey = process.env.CLOUDINARY_API_KEY || parsedFromUrl.apiKey || "";
+  const apiSecret = process.env.CLOUDINARY_API_SECRET || parsedFromUrl.apiSecret || "";
+  return {
+    cloudName,
+    apiKey,
+    apiSecret,
+    configured: Boolean(cloudName && apiKey && apiSecret),
+  };
+}
+
+function signUploadParams(params, apiSecret) {
+  const serialized = Object.keys(params)
+    .filter((key) => params[key] !== undefined && params[key] !== null && params[key] !== "")
+    .sort()
+    .map((key) => `${key}=${params[key]}`)
+    .join("&");
+  return crypto.createHash("sha1").update(`${serialized}${apiSecret}`).digest("hex");
+}
+
+async function uploadImageBufferToCloudinary({
+  buffer,
+  mimeType = "image/jpeg",
+  folder = "kaamwale",
+  publicId,
+}) {
+  const cfg = getCloudinaryConfig();
+  if (!cfg.configured) {
+    throw new Error("Cloudinary is not configured");
+  }
+
+  if (!Buffer.isBuffer(buffer) || buffer.length === 0) {
+    throw new Error("Empty image buffer");
+  }
+
+  const timestamp = Math.floor(Date.now() / 1000);
+  const params = {
+    folder,
+    public_id: publicId,
+    timestamp,
+  };
+  const signature = signUploadParams(params, cfg.apiSecret);
+
+  const form = new FormData();
+  form.append("file", `data:${mimeType};base64,${buffer.toString("base64")}`);
+  form.append("api_key", cfg.apiKey);
+  form.append("timestamp", String(timestamp));
+  form.append("signature", signature);
+  if (folder) form.append("folder", folder);
+  if (publicId) form.append("public_id", publicId);
+
+  const endpoint = `https://api.cloudinary.com/v1_1/${cfg.cloudName}/image/upload`;
+  const response = await fetch(endpoint, { method: "POST", body: form });
+  const payload = await response.json().catch(() => ({}));
+
+  if (!response.ok || !payload?.secure_url) {
+    const reason = payload?.error?.message || "Cloudinary upload failed";
+    throw new Error(reason);
+  }
+
+  return payload;
+}
+
+async function uploadImagePathToCloudinary({
+  filePath,
+  mimeType = "image/jpeg",
+  folder = "kaamwale",
+  publicId,
+}) {
+  const fileBuffer = await fs.readFile(filePath);
+  return uploadImageBufferToCloudinary({
+    buffer: fileBuffer,
+    mimeType,
+    folder,
+    publicId,
+  });
+}
+
+module.exports = {
+  getCloudinaryConfig,
+  uploadImageBufferToCloudinary,
+  uploadImagePathToCloudinary,
+};

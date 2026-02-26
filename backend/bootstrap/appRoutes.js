@@ -72,7 +72,7 @@ function mountAppRoutes({
   app.use("/", createPremiumWalletRouter({ io }));
   app.use("/", createContractorStatsRouter());
   app.use("/", createOpsSupportRouter({ upload, PORT: port }));
-  app.use("/", createUsersProfileRouter({ upload, io, connectedWorkers, getPublicBaseUrl }));
+  app.use("/", createUsersProfileRouter({ upload, io, connectedWorkers }));
   app.use(
     "/",
     createAuthCoreRouter({
@@ -91,7 +91,6 @@ function mountAppRoutes({
     createJobsCoreRouter({
       authenticateToken,
       fileUpload,
-      getPublicBaseUrl,
       Wallet,
       Job,
       User,

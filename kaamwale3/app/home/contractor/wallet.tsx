@@ -558,8 +558,8 @@ export default function ContractorWalletAttendance() {
       // Check response success flag
       if (verifyData.success) {
         const successMessage = verifyData?.isDuplicate
-          ? 'Payment was already processed. Latest status has been synced.'
-          : t('paymentSuccessful') + "! " + t('paymentSuccessful');
+          ? 'Payment confirmed. Latest status has been synced.'
+          : `${t('paymentSuccessful')}!`;
         showAppModal("success", t('success'), successMessage);
         // Keep UI responsive even if socket update is delayed.
         await Promise.allSettled([fetchJobs(), fetchWallet()]);

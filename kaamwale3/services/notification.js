@@ -2,6 +2,16 @@ import * as Notifications from 'expo-notifications';
 import { Platform, Alert } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
+let pushTokenSubscription = null;
+
+function extractPushToken(payload) {
+  if (!payload) return null;
+  if (typeof payload === 'string') return payload;
+  if (typeof payload?.data === 'string' && payload.data) return payload.data;
+  if (typeof payload?.pushToken?.data === 'string' && payload.pushToken.data) return payload.pushToken.data;
+  return null;
+}
+
 export async function registerForPushNotificationsAsync() {
   let token;
   
@@ -56,7 +66,7 @@ export async function registerForPushNotificationsAsync() {
     // Get the Android FCM token (not Expo token)
     console.log('🔑 Getting Android FCM token...');
     const tokenResponse = await Notifications.getDevicePushTokenAsync();
-    token = tokenResponse.data;
+    token = extractPushToken(tokenResponse);
     
     if (!token) {
       console.error('❌ Token response is empty:', tokenResponse);
@@ -68,8 +78,19 @@ export async function registerForPushNotificationsAsync() {
     console.log('📝 First 50 chars:', token.substring(0, 50));
     
     // ✅ NEW: Listen for token refresh/changes
-    const subscription = Notifications.addPushTokenListener((event) => {
-      const newToken = event.pushToken.data;
+    if (pushTokenSubscription) {
+      try {
+        pushTokenSubscription.remove();
+      } catch {}
+      pushTokenSubscription = null;
+    }
+
+    pushTokenSubscription = Notifications.addPushTokenListener((event) => {
+      const newToken = extractPushToken(event);
+      if (!newToken) {
+        console.warn('⚠️ Push token refresh payload missing token:', event);
+        return;
+      }
       console.log('🔄 FCM Token refreshed/changed:', newToken.substring(0, 30) + '...');
       
       // Update stored token
@@ -82,9 +103,6 @@ export async function registerForPushNotificationsAsync() {
         console.error('Failed to update backend token:', err);
       });
     });
-    
-    // Cleanup listener on unmount (return function not used here, but kept for clarity)
-    // subscription.remove();
     
     return token;
     

@@ -1096,6 +1096,114 @@ function WorkerHome() {
   const calculateMetrics = useCallback(async () => {
     if (!token) return;
 
+    const normalizePhoneDigits = (value: any) => String(value || "").replace(/\D/g, "").slice(-10);
+    const myPhoneDigits = normalizePhoneDigits(currentUserPhone || "");
+    const sameWorkerPhone = (value: any) => {
+      const raw = String(value || "").trim();
+      if (!raw) return false;
+      const digits = normalizePhoneDigits(raw);
+      return !!digits && !!myPhoneDigits && digits === myPhoneDigits;
+    };
+    const isToday = (value: any) => {
+      const d = value ? new Date(value) : null;
+      if (!d || Number.isNaN(d.getTime())) return false;
+      const now = new Date();
+      const start = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+      const end = new Date(start);
+      end.setDate(end.getDate() + 1);
+      return d >= start && d < end;
+    };
+    const toNumber = (value: any) => Number(value || 0) || 0;
+    const applyStats = (stats: any) => {
+      setTodayEarnings(toNumber(stats.todayEarnings));
+      setTimeOnOrder(toNumber(stats.timeOnOrder));
+      setTodayJobs(toNumber(stats.todayJobs));
+      setTotalEarnings(toNumber(stats.totalEarnings));
+      setHistoryCount(toNumber(stats.historyCount));
+      setJobsCompleted(toNumber(stats.jobsCompleted));
+      setAvgCompletedRating(toNumber(stats.avgCompletedRating));
+      setTodayIncentiveEarnings(toNumber(stats.activeBonuses));
+    };
+    const fallbackFromAcceptedHistory = async () => {
+      const historyRes = await fetch(`${API_BASE}/jobs/my-accepted?page=1&limit=100`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!historyRes.ok) return;
+      const raw = await historyRes.json().catch(() => ({}));
+      const jobs: any[] = Array.isArray(raw)
+        ? raw
+        : Array.isArray(raw?.gigs)
+        ? raw.gigs
+        : Array.isArray(raw?.jobs)
+        ? raw.jobs
+        : [];
+
+      const visibleJobs = jobs.filter((j: any) => {
+        const status = String(j?.status || "").toLowerCase();
+        return status !== "cancelled" && status !== "expired";
+      });
+      const getWorkerEntry = (j: any) => {
+        if (!Array.isArray(j?.acceptedWorkers)) return null;
+        return (
+          j.acceptedWorkers.find((w: any) =>
+            sameWorkerPhone(w?.phone || w?.workerPhone || w?.acceptedBy)
+          ) || null
+        );
+      };
+      const isPaid = (j: any) => {
+        const workerEntry = getWorkerEntry(j);
+        if (workerEntry && String(workerEntry?.paymentStatus || "").toLowerCase() === "paid") return true;
+        return String(j?.paymentStatus || "").toLowerCase() === "paid";
+      };
+      const resolvePaidTime = (j: any) => {
+        const workerEntry = getWorkerEntry(j);
+        return workerEntry?.paymentTime || j?.paymentTime || j?.updatedAt || j?.createdAt || j?.date || null;
+      };
+      const resolveOperationalAnchor = (j: any) => {
+        const workerEntry = getWorkerEntry(j);
+        return workerEntry?.acceptedAt || j?.acceptedAt || j?.updatedAt || j?.createdAt || j?.date || null;
+      };
+      const resolveTimeMinutes = (j: any) => {
+        const explicit = toNumber(j?.timeSpentMinutes);
+        if (explicit > 0) return explicit;
+        const workerEntry = getWorkerEntry(j);
+        const acceptedAtRaw = workerEntry?.acceptedAt || j?.acceptedAt;
+        const acceptedAt = acceptedAtRaw ? new Date(acceptedAtRaw) : null;
+        if (!acceptedAt || Number.isNaN(acceptedAt.getTime())) {
+          return Math.max(0, Math.round((toNumber(j?.hoursWorked) || 0) * 60));
+        }
+        const paymentRaw = workerEntry?.paymentTime || j?.paymentTime || j?.updatedAt;
+        const status = String(j?.status || "").toLowerCase();
+        const endAt = status === "accepted" || status === "in_progress"
+          ? new Date()
+          : paymentRaw
+          ? new Date(paymentRaw)
+          : new Date();
+        if (Number.isNaN(endAt.getTime())) return 0;
+        return Math.max(0, Math.round((endAt.getTime() - acceptedAt.getTime()) / 60000));
+      };
+
+      const paidJobs = visibleJobs.filter((j: any) => isPaid(j));
+      const todayCompletedJobs = paidJobs.filter((j: any) => isToday(resolvePaidTime(j)));
+      const todayOperationalJobs = visibleJobs.filter((j: any) => isToday(resolveOperationalAnchor(j)));
+
+      const ratings = paidJobs
+        .map((j: any) => Number(j?.rating?.stars || j?.rating || 0))
+        .filter((v: number) => Number.isFinite(v) && v > 0);
+
+      applyStats({
+        todayEarnings: todayCompletedJobs.reduce((sum: number, j: any) => sum + toNumber(j?.amount), 0),
+        timeOnOrder: todayOperationalJobs.reduce((sum: number, j: any) => sum + resolveTimeMinutes(j), 0),
+        todayJobs: todayOperationalJobs.length,
+        historyCount: visibleJobs.length,
+        totalEarnings: paidJobs.reduce((sum: number, j: any) => sum + toNumber(j?.amount), 0),
+        jobsCompleted: paidJobs.length,
+        avgCompletedRating: ratings.length ? Number((ratings.reduce((s: number, v: number) => s + v, 0) / ratings.length).toFixed(2)) : 0,
+        activeBonuses: 0,
+      });
+      console.log(`[WorkerHome] Overview fallback used. jobs=${visibleJobs.length}, paid=${paidJobs.length}`);
+    };
+
     try {
       setOverviewLoading(true);
       const res = await fetch(`${API_BASE}/worker/overview-stats`, {
@@ -1103,26 +1211,34 @@ function WorkerHome() {
       });
 
       if (!res.ok) {
+        await fallbackFromAcceptedHistory();
         return;
       }
 
       const payload = await res.json();
       const stats = payload?.stats || {};
+      const hasNonZero =
+        toNumber(stats.todayEarnings) > 0 ||
+        toNumber(stats.timeOnOrder) > 0 ||
+        toNumber(stats.todayJobs) > 0 ||
+        toNumber(stats.historyCount) > 0 ||
+        toNumber(stats.totalEarnings) > 0 ||
+        toNumber(stats.jobsCompleted) > 0;
 
-      setTodayEarnings(Number(stats.todayEarnings) || 0);
-      setTimeOnOrder(Number(stats.timeOnOrder) || 0);
-      setTodayJobs(Number(stats.todayJobs) || 0);
-      setTotalEarnings(Number(stats.totalEarnings) || 0);
-      setHistoryCount(Number(stats.historyCount) || 0);
-      setJobsCompleted(Number(stats.jobsCompleted) || 0);
-      setAvgCompletedRating(Number(stats.avgCompletedRating) || 0);
-      setTodayIncentiveEarnings(Number(stats.activeBonuses) || 0);
+      if (hasNonZero) {
+        applyStats(stats);
+      } else {
+        await fallbackFromAcceptedHistory();
+      }
     } catch (err) {
       console.error("Failed to calculate metrics:", err);
+      try {
+        await fallbackFromAcceptedHistory();
+      } catch {}
     } finally {
       setOverviewLoading(false);
     }
-  }, [token]);
+  }, [token, currentUserPhone]);
 
   // Refresh worker dashboard cards on every focus so webhook/socket timing does not leave stale values.
   useFocusEffect(

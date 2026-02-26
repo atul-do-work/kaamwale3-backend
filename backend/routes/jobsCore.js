@@ -1,10 +1,11 @@
 const express = require("express");
-const path = require("path");
 const crypto = require("crypto");
+const fs = require("fs").promises;
 const { scheduleDispatchState, cancelDispatchState } = require("../services/dispatchStateService");
 const { isPremiumEntitled } = require("../utils/premiumEntitlement");
 const { getPlanEntitlements } = require("../config/premiumEntitlements");
 const { buildLogContext, info, error } = require("../utils/logContext");
+const { uploadImageBufferToCloudinary } = require("../utils/cloudinaryUpload");
 
 function getIdempotencyKey(req) {
   const fromHeader = (req.headers["x-idempotency-key"] || "").toString().trim();
@@ -35,7 +36,6 @@ function buildAutoIdempotencyKey({ phone, title, description, amount, lat, lon, 
 function createJobsCoreRouter({
   authenticateToken,
   fileUpload,
-  getPublicBaseUrl,
   Wallet,
   Job,
   User,
@@ -56,12 +56,27 @@ function createJobsCoreRouter({
       }
 
       const file = req.files.photo;
-      const filename = `job-${Date.now()}-${Math.random().toString(36).substr(2, 9)}.jpg`;
-      const uploadPath = path.join(__dirname, "..", "uploads", filename);
-      await file.mv(uploadPath);
+      const mimeType = String(file.mimetype || "").toLowerCase();
+      if (!mimeType.startsWith("image/")) {
+        return res.status(400).json({ success: false, message: "Only image files are allowed" });
+      }
+      let imageBuffer = null;
+      if (file.data && Buffer.isBuffer(file.data)) {
+        imageBuffer = file.data;
+      } else if (file.tempFilePath) {
+        imageBuffer = await fs.readFile(file.tempFilePath);
+      }
+      if (!imageBuffer || !Buffer.isBuffer(imageBuffer) || imageBuffer.length === 0) {
+        return res.status(400).json({ success: false, message: "Invalid image payload" });
+      }
 
-      const serverURL = getPublicBaseUrl(req);
-      const imageUrl = `${serverURL}/uploads/${filename}`;
+      const uploadResult = await uploadImageBufferToCloudinary({
+        buffer: imageBuffer,
+        mimeType: file.mimetype || "image/jpeg",
+        folder: "kaamwale/jobs",
+        publicId: `job-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
+      });
+      const imageUrl = uploadResult.secure_url;
       return res.json({ success: true, imageUrl });
     } catch (err) {
       console.error("Job image upload error:", err);

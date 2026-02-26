@@ -7,6 +7,7 @@ import { Alert, AppState, Modal, Text, TouchableOpacity, View, type AlertButton,
 import { registerForPushNotificationsAsync } from '../services/notification';
 import { LanguageProvider } from '../context/LanguageContext';
 import { AuthProvider } from '../context/AuthContext';
+import { API_BASE } from '../utils/config';
 
 // ******************** 1st step 
 // Prevent splash screen from auto-hiding
@@ -40,7 +41,7 @@ export default function RootLayout() {
     if (!accessToken || !fcmToken) return;
     for (let attempt = 1; attempt <= maxRetries; attempt += 1) {
       try {
-        const response = await fetch(`${process.env.EXPO_PUBLIC_API_BASE || 'http://localhost:3000'}/auth/refresh-fcm-token`, {
+        const response = await fetch(`${API_BASE}/auth/refresh-fcm-token`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -163,7 +164,7 @@ export default function RootLayout() {
             <Stack.Screen name="register" />
             <Stack.Screen name="waiting" />
             <Stack.Screen name="verify-otp" />
-            <Stack.Screen name="dashboard" />
+            <Stack.Screen name="dashboard/index" />
             <Stack.Screen name="ActivityHistory" />
             <Stack.Screen name="DocumentsAndPolicies" />
             <Stack.Screen name="GigHistory" />
