@@ -210,13 +210,24 @@ export default function ContractorWalletAttendance() {
         ? raw
         : Array.isArray(raw?.jobs)
         ? raw.jobs
+        : Array.isArray(raw?.data)
+        ? raw.data
+        : Array.isArray(raw?.gigs)
+        ? raw.gigs
         : [];
       console.log("RAW JOB RESPONSE:", raw);
       console.log("NORMALIZED JOB ARRAY:", data.length);
 
+      const resolveWorkerPhone = (worker: any): string => {
+        if (!worker) return "";
+        if (typeof worker === "string") return worker.trim();
+        return String(worker.phone || worker.workerPhone || worker.acceptedBy || "").trim();
+      };
+
       const myJobs = data
         .filter(j => {
-          const hasAnyAcceptedWorker = !!j.acceptedBy || (Array.isArray(j.acceptedWorkers) && j.acceptedWorkers.length > 0);
+          const hasBulkAccepted = Array.isArray(j.acceptedWorkers) && j.acceptedWorkers.some((w: any) => !!resolveWorkerPhone(w));
+          const hasAnyAcceptedWorker = !!String(j.acceptedBy || "").trim() || hasBulkAccepted;
           const isCancelled =
             String(j.status || "").toLowerCase() === "cancelled" || (j as any).isCancelled === true;
           return hasAnyAcceptedWorker && !isCancelled;
@@ -231,9 +242,30 @@ export default function ContractorWalletAttendance() {
 
       const expandedJobs: Job[] = myJobs.flatMap((j): Job[] => {
         const bulkWorkers = Array.isArray(j.acceptedWorkers) ? j.acceptedWorkers : [];
-        if (bulkWorkers.length > 0) {
+        const normalizedBulkWorkers = bulkWorkers
+          .map((w: any) => (typeof w === "string" ? { phone: w, name: w } : (w || {})))
+          .map((w: any) => {
+            const workerPhone = resolveWorkerPhone(w);
+            return {
+              ...w,
+              phone: workerPhone,
+              name: String(w.name || workerPhone || "").trim(),
+            };
+          })
+          .filter((w: any) => !!w.phone);
+
+        if (normalizedBulkWorkers.length > 0) {
           return bulkWorkers
-            .filter((w) => !!w?.phone)
+            .map((w: any) => (typeof w === "string" ? { phone: w, name: w } : (w || {})))
+            .map((w: any) => {
+              const workerPhone = resolveWorkerPhone(w);
+              return {
+                ...w,
+                phone: workerPhone,
+                name: String(w.name || workerPhone || "").trim(),
+              };
+            })
+            .filter((w: any) => !!w.phone)
             .map((w) => ({
               ...j,
               _id: `${j._id}:${w.phone}`,
@@ -259,6 +291,7 @@ export default function ContractorWalletAttendance() {
           },
         ];
       });
+      console.log(`🧩 Expanded attendance cards: ${expandedJobs.length}`);
 
       setJobs(expandedJobs);
     } catch (err) {

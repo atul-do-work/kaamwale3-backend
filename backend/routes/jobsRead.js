@@ -113,18 +113,24 @@ function createJobsReadRouter({ authenticateToken, Job, getDistanceFromLatLonInK
   router.get("/jobs", authenticateToken, async (req, res) => {
     try {
       setNoStore(res);
-      const userRole = req.user.role;
-
-      let jobs;
-      if (userRole === "contractor") {
-        jobs = await Job.find({
-          $or: [
-            { contractorPhone: req.user.phone },
-          ],
-        });
-      } else {
+      const requesterPhone = String(req.user?.phone || "").trim();
+      const requesterDigits = requesterPhone.replace(/\D/g, "").slice(-10);
+      if (!requesterPhone && !requesterDigits) {
         return res.json([]);
       }
+      // Canonical ownership is contractor phone; do not depend on role-casing in JWT.
+      // Accept exact, normalized-10-digit, and +91-suffixed storage variants.
+      const phoneVariants = Array.from(
+        new Set([requesterPhone, requesterDigits].filter(Boolean))
+      );
+      const jobs = await Job.find({
+        $or: [
+          { contractorPhone: { $in: phoneVariants } },
+          ...(requesterDigits
+            ? [{ contractorPhone: { $regex: `${requesterDigits}$` } }]
+            : []),
+        ],
+      }).lean();
 
       res.json((jobs || []).map(normalizeJobForApi));
     } catch (err) {
