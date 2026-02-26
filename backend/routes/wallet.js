@@ -1014,8 +1014,14 @@ router.post("/deposit/webhook", async (req, res) => {
     const phone = payment?.notes?.phone;
     const type = payment?.notes?.type;
 
-    if (!paymentId || !phone || type !== "wallet_deposit" || amount <= 0 || amount < 100) {
-      return res.status(400).json({ success: false, message: "Invalid webhook payload" });
+    // This endpoint is only for wallet deposit events.
+    // If a job payment webhook reaches here, ACK as ignored to prevent noisy 400 retries.
+    if (type !== "wallet_deposit") {
+      return res.status(200).json({ success: true, ignored: true, reason: "non_wallet_deposit_event" });
+    }
+
+    if (!paymentId || !phone || amount <= 0 || amount < 100) {
+      return res.status(400).json({ success: false, message: "Invalid wallet deposit webhook payload" });
     }
 
     // Idempotency: if payment already present, ACK success
