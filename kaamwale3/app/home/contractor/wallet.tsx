@@ -441,10 +441,41 @@ export default function ContractorWalletAttendance() {
         await verifyRazorpayPayment(data);
       } else if (data.type === 'payment_failed') {
         setRazorpayModalVisible(false);
+        // Fallback sync in case gateway callback reports failure but webhook has already settled.
+        await Promise.allSettled([fetchJobs(), fetchWallet()]);
+        const settledAsPaid = await checkJobPaidOnServer(currentPaymentJobId, currentPaymentWorkerPhone || undefined);
+        if (settledAsPaid) {
+          showAppModal("success", t('success'), "Payment was completed successfully. Status has been synced.");
+          setCurrentPaymentJobId(null);
+          setCurrentPaymentWorkerPhone(null);
+          return;
+        }
         showAppModal("error", t('error'), data.error || t('paymentCancelled'));
       }
     } catch (error) {
       console.error("Error handling Razorpay response:", error);
+    }
+  };
+
+  const checkJobPaidOnServer = async (jobId: string | null, workerPhone?: string): Promise<boolean> => {
+    if (!jobId) return false;
+    try {
+      const res = await api.get(`/jobs`);
+      const allJobs: any[] = Array.isArray(res?.data) ? res.data : [];
+      const job = allJobs.find((j) => String(j?._id) === String(jobId));
+      if (!job) return false;
+
+      if (workerPhone && Array.isArray(job.acceptedWorkers) && job.acceptedWorkers.length > 0) {
+        const workerEntry = job.acceptedWorkers.find((w: any) => String(w?.phone) === String(workerPhone));
+        if (workerEntry) {
+          return String(workerEntry?.paymentStatus || '').toLowerCase() === 'paid';
+        }
+      }
+
+      return String(job?.paymentStatus || '').toLowerCase() === 'paid';
+    } catch (err) {
+      console.error("Paid-status reconciliation check failed:", err);
+      return false;
     }
   };
 
@@ -472,17 +503,37 @@ export default function ContractorWalletAttendance() {
 
       // Check response success flag
       if (verifyData.success) {
-        showAppModal("success", t('success'), t('paymentSuccessful') + "! " + t('paymentSuccessful'));
+        const successMessage = verifyData?.isDuplicate
+          ? 'Payment was already processed. Latest status has been synced.'
+          : t('paymentSuccessful') + "! " + t('paymentSuccessful');
+        showAppModal("success", t('success'), successMessage);
         // Keep UI responsive even if socket update is delayed.
-        await fetchJobs();
+        await Promise.allSettled([fetchJobs(), fetchWallet()]);
         setCurrentPaymentJobId(null);
         setCurrentPaymentWorkerPhone(null);
       } else {
+        const settledAsPaid = await checkJobPaidOnServer(currentPaymentJobId, currentPaymentWorkerPhone || undefined);
+        if (settledAsPaid) {
+          showAppModal("success", t('success'), "Payment was completed successfully. Status has been synced.");
+          await Promise.allSettled([fetchJobs(), fetchWallet()]);
+          setCurrentPaymentJobId(null);
+          setCurrentPaymentWorkerPhone(null);
+          return;
+        }
         showAppModal("error", t('error'), verifyData.message || t('paymentFailed'));
       }
     } catch (error) {
       setRazorpayModalVisible(false);
-      showAppModal("error", t('error'), t('paymentFailed'));
+      // Network error can happen even after successful server/webhook processing.
+      await Promise.allSettled([fetchJobs(), fetchWallet()]);
+      const settledAsPaid = await checkJobPaidOnServer(currentPaymentJobId, currentPaymentWorkerPhone || undefined);
+      if (settledAsPaid) {
+        showAppModal("success", t('success'), "Payment was completed successfully. Status has been synced.");
+        setCurrentPaymentJobId(null);
+        setCurrentPaymentWorkerPhone(null);
+        return;
+      }
+      showAppModal("error", t('error'), `${t('paymentFailed')}. If amount was deducted, status will auto-sync shortly.`);
       console.error("Verification error:", error);
     }
   };

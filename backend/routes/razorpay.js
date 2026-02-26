@@ -184,12 +184,17 @@ router.post('/verify-payment', authenticateToken, async (req, res) => {
 
     console.log('✅ Contractor identity verified:', req.user.phone);
 
-    // 🔐 CRITICAL: Check if job is already paid (prevent double payment)
+    // 🔐 Idempotent success: if webhook/client already marked job paid, return success
     if (job.paymentStatus === 'Paid') {
-      await session.abortTransaction();
-      return res.status(400).json({
-        success: false,
-        message: 'Job already paid. This payment has already been processed.'
+      const existingWallet = await Wallet.findOne({ phone: workerPhone }).session(session);
+      await session.commitTransaction();
+      return res.status(200).json({
+        success: true,
+        message: 'Payment already processed',
+        walletBalance: existingWallet?.balance || 0,
+        availableBalance: Number(existingWallet?.availableBalance ?? existingWallet?.balance ?? 0),
+        pocketBalance: Number(existingWallet?.pocketBalance || 0),
+        isDuplicate: true,
       });
     }
 
@@ -292,9 +297,10 @@ router.post('/verify-payment', authenticateToken, async (req, res) => {
     );
 
     // 🔐 STEP 9: Update job payment status (transactional)
+    const nextJobStatus = (job.status === 'accepted' || job.status === 'in_progress') ? 'completed' : job.status;
     const updatedJobFromWebhook = await Job.findByIdAndUpdate(
       jobId,
-      { paymentStatus: 'Paid', paymentTime: new Date() },
+      { paymentStatus: 'Paid', paymentTime: new Date(), status: nextJobStatus },
       { new: true, session }
     );
 
@@ -305,8 +311,8 @@ router.post('/verify-payment', authenticateToken, async (req, res) => {
         eventType: 'payment_captured',
         actorType: 'contractor',
         actorPhone: req.user.phone,
-        oldState: { paymentStatus: job.paymentStatus },
-        newState: { paymentStatus: updatedJobFromWebhook.paymentStatus, paymentTime: updatedJobFromWebhook.paymentTime },
+        oldState: { status: job.status, paymentStatus: job.paymentStatus },
+        newState: { status: updatedJobFromWebhook.status, paymentStatus: updatedJobFromWebhook.paymentStatus, paymentTime: updatedJobFromWebhook.paymentTime },
         source: 'app',
         idempotencyKey: paymentId,
         provider: 'razorpay',
@@ -561,9 +567,10 @@ router.post('/webhook', async (req, res) => {
     );
 
     // Update job payment status
+    const nextJobStatus = (job.status === 'accepted' || job.status === 'in_progress') ? 'completed' : job.status;
     const updatedJobFromWebhook = await Job.findByIdAndUpdate(
       jobId,
-      { paymentStatus: 'Paid', paymentTime: new Date() },
+      { paymentStatus: 'Paid', paymentTime: new Date(), status: nextJobStatus },
       { new: true, session }
     );
 
@@ -573,8 +580,8 @@ router.post('/webhook', async (req, res) => {
         jobId: updatedJobFromWebhook._id,
         eventType: 'payment_captured_webhook',
         actorType: 'webhook',
-        oldState: { paymentStatus: job.paymentStatus },
-        newState: { paymentStatus: updatedJobFromWebhook.paymentStatus, paymentTime: updatedJobFromWebhook.paymentTime },
+        oldState: { status: job.status, paymentStatus: job.paymentStatus },
+        newState: { status: updatedJobFromWebhook.status, paymentStatus: updatedJobFromWebhook.paymentStatus, paymentTime: updatedJobFromWebhook.paymentTime },
         source: 'webhook',
         idempotencyKey: paymentId,
         provider: 'razorpay',

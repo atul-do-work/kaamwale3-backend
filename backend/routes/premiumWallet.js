@@ -177,7 +177,7 @@ function createPremiumWalletRouter({ io }) {
               isCurrent: true,
             },
           ],
-          { session }
+          { session, ordered: true }
         );
 
         const createdSub = subscription[0];
@@ -281,7 +281,7 @@ function createPremiumWalletRouter({ io }) {
               },
             },
           ],
-          { session }
+          { session, ordered: true }
         );
 
         responsePayload = {
@@ -408,7 +408,7 @@ function createPremiumWalletRouter({ io }) {
           isCurrent: true,
         };
 
-        await PremiumSubscription.create([cancelSnapshot], { session });
+        await PremiumSubscription.create([cancelSnapshot], { session, ordered: true });
 
         user.premiumPlan = {
           type: "free",
@@ -443,7 +443,7 @@ function createPremiumWalletRouter({ io }) {
               metadata: { premiumTxnId },
             },
           ],
-          { session }
+          { session, ordered: true }
         );
       });
 

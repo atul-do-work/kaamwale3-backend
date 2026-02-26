@@ -31,6 +31,7 @@ interface Job {
   acceptedBy: string;
   status: string;
   timestamp: string;
+  acceptedAt?: string;
   createdAt?: string;
   date?: string;
   isCancelled?: boolean;
@@ -46,7 +47,20 @@ interface Job {
       coordinates: [number, number];
     };
     skills?: string[];
+    isAvailable?: boolean;
+    lastSeenAt?: string;
   };
+  acceptedWorkers?: Array<{
+    phone?: string;
+    name?: string;
+    profilePhoto?: string;
+    isAvailable?: boolean;
+    lastSeenAt?: string;
+    location?: {
+      type: string;
+      coordinates: [number, number];
+    };
+  }>;
 }
 
 interface AggregatedStats {
@@ -127,6 +141,7 @@ export default function DashboardScreen() {
   const [workerDetails, setWorkerDetails] = useState<any | null>(null);
   const [workerLocationName, setWorkerLocationName] = useState<string>('Loading location...');
   const [workerCurrentLocation, setWorkerCurrentLocation] = useState<{ lat: number; lon: number } | null>(null);
+  const [workerLastSeenAt, setWorkerLastSeenAt] = useState<Date | null>(null);
   
   // ✅ Modal state for alerts
   const [modalVisible, setModalVisible] = useState(false);
@@ -198,8 +213,8 @@ export default function DashboardScreen() {
         if (savedToken && isAdmin) {
           await loadAdminData(savedToken);
         } else if (savedToken) {
-          await fetchJobs(savedToken, userStr ? JSON.parse(userStr).name : '');
-          await fetchStats(savedToken, 'today');
+          const currentJobs = await fetchJobs(savedToken, userStr ? JSON.parse(userStr).name : '');
+          await fetchStats(savedToken, 'today', currentJobs);
         }
       } catch (err) {
         console.error('Failed to load user or token', err);
@@ -217,6 +232,7 @@ export default function DashboardScreen() {
       if (data.phone === workerDetails.phone && data.location?.coordinates) {
         const [lon, lat] = data.location.coordinates;
         setWorkerCurrentLocation({ lat, lon });
+        setWorkerLastSeenAt(new Date());
         getLocationName(lat, lon).then(setWorkerLocationName);
       }
     };
@@ -440,7 +456,7 @@ export default function DashboardScreen() {
     }
   };
 
-  const fetchJobs = async (savedToken: string, name: string) => {
+  const fetchJobs = async (savedToken: string, name: string): Promise<Job[]> => {
     setLoading(true);
     try {
       const res = await fetch(`${API_BASE}/jobs`, {
@@ -463,14 +479,16 @@ export default function DashboardScreen() {
       });
 
       setJobs(myJobs);
+      return myJobs;
     } catch (err) {
       console.error('Job fetch error:', err);
+      return [];
     } finally {
       setLoading(false);
     }
   };
 
-  const fetchStats = async (savedToken: string, range: 'today' | 'week' | 'month') => {
+  const fetchStats = async (savedToken: string, range: 'today' | 'week' | 'month', jobsSnapshot?: Job[]) => {
     try {
       const res = await fetch(`${API_BASE}/contractor/stats?range=${range}`, {
         method: 'GET',
@@ -483,25 +501,47 @@ export default function DashboardScreen() {
       if (!res.ok) throw new Error('Failed to fetch stats');
 
       const data = await res.json();
-      if (data.success) {
+      if (data.success && data.aggregated) {
         setStats(data.aggregated);
+      } else {
+        calculateStatsFromJobs(range, jobsSnapshot);
       }
     } catch (err) {
       console.error('Stats fetch error:', err);
       // Fallback to calculating from jobs
-      calculateStatsFromJobs();
+      calculateStatsFromJobs(range, jobsSnapshot);
     }
   };
 
-  const calculateStatsFromJobs = () => {
+  const calculateStatsFromJobs = (range: 'today' | 'week' | 'month' = dateRange, sourceJobs?: Job[]) => {
+    const scopeJobs = sourceJobs || jobs;
     const today = new Date().toDateString();
-    const jobsPosted = jobs.length;
-    const jobsCompleted = jobs.filter(
-      (j) => new Date(j.timestamp).toDateString() === today && j.paymentStatus === 'Paid'
+    const now = new Date();
+    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const resolveJobDate = (j: Job) => {
+      const raw = j.timestamp || j.createdAt || j.date;
+      const parsed = raw ? new Date(raw) : new Date(0);
+      return Number.isNaN(parsed.getTime()) ? new Date(0) : parsed;
+    };
+    const isInRange = (j: Job) => {
+      const jobDate = resolveJobDate(j);
+      if (range === 'today') return jobDate.toDateString() === today;
+      if (range === 'week') {
+        const weekStart = new Date(todayStart);
+        weekStart.setDate(weekStart.getDate() - 6);
+        return jobDate >= weekStart;
+      }
+      const monthStart = new Date(todayStart);
+      monthStart.setDate(monthStart.getDate() - 29);
+      return jobDate >= monthStart;
+    };
+    const inRangeJobs = scopeJobs.filter((j) => isInRange(j));
+    const jobsPosted = inRangeJobs.length;
+    const jobsCompleted = inRangeJobs.filter(
+      (j) => String(j.paymentStatus || '').toLowerCase() === 'paid'
     ).length;
     const workersEngaged = new Set(
-      jobs
-        .filter((j) => new Date(j.timestamp).toDateString() === today)
+      inRangeJobs
         .flatMap((j) => [
           ...(j.acceptedBy ? [j.acceptedBy] : []),
           ...((Array.isArray((j as any).acceptedWorkers) ? (j as any).acceptedWorkers : [])
@@ -509,7 +549,7 @@ export default function DashboardScreen() {
             .filter(Boolean)),
         ])
     ).size;
-    const totalSpending = jobs.reduce((sum, j) => sum + Number(j.amount), 0);
+    const totalSpending = inRangeJobs.reduce((sum, j) => sum + Number(j.amount || 0), 0);
 
     setStats({
       totalJobsPosted: jobsPosted,
@@ -557,19 +597,39 @@ export default function DashboardScreen() {
     setSelectedJob(job);
     setShowWorkerModal(true);
     setWorkerLocationName('Loading location...');
+    setWorkerCurrentLocation(null);
+    setWorkerLastSeenAt(null);
 
     try {
-      // Use acceptedWorker data from job (already has phone, profile photo, location)
-      if (job.acceptedWorker) {
-        setWorkerDetails(job.acceptedWorker);
-        
-        // Get location name if available
-        if (job.acceptedWorker.location?.coordinates && job.acceptedWorker.location.coordinates.length === 2) {
-          const [lon, lat] = job.acceptedWorker.location.coordinates;
+      // Build worker details with fallbacks for jobs that don't include acceptedWorker.
+      const fallbackPhone = /^\d{10}$/.test(String(job.acceptedBy || '')) ? String(job.acceptedBy) : '';
+      const fallbackFromAcceptedWorkers =
+        Array.isArray(job.acceptedWorkers) && job.acceptedWorkers.length > 0 ? job.acceptedWorkers[0] : null;
+      const resolvedWorker = job.acceptedWorker || {
+        id: fallbackFromAcceptedWorkers?.phone || fallbackPhone || 'N/A',
+        name: fallbackFromAcceptedWorkers?.name || job.acceptedBy || 'Worker',
+        phone: fallbackFromAcceptedWorkers?.phone || fallbackPhone || '',
+        profilePhoto: fallbackFromAcceptedWorkers?.profilePhoto,
+        isAvailable: fallbackFromAcceptedWorkers?.isAvailable,
+        lastSeenAt: fallbackFromAcceptedWorkers?.lastSeenAt,
+        location: fallbackFromAcceptedWorkers?.location,
+      };
+
+      setWorkerDetails(resolvedWorker);
+      if (resolvedWorker?.lastSeenAt) {
+        const parsed = new Date(resolvedWorker.lastSeenAt);
+        if (!Number.isNaN(parsed.getTime())) setWorkerLastSeenAt(parsed);
+      }
+      
+      // Get location name if available
+      if (resolvedWorker?.location?.coordinates && resolvedWorker.location.coordinates.length === 2) {
+          const [lon, lat] = resolvedWorker.location.coordinates;
           setWorkerCurrentLocation({ lat, lon });
+          setWorkerLastSeenAt(new Date());
           const locationName = await getLocationName(lat, lon);
           setWorkerLocationName(locationName);
-        }
+      } else {
+        setWorkerLocationName('Location unavailable');
       }
     } catch (err) {
       console.error('Failed to fetch worker details:', err);
@@ -582,6 +642,8 @@ export default function DashboardScreen() {
     setShowWorkerModal(false);
     setSelectedJob(null);
     setWorkerDetails(null);
+    setWorkerCurrentLocation(null);
+    setWorkerLastSeenAt(null);
   };
 
   // Single source of truth for admin: web admin panel.
@@ -657,8 +719,11 @@ export default function DashboardScreen() {
   // ✅ Show jobs that were ACCEPTED today (not just jobs with attendance marked)
   const jobsWithAttendance = jobs.filter((j) => {
     if (!j.acceptedBy) return false;
-    const acceptedDate = getJobDate(j).toDateString();
-    return acceptedDate === today;
+    if (String(j.paymentStatus || '').toLowerCase() === 'paid') return false;
+    const acceptedDateRaw = j.acceptedAt || j.timestamp || j.createdAt || j.date;
+    const acceptedDate = acceptedDateRaw ? new Date(acceptedDateRaw) : new Date(0);
+    if (Number.isNaN(acceptedDate.getTime())) return false;
+    return acceptedDate.toDateString() === today;
   });
   const visibleTodayAcceptances = showAllTodayAcceptances ? jobsWithAttendance : jobsWithAttendance.slice(0, 2);
   const hasMoreTodayAcceptances = jobsWithAttendance.length > 2;
@@ -743,7 +808,7 @@ export default function DashboardScreen() {
             <Text style={styles.noDataText}>{t('noWorkersAcceptedJobToday')}</Text>
           ) : (
             visibleTodayAcceptances.map((job) => (
-              <View key={job._id} style={styles.workerCard}>
+              <TouchableOpacity key={job._id} style={styles.workerCard} onPress={() => handleJobCardClick(job)}>
                 {/* Background bubbles for visual appeal */}
                 <View style={[styles.cardBubble, { position: 'absolute', left: 10, top: 10, backgroundColor: 'rgba(108, 92, 231, 0.08)' }]} />
                 <View style={[styles.cardBubble, { position: 'absolute', right: 10, bottom: 10, backgroundColor: 'rgba(0, 184, 148, 0.08)', width: 60, height: 60 }]} />
@@ -754,7 +819,7 @@ export default function DashboardScreen() {
                   <View style={styles.jobDetails}>
                     <Text style={styles.detailText}>₹{job.amount}</Text>
                     <Text style={[styles.detailText, { color: '#00b894' }]}>
-                      Accepted {job.timestamp ? new Date(job.timestamp).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : 'today'}
+                      Accepted {(job.acceptedAt || job.timestamp) ? new Date(job.acceptedAt || job.timestamp).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : 'today'}
                     </Text>
                   </View>
                 </View>
@@ -772,7 +837,7 @@ export default function DashboardScreen() {
                     </>
                   )}
                 </View>
-              </View>
+              </TouchableOpacity>
             ))
           )}
           {!loading && hasMoreTodayAcceptances && !showAllTodayAcceptances && (
@@ -859,6 +924,16 @@ export default function DashboardScreen() {
 
             {/* Worker Info */}
             <Text style={styles.workerModalName}>{selectedJob?.acceptedBy || 'Worker'}</Text>
+            {(() => {
+              const isExplicitOnline = workerDetails?.isAvailable === true;
+              const isRecentlyActive = !!workerLastSeenAt && (Date.now() - workerLastSeenAt.getTime()) <= 2 * 60 * 1000;
+              const online = isExplicitOnline || isRecentlyActive;
+              return (
+                <Text style={{ fontSize: 13, fontWeight: '700', color: online ? '#16a34a' : '#6b7280', marginBottom: 8 }}>
+                  {online ? 'Online now' : 'Offline'}
+                </Text>
+              );
+            })()}
             
             {/* Worker ID */}
             <View style={styles.workerIdContainer}>
@@ -869,13 +944,21 @@ export default function DashboardScreen() {
             {/* Action Buttons */}
             <View style={styles.actionButtonsContainer}>
               {/* Call Button */}
-              <TouchableOpacity style={styles.actionBtn} onPress={() => Linking.openURL(`tel:${workerDetails?.phone}`)}>
+              <TouchableOpacity
+                style={[styles.actionBtn, !workerDetails?.phone && { backgroundColor: '#9ca3af' }]}
+                disabled={!workerDetails?.phone}
+                onPress={() => workerDetails?.phone && Linking.openURL(`tel:${workerDetails.phone}`)}
+              >
                 <Ionicons name="call" size={20} color="#fff" />
                 <Text style={styles.actionBtnText}>Call</Text>
               </TouchableOpacity>
 
               {/* Message Button */}
-              <TouchableOpacity style={styles.actionBtn} onPress={() => Linking.openURL(`sms:${workerDetails?.phone}`)}>
+              <TouchableOpacity
+                style={[styles.actionBtn, !workerDetails?.phone && { backgroundColor: '#9ca3af' }]}
+                disabled={!workerDetails?.phone}
+                onPress={() => workerDetails?.phone && Linking.openURL(`sms:${workerDetails.phone}`)}
+              >
                 <Ionicons name="chatbubble" size={20} color="#fff" />
                 <Text style={styles.actionBtnText}>Message</Text>
               </TouchableOpacity>
