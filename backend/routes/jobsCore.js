@@ -6,6 +6,7 @@ const { isPremiumEntitled } = require("../utils/premiumEntitlement");
 const { getPlanEntitlements } = require("../config/premiumEntitlements");
 const { buildLogContext, info, error } = require("../utils/logContext");
 const { uploadImageBufferToCloudinary } = require("../utils/cloudinaryUpload");
+const MAX_IMAGE_SIZE_BYTES = Math.floor(1.5 * 1024 * 1024);
 
 function getIdempotencyKey(req) {
   const fromHeader = (req.headers["x-idempotency-key"] || "").toString().trim();
@@ -56,6 +57,13 @@ function createJobsCoreRouter({
       }
 
       const file = req.files.photo;
+      const fileSize = Number(file.size || 0);
+      if (fileSize > MAX_IMAGE_SIZE_BYTES) {
+        return res.status(400).json({
+          success: false,
+          message: "Image too large. Maximum size is 1.5MB",
+        });
+      }
       const mimeType = String(file.mimetype || "").toLowerCase();
       if (!mimeType.startsWith("image/")) {
         return res.status(400).json({ success: false, message: "Only image files are allowed" });

@@ -2,10 +2,12 @@ import { Tabs } from 'expo-router';
 import { MaterialIcons, FontAwesome5, Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useLanguage } from '../../../context/LanguageContext';
 
 export default function WorkerLayout() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  const { t } = useLanguage();
 
   return (
     <Tabs
@@ -34,7 +36,7 @@ export default function WorkerLayout() {
       <Tabs.Screen
         name="index"
         options={{
-          tabBarLabel: 'Home',
+          tabBarLabel: t('home'),
           tabBarIcon: ({ color }) => (
             <MaterialIcons name="home" size={20} color={color} />
           ),
@@ -43,7 +45,7 @@ export default function WorkerLayout() {
       <Tabs.Screen
         name="jobs"
         options={{
-          tabBarLabel: 'Jobs',
+          tabBarLabel: t('jobs'),
           tabBarIcon: ({ color }) => (
             <FontAwesome5 name="briefcase" size={18} color={color} />
           ),
@@ -52,7 +54,7 @@ export default function WorkerLayout() {
       <Tabs.Screen
         name="wallet"
         options={{
-          tabBarLabel: 'Wallet',
+          tabBarLabel: t('wallet'),
           tabBarIcon: ({ color }) => (
             <Ionicons name="wallet-outline" size={20} color={color} />
           ),
@@ -61,7 +63,7 @@ export default function WorkerLayout() {
       <Tabs.Screen
         name="profile"
         options={{
-          tabBarLabel: 'Profile',
+          tabBarLabel: t('profile'),
           tabBarIcon: ({ color }) => (
             <Ionicons name="person-circle-outline" size={20} color={color} />
           ),

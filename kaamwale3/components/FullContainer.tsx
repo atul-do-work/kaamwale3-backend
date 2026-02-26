@@ -3,6 +3,7 @@ import { ScrollView, View, Text, RefreshControl } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import styles from '../styles/FullContainerStyles';
+import { useLanguage } from '../context/LanguageContext';
 
 // ✅ Helper function to format seconds into time string
 const formatTime = (seconds: number): string => {
@@ -69,6 +70,7 @@ export default function FullContainer({
   loading = false,
   onRefresh,
 }: FullContainerProps) {
+  const { t } = useLanguage();
   const [refreshing, setRefreshing] = useState(false);
 
   // ✅ Memoize refresh handler to prevent recreation on every render
@@ -102,13 +104,13 @@ export default function FullContainer({
           refreshing={refreshing}
           onRefresh={handleRefresh}
           tintColor="#667eea"
-          title="Pull to refresh"
+          title={t('pullToRefresh')}
         />
       }
     >
       {/* Welcome Section */}
       <View style={styles.welcomeSection}>
-        <Text style={styles.welcomeText}>Today&apos;s Overview</Text>
+        <Text style={styles.welcomeText}>{t('todaysOverview')}</Text>
       </View>
 
       {loading ? (
@@ -125,14 +127,14 @@ export default function FullContainer({
         <View style={styles.gridRow}>
           <StatCard 
             icon="attach-money" 
-            label="Today's Earnings" 
+            label={t('todaysEarnings')}
             value={`₹${(todayEarnings ?? 0).toLocaleString('en-IN')}`}
             color="#10b981"
             isLarge={true}
           />
           <StatCard 
             icon="schedule" 
-            label="Time on Order" 
+            label={t('timeOnOrder')}
             value={formatTime(timeOnOrder)} 
             color="#3b82f6"
             isLarge={true}
@@ -141,13 +143,13 @@ export default function FullContainer({
         <View style={styles.gridRow}>
           <StatCard 
             icon="work" 
-            label="Jobs Today" 
+            label={t('jobsToday')}
             value={todayJobs.toString()} 
             color="#8b5cf6"
           />
           <StatCard 
             icon="history" 
-            label="Total History" 
+            label={t('totalHistory')}
             value={historyCount.toString()} 
             color="#f59e0b"
           />
@@ -164,29 +166,29 @@ export default function FullContainer({
         >
           <View style={styles.summaryHeader}>
             <MaterialIcons name="trending-up" size={24} color="#10b981" />
-            <Text style={styles.summaryTitle}>Overall Statistics</Text>
+            <Text style={styles.summaryTitle}>{t('overallStatistics')}</Text>
           </View>
           
           <View style={styles.summaryRow}>
             <View style={styles.summaryItem}>
-              <Text style={styles.summaryLabel}>Total Earnings</Text>
+              <Text style={styles.summaryLabel}>{t('totalEarnings')}</Text>
               <Text style={[styles.summaryValue, styles.summaryValueLarge]}>₹{(totalEarnings ?? 0).toLocaleString('en-IN')}</Text>
             </View>
             <View style={styles.summaryDivider} />
             <View style={styles.summaryItem}>
-              <Text style={styles.summaryLabel}>Jobs Completed</Text>
+              <Text style={styles.summaryLabel}>{t('jobsCompleted')}</Text>
               <Text style={styles.summaryValue}>{offersClaimed}</Text>
             </View>
           </View>
 
           <View style={[styles.summaryRow, { marginTop: 16 }]}>
             <View style={styles.summaryItem}>
-              <Text style={styles.summaryLabel}>Avg Rating (Completed)</Text>
+              <Text style={styles.summaryLabel}>{t('avgRatingCompleted')}</Text>
               <Text style={styles.summaryValue}>{(averageRating || 0).toFixed(2)} ⭐</Text>
             </View>
             <View style={styles.summaryDivider} />
             <View style={styles.summaryItem}>
-              <Text style={styles.summaryLabel}>Active Bonuses</Text>
+              <Text style={styles.summaryLabel}>{t('activeBonuses')}</Text>
               <Text style={[styles.summaryValue, styles.summaryValueLarge]}>₹{(activeBonuses ?? 0).toLocaleString('en-IN')}</Text>
             </View>
           </View>
@@ -197,11 +199,11 @@ export default function FullContainer({
       <View style={styles.tipsSection}>
         <View style={styles.tipHeader}>
           <MaterialIcons name="lightbulb" size={20} color="#f59e0b" />
-          <Text style={styles.tipTitle}>Quick Tips</Text>
+          <Text style={styles.tipTitle}>{t('quickTips')}</Text>
         </View>
-        <Text style={styles.tipText}>💡 Accept more jobs to increase your daily earnings</Text>
-        <Text style={styles.tipText}>⏱️ Complete jobs on time for bonus rewards</Text>
-        <Text style={styles.tipText}>⭐ Maintain high ratings for premium job offers</Text>
+        <Text style={styles.tipText}>{t('quickTipAcceptMoreJobs')}</Text>
+        <Text style={styles.tipText}>{t('quickTipCompleteOnTime')}</Text>
+        <Text style={styles.tipText}>{t('quickTipMaintainRatings')}</Text>
       </View>
         </>
       )}

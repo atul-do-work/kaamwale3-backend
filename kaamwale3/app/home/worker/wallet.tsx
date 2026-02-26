@@ -17,7 +17,6 @@ import styles from '../../../styles/WorkerWalletStyles';
 import { LinearGradient } from 'expo-linear-gradient';
 // API base now used via `api` wrapper; no direct API_BASE import needed here
 import { socket } from '../../../utils/socket';
-import { connectSocket } from '../../../utils/socket';
 import { useLanguage } from '../../../context/LanguageContext';
 // Define types for wallet and transactions
 type Transaction = {
@@ -391,11 +390,11 @@ export default function Wallet(): React.ReactElement {
         setDepositModalHtml('');
         // ✅ Offer retry instead of just closing
         Alert.alert(
-          'Payment Failed',
-          data.error || 'Deposit cancelled',
+          t('paymentFailed'),
+          data.error || t('depositCancelled'),
           [
-            { text: 'Close', onPress: () => {} },
-            { text: 'Try Again', onPress: () => {
+            { text: t('close'), onPress: () => {} },
+            { text: t('tryAgain'), onPress: () => {
               setDepositModalVisible(true);
             }, style: 'default' }
           ]
@@ -420,7 +419,7 @@ export default function Wallet(): React.ReactElement {
       // setDepositModalVisible(false);
 
       if (res.data.success) {
-        Alert.alert('Success', `₹${currentDepositAmount} deposited to your available and pocket balance!`);
+        Alert.alert(t('success'), t('depositSuccessDetailed').replace('{amount}', String(currentDepositAmount)));
         setDepositAmount('');
         setShowDeposit(false);
         // ✅ Fallback: Fetch wallet if socket fails
@@ -428,28 +427,28 @@ export default function Wallet(): React.ReactElement {
       } else {
         // ✅ Offer retry for verification failures
         Alert.alert(
-          'Error',
-          res.data.message || 'Deposit verification failed',
+          t('error'),
+          res.data.message || t('depositVerificationFailed'),
           [
-            { text: 'Close', onPress: () => {} },
-            { text: 'Retry', onPress: () => verifyDeposit(data), style: 'default' }
+            { text: t('close'), onPress: () => {} },
+            { text: t('tryAgain'), onPress: () => verifyDeposit(data), style: 'default' }
           ]
         );
       }
     } catch (err: any) {
       // ✅ Don't close modal here - already closed in handleDepositMessage
       // setDepositModalVisible(false);
-      const errorMsg = err.response?.data?.message || 'Deposit verification failed';
+      const errorMsg = err.response?.data?.message || t('depositVerificationFailed');
       // ✅ Offer retry for network/timeout errors
       Alert.alert(
-        'Error',
+        t('error'),
         errorMsg,
         [
-          { text: 'Close', onPress: () => {
+          { text: t('close'), onPress: () => {
             // ✅ Even if user closes error, try to fetch wallet as fallback
             fetchWallet();
           } },
-          { text: 'Retry', onPress: () => verifyDeposit(data), style: 'default' }
+          { text: t('tryAgain'), onPress: () => verifyDeposit(data), style: 'default' }
         ]
       );
     }
@@ -457,29 +456,29 @@ export default function Wallet(): React.ReactElement {
 
   const confirmWithdraw = async () => {
     if (!withdrawAmount || Number(withdrawAmount) <= 0) {
-      Alert.alert('Error', 'Enter a valid amount to withdraw');
+      Alert.alert(t('error'), t('enterValidWithdrawAmount'));
       return;
     }
 
     if (Number(withdrawAmount) < 100) {
-      Alert.alert('Error', 'Minimum withdrawal is ₹100');
+      Alert.alert(t('error'), t('minimumWithdraw'));
       return;
     }
 
     const availableBalance = Number(wallet.availableBalance ?? wallet.balance ?? 0);
     if (Number(withdrawAmount) > availableBalance) {
-      Alert.alert('Error', 'Insufficient balance');
+      Alert.alert(t('error'), t('insufficientBalance'));
       return;
     }
 
     // Check if bank account is linked
     if (!bankAccount) {
       Alert.alert(
-        'Bank Account Required',
-        'Please add your bank account details before withdrawing',
+        t('bankAccountRequired'),
+        t('addBankBeforeWithdraw'),
         [
-          { text: 'Cancel', onPress: () => {} },
-          { text: 'Add Bank Account', onPress: () => setShowAddBank(true) }
+          { text: t('cancel'), onPress: () => {} },
+          { text: t('addBankAccount'), onPress: () => setShowAddBank(true) }
         ]
       );
       return;
@@ -489,14 +488,14 @@ export default function Wallet(): React.ReactElement {
       const res = await api.post('/wallet/withdraw', { amount: Number(withdrawAmount) });
 
       if (res.data.success) {
-        Alert.alert('Success', `Withdrawal of ₹${withdrawAmount} initiated!\n\nAmount will be transferred to your bank account within 2-4 hours.`);
+        Alert.alert(t('success'), `${t('withdrawalInitiated')}\n\n${t('amountTransferred')}`);
         setWithdrawAmount('');
         setShowWithdraw(false);
         // ✅ Backend updates wallet atomically - no manual update needed
       }
     } catch (err: any) {
-      const errorMsg = err.response?.data?.message || 'Withdrawal failed';
-      Alert.alert('Error', errorMsg);
+      const errorMsg = err.response?.data?.message || t('withdrawFailed');
+      Alert.alert(t('error'), errorMsg);
     }
   };
 
@@ -517,27 +516,27 @@ export default function Wallet(): React.ReactElement {
   const handleAddBankAccount = async () => {
     // Validation
     if (!bankDetails.accountHolderName.trim()) {
-      Alert.alert('Error', 'Please enter account holder name');
+      Alert.alert(t('error'), t('enterAccountHolderName'));
       return;
     }
 
     if (bankDetails.accountNumber.length < 9 || bankDetails.accountNumber.length > 18) {
-      Alert.alert('Error', 'Account number must be 9-18 digits');
+      Alert.alert(t('error'), t('invalidAccountNumber'));
       return;
     }
 
     if (bankDetails.accountNumber !== bankDetails.accountNumberConfirm) {
-      Alert.alert('Error', 'Account numbers do not match');
+      Alert.alert(t('error'), t('accountMismatch'));
       return;
     }
 
     if (bankDetails.ifscCode.length !== 11) {
-      Alert.alert('Error', 'IFSC code must be exactly 11 characters');
+      Alert.alert(t('error'), t('invalidIFSC'));
       return;
     }
 
     if (!bankDetails.bankName.trim()) {
-      Alert.alert('Error', 'Please enter bank name');
+      Alert.alert(t('error'), t('enterBankName'));
       return;
     }
 
@@ -555,18 +554,25 @@ export default function Wallet(): React.ReactElement {
           accountType: 'savings'
         });
         setShowAddBank(false);
-        Alert.alert('Success', 'Bank account added! Waiting for verification.');
+        Alert.alert(t('success'), t('bankAccountAddedWaitingVerification'));
         fetchBankAccount();
       }
     } catch (err: any) {
-      Alert.alert('Error', err.response?.data?.message || 'Failed to add bank account');
+      Alert.alert(t('error'), err.response?.data?.message || t('failedAddBank'));
     }
   };
 
   // Map transactions to cards
+  const transactionTitleMap: Record<Transaction['type'], string> = {
+    deposit: t('deposit'),
+    pocket_deposit: t('pocketDeposit'),
+    withdraw: t('withdraw'),
+    payment: t('transactionPayment'),
+    incentive_reward: t('incentiveReward'),
+  };
   const cards = wallet.transactions.map((t, idx) => ({
     id: idx + 1,
-    title: t.type.charAt(0).toUpperCase() + t.type.slice(1),
+    title: transactionTitleMap[t.type] || t.type,
     amount: t.amount,
     date: new Date(t.date).toLocaleDateString(),
     icon:
@@ -606,7 +612,7 @@ export default function Wallet(): React.ReactElement {
         end={{ x: 1, y: 0 }}
         style={styles.headerContainer}
       >
-        <Text style={styles.headerText}>Earnings</Text>
+        <Text style={styles.headerText}>{t('earnings')}</Text>
         <Text style={styles.amountText}>₹{weeklyEarningsAmount}</Text>
         {!!weekRangeText && (
           <Text style={{ color: '#d7e3f5', marginTop: 4, fontSize: 12 }}>{weekRangeText}</Text>
@@ -615,13 +621,13 @@ export default function Wallet(): React.ReactElement {
 
       {/* Pocket Balance */}
       <View style={styles.balanceContainer}>
-        <Text style={styles.balanceTitle}>Pocket Balance</Text>
+        <Text style={styles.balanceTitle}>{t('pocketBalance')}</Text>
         <Text style={styles.balanceAmount}>₹{wallet.pocketBalance}</Text>
       </View>
 
       {/* Available Balance */}
       <View style={styles.balanceContainer}>
-        <Text style={styles.balanceTitle}>Available Balance</Text>
+        <Text style={styles.balanceTitle}>{t('availableBalance')}</Text>
         <Text style={styles.balanceAmount}>₹{currentAvailableAmount}</Text>
       </View>
 
@@ -632,13 +638,13 @@ export default function Wallet(): React.ReactElement {
           onPress={handleDepositClick}
           disabled={depositLoading}
         >
-          <Text style={styles.buttonText}>Deposit</Text>
+          <Text style={styles.buttonText}>{t('deposit')}</Text>
         </TouchableOpacity>
         <TouchableOpacity
           style={[styles.actionButton, { backgroundColor: '#2ecc71' }]}
           onPress={handleWithdrawClick}
         >
-          <Text style={styles.buttonText}>Withdraw</Text>
+          <Text style={styles.buttonText}>{t('withdraw')}</Text>
         </TouchableOpacity>
       </View>
 
@@ -648,7 +654,7 @@ export default function Wallet(): React.ReactElement {
           <View style={styles.inputRow}>
             <TextInput
               style={styles.amountInput}
-              placeholder="Enter amount"
+              placeholder={t('enterAmount')}
               keyboardType="numeric"
               value={depositAmount}
               onChangeText={setDepositAmount}
@@ -659,15 +665,15 @@ export default function Wallet(): React.ReactElement {
               onPress={confirmDeposit}
               disabled={depositLoading}
             >
-              <Text style={styles.buttonText}>{depositLoading ? 'Processing...' : 'Confirm'}</Text>
+              <Text style={styles.buttonText}>{depositLoading ? t('processing') : t('confirm')}</Text>
             </TouchableOpacity>
           </View>
           {/* ✅ Deposit Summary UI */}
           {depositAmount && Number(depositAmount) > 0 && (
             <View style={{ marginTop: 12, marginHorizontal: 16, padding: 12, backgroundColor: '#f0f8ff', borderRadius: 8, borderLeftWidth: 4, borderLeftColor: '#1a2f4d' }}>
-              <Text style={{ fontSize: 12, color: '#666', marginBottom: 4 }}>Deposit Summary</Text>
-              <Text style={{ fontSize: 14, fontWeight: '600', color: '#1a2f4d' }}>You will deposit: ₹{Number(depositAmount)}</Text>
-              <Text style={{ fontSize: 11, color: '#999', marginTop: 6 }}>Minimum: ₹100 | No hidden charges</Text>
+              <Text style={{ fontSize: 12, color: '#666', marginBottom: 4 }}>{t('depositSummary')}</Text>
+              <Text style={{ fontSize: 14, fontWeight: '600', color: '#1a2f4d' }}>{t('youWillDeposit').replace('{amount}', String(Number(depositAmount)))}</Text>
+              <Text style={{ fontSize: 11, color: '#999', marginTop: 6 }}>{t('depositMinNoCharges')}</Text>
             </View>
           )}
         </View>
@@ -678,7 +684,7 @@ export default function Wallet(): React.ReactElement {
         <View style={styles.inputRow}>
           <TextInput
             style={styles.amountInput}
-            placeholder="Enter amount"
+            placeholder={t('enterAmount')}
             keyboardType="numeric"
             value={withdrawAmount}
             onChangeText={setWithdrawAmount}
@@ -687,7 +693,7 @@ export default function Wallet(): React.ReactElement {
             style={[styles.actionButton, { backgroundColor: '#2ecc71', flex: 0.3 }]}
             onPress={confirmWithdraw}
           >
-            <Text style={styles.buttonText}>Confirm</Text>
+            <Text style={styles.buttonText}>{t('confirm')}</Text>
           </TouchableOpacity>
         </View>
       )}
@@ -716,7 +722,7 @@ export default function Wallet(): React.ReactElement {
           }}
           onPress={() => setDisplayedCardCount((prev) => prev + 4)}
         >
-          <Text style={{ color: '#fff', fontWeight: '700' }}>See More</Text>
+          <Text style={{ color: '#fff', fontWeight: '700' }}>{t('seeMore')}</Text>
         </TouchableOpacity>
       )}
 
@@ -730,14 +736,14 @@ export default function Wallet(): React.ReactElement {
       }}>
         <SafeAreaView edges={['top', 'left', 'right', 'bottom']} style={{ flex: 1, backgroundColor: "#fff" }}>
           <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingTop: 12, paddingHorizontal: 12, paddingBottom: 12, borderBottomWidth: 1, borderBottomColor: "#DDD" }}>
-            <Text style={{ fontSize: 16, fontWeight: "600", color: "#333" }}>Wallet Deposit</Text>
+            <Text style={{ fontSize: 16, fontWeight: "600", color: "#333" }}>{t('walletDeposit')}</Text>
             <TouchableOpacity onPress={() => {
               setDepositModalVisible(false);
               setDepositModalHtml('');
               Alert.alert(
-                "Deposit in Progress?",
-                "If you just completed payment, it may take a moment to process. Don't close the app.",
-                [{ text: "OK", onPress: () => {
+                t('depositInProgressTitle'),
+                t('depositInProgressMessage'),
+                [{ text: t('ok'), onPress: () => {
                   // ✅ Fallback fetch wallet in case socket failed
                   fetchWallet();
                 } }]
@@ -768,7 +774,7 @@ export default function Wallet(): React.ReactElement {
           ) : (
             <View style={{ flex: 1, justifyContent: "center", alignItems: "center" }}>
               <ActivityIndicator size="large" color="#1a2f4d" />
-              <Text style={{ marginTop: 12, color: "#666" }}>Loading payment gateway...</Text>
+              <Text style={{ marginTop: 12, color: "#666" }}>{t('loadingPaymentGateway')}</Text>
             </View>
           )}
         </SafeAreaView>
@@ -779,7 +785,7 @@ export default function Wallet(): React.ReactElement {
         <SafeAreaView edges={['top', 'left', 'right', 'bottom']} style={{ flex: 1, backgroundColor: "#fff" }}>
           <ScrollView style={{ flex: 1 }}>
             <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingTop: 12, paddingHorizontal: 16, paddingBottom: 12, borderBottomWidth: 1, borderBottomColor: "#EEE" }}>
-              <Text style={{ fontSize: 18, fontWeight: "700", color: "#333" }}>Add Bank Account</Text>
+              <Text style={{ fontSize: 18, fontWeight: "700", color: "#333" }}>{t('addBankAccount')}</Text>
               <TouchableOpacity onPress={() => setShowAddBank(false)}>
                 <MaterialIcons name="close" size={28} color="#333" />
               </TouchableOpacity>
@@ -787,25 +793,25 @@ export default function Wallet(): React.ReactElement {
 
             <View style={{ padding: 16 }}>
               {/* Account Holder Name */}
-              <Text style={{ fontSize: 14, fontWeight: "600", color: "#333", marginBottom: 8 }}>Account Holder Name *</Text>
+              <Text style={{ fontSize: 14, fontWeight: "600", color: "#333", marginBottom: 8 }}>{t('accountHolderNameLabel')}</Text>
               <TextInput
                 style={{ borderWidth: 1, borderColor: "#DDD", borderRadius: 8, padding: 12, marginBottom: 16, fontSize: 14 }}
-                placeholder="Full name as per bank"
+                placeholder={t('fullNameAsPerBank')}
                 value={bankDetails.accountHolderName}
                 onChangeText={(val) => setBankDetails({ ...bankDetails, accountHolderName: val })}
               />
 
               {/* Bank Name */}
-              <Text style={{ fontSize: 14, fontWeight: "600", color: "#333", marginBottom: 8 }}>Bank Name *</Text>
+              <Text style={{ fontSize: 14, fontWeight: "600", color: "#333", marginBottom: 8 }}>{t('bankNameLabel')}</Text>
               <TextInput
                 style={{ borderWidth: 1, borderColor: "#DDD", borderRadius: 8, padding: 12, marginBottom: 16, fontSize: 14 }}
-                placeholder="e.g., ICICI Bank, HDFC Bank"
+                placeholder={t('bankNamePlaceholder')}
                 value={bankDetails.bankName}
                 onChangeText={(val) => setBankDetails({ ...bankDetails, bankName: val })}
               />
 
               {/* Account Type */}
-              <Text style={{ fontSize: 14, fontWeight: "600", color: "#333", marginBottom: 8 }}>Account Type *</Text>
+              <Text style={{ fontSize: 14, fontWeight: "600", color: "#333", marginBottom: 8 }}>{t('accountTypeLabel')}</Text>
               <View style={{ flexDirection: 'row', marginBottom: 16 }}>
                 <TouchableOpacity
                   style={{
@@ -819,7 +825,7 @@ export default function Wallet(): React.ReactElement {
                   }}
                   onPress={() => setBankDetails({ ...bankDetails, accountType: 'savings' })}
                 >
-                  <Text style={{ fontWeight: bankDetails.accountType === 'savings' ? '700' : '600', color: bankDetails.accountType === 'savings' ? '#1a2f4d' : '#666' }}>Savings</Text>
+                  <Text style={{ fontWeight: bankDetails.accountType === 'savings' ? '700' : '600', color: bankDetails.accountType === 'savings' ? '#1a2f4d' : '#666' }}>{t('savings')}</Text>
                 </TouchableOpacity>
 
                 <TouchableOpacity
@@ -833,35 +839,35 @@ export default function Wallet(): React.ReactElement {
                   }}
                   onPress={() => setBankDetails({ ...bankDetails, accountType: 'current' })}
                 >
-                  <Text style={{ fontWeight: bankDetails.accountType === 'current' ? '700' : '600', color: bankDetails.accountType === 'current' ? '#1a2f4d' : '#666' }}>Current</Text>
+                  <Text style={{ fontWeight: bankDetails.accountType === 'current' ? '700' : '600', color: bankDetails.accountType === 'current' ? '#1a2f4d' : '#666' }}>{t('current')}</Text>
                 </TouchableOpacity>
               </View>
 
               {/* Account Number */}
-              <Text style={{ fontSize: 14, fontWeight: "600", color: "#333", marginBottom: 8 }}>Account Number *</Text>
+              <Text style={{ fontSize: 14, fontWeight: "600", color: "#333", marginBottom: 8 }}>{t('accountNumberLabel')}</Text>
               <TextInput
                 style={{ borderWidth: 1, borderColor: "#DDD", borderRadius: 8, padding: 12, marginBottom: 16, fontSize: 14 }}
-                placeholder="Enter account number"
+                placeholder={t('enterAccountNumber')}
                 keyboardType="number-pad"
                 value={bankDetails.accountNumber}
                 onChangeText={(val) => setBankDetails({ ...bankDetails, accountNumber: val })}
               />
 
               {/* Confirm Account Number */}
-              <Text style={{ fontSize: 14, fontWeight: "600", color: "#333", marginBottom: 8 }}>Confirm Account Number *</Text>
+              <Text style={{ fontSize: 14, fontWeight: "600", color: "#333", marginBottom: 8 }}>{t('confirmAccountNumberLabel')}</Text>
               <TextInput
                 style={{ borderWidth: 1, borderColor: "#DDD", borderRadius: 8, padding: 12, marginBottom: 16, fontSize: 14 }}
-                placeholder="Re-enter account number"
+                placeholder={t('reenterAccountNumber')}
                 keyboardType="number-pad"
                 value={bankDetails.accountNumberConfirm}
                 onChangeText={(val) => setBankDetails({ ...bankDetails, accountNumberConfirm: val })}
               />
 
               {/* IFSC Code */}
-              <Text style={{ fontSize: 14, fontWeight: "600", color: "#333", marginBottom: 8 }}>IFSC Code *</Text>
+              <Text style={{ fontSize: 14, fontWeight: "600", color: "#333", marginBottom: 8 }}>{t('ifscCodeLabel')}</Text>
               <TextInput
                 style={{ borderWidth: 1, borderColor: "#DDD", borderRadius: 8, padding: 12, marginBottom: 24, fontSize: 14 }}
-                placeholder="e.g., ICIC0000001"
+                placeholder={t('ifscCodePlaceholder')}
                 maxLength={11}
                 value={bankDetails.ifscCode}
                 onChangeText={(val) => setBankDetails({ ...bankDetails, ifscCode: val.toUpperCase() })}
@@ -872,7 +878,7 @@ export default function Wallet(): React.ReactElement {
                 style={{ backgroundColor: "#1a2f4d", padding: 16, borderRadius: 8, alignItems: 'center', marginBottom: 32 }}
                 onPress={handleAddBankAccount}
               >
-                <Text style={{ color: "#fff", fontWeight: "700", fontSize: 16 }}>Save Bank Account</Text>
+                <Text style={{ color: "#fff", fontWeight: "700", fontSize: 16 }}>{t('saveBankAccount')}</Text>
               </TouchableOpacity>
             </View>
           </ScrollView>
@@ -883,7 +889,7 @@ export default function Wallet(): React.ReactElement {
       {bankAccount && showBankInfo && (
         <View style={{ padding: 16, backgroundColor: "#f0f8ff", marginTop: 16, marginHorizontal: 16, borderRadius: 8, borderLeftWidth: 4, borderLeftColor: "#1a2f4d" }}>
           <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-            <Text style={{ fontSize: 14, fontWeight: "600", color: "#333" }}>💳 Linked Bank Account</Text>
+            <Text style={{ fontSize: 14, fontWeight: "600", color: "#333" }}>{t('linkedBankAccount')}</Text>
             <TouchableOpacity onPress={() => setShowBankInfo(false)}>
               <MaterialIcons name="close" size={20} color="#333" />
             </TouchableOpacity>
@@ -891,7 +897,7 @@ export default function Wallet(): React.ReactElement {
           <Text style={{ fontSize: 12, color: "#666", marginBottom: 4 }}>{bankAccount.bankName}</Text>
           <Text style={{ fontSize: 12, color: "#666", marginBottom: 4 }}>{bankAccount.maskedAccount}</Text>
           <Text style={{ fontSize: 11, color: bankAccount.isVerified ? "#27ae60" : "#f39c12" }}>
-            {bankAccount.isVerified ? '✅ Verified' : `⏳ ${bankAccount.verificationStatus}`}
+            {bankAccount.isVerified ? `✅ ${t('verified')}` : `⏳ ${bankAccount.verificationStatus}`}
           </Text>
         </View>
       )}

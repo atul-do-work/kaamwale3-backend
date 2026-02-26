@@ -3,6 +3,7 @@ import { View, Text, FlatList, Alert, Image, TouchableOpacity, Modal, RefreshCon
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useFocusEffect } from "@react-navigation/native";
 import { MaterialIcons } from "@expo/vector-icons";
+import { useRouter } from "expo-router";
 import { LinearGradient } from "expo-linear-gradient";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as Location from "expo-location";
@@ -10,6 +11,7 @@ import { socket } from "../../../utils/socket";
 import { API_BASE } from "../../../utils/config";
 import styles from "../../../styles/WorkerJobsStyles";
 import JobLocationMap from "../../../components/JobLocationMap";
+import { useLanguage } from "../../../context/LanguageContext";
 
 // Local construction image
 // import constructionImg from "@/assets/csite.png";
@@ -81,6 +83,8 @@ const isJobDayExpired = (job: Job): boolean => {
 };
 
 export default function Jobs(): React.ReactElement {
+  const router = useRouter();
+  const { t } = useLanguage();
   const [workerName, setWorkerName] = useState<string>("Test Worker");
   const [acceptedJobs, setAcceptedJobs] = useState<Job[]>([]);
   const [seeAllModalVisible, setSeeAllModalVisible] = useState<boolean>(false);
@@ -103,25 +107,53 @@ export default function Jobs(): React.ReactElement {
   const paymentNotifiedJobs = useRef<Set<string>>(new Set()); // ✅ Track jobs already notified
 
   const dialNumber = async (number: string) => {
-    const telUrl = `tel:${number}`;
+    const normalized = String(number || "").trim();
+    if (!normalized) {
+      Alert.alert(t('error'), t('supportNumberUnavailable'), [
+        { text: t('cancel'), style: "cancel" },
+        { text: t('supportTickets'), onPress: () => router.push("/SupportTickets" as any) },
+      ]);
+      return;
+    }
+    const telUrl = `tel:${normalized}`;
+    const smsUrl = `sms:${normalized}`;
     try {
       const supported = await Linking.canOpenURL(telUrl);
       if (!supported) {
-        Alert.alert("Error", "Calling is not supported on this device.");
+        const smsSupported = await Linking.canOpenURL(smsUrl);
+        if (smsSupported) {
+          Alert.alert(
+            t('callNotAvailable'),
+            t('callingNotSupportedMessage').replace('{number}', normalized),
+            [
+              { text: t('cancel'), style: "cancel" },
+              { text: t('supportTickets'), onPress: () => router.push("/SupportTickets" as any) },
+              { text: t('sendSms'), onPress: () => Linking.openURL(smsUrl) },
+            ]
+          );
+          return;
+        }
+        Alert.alert(t('callNotAvailable'), t('pleaseContactSupportAt').replace('{number}', normalized), [
+          { text: t('ok') },
+          { text: t('supportTickets'), onPress: () => router.push("/SupportTickets" as any) },
+        ]);
         return;
       }
       await Linking.openURL(telUrl);
     } catch {
-      Alert.alert("Error", "Could not start the call.");
+      Alert.alert(t('error'), t('couldNotStartContactAction').replace('{number}', normalized), [
+        { text: t('cancel'), style: "cancel" },
+        { text: t('supportTickets'), onPress: () => router.push("/SupportTickets" as any) },
+      ]);
     }
   };
 
   const showHelpOptions = (job?: Job) => {
     const supportNumber = job?.contractorPhone || SUPPORT_CALL_NUMBER;
-    Alert.alert("Need Help?", "Choose an option", [
-      { text: "Cancel", style: "cancel" },
-      { text: "Emergency Call", style: "destructive", onPress: () => dialNumber(EMERGENCY_CALL_NUMBER) },
-      { text: "Support Call", onPress: () => dialNumber(supportNumber) },
+    Alert.alert(t('needHelpTitle'), t('chooseOption'), [
+      { text: t('cancel'), style: "cancel" },
+      { text: t('emergencyCall'), style: "destructive", onPress: () => dialNumber(EMERGENCY_CALL_NUMBER) },
+      { text: t('supportCall'), onPress: () => dialNumber(supportNumber) },
     ]);
   };
 
@@ -223,13 +255,13 @@ export default function Jobs(): React.ReactElement {
       
       if (!lat || !lon) {
         console.warn(`     ⚠️ Invalid coordinates: lat=${lat}, lon=${lon}`);
-        return "Unknown location";
+        return t('unknownLocation');
       }
       
       // Ensure Location is available
       if (!Location || !Location.reverseGeocodeAsync) {
         console.error(`     ❌ Location API not available`);
-        return "Unknown location";
+        return t('unknownLocation');
       }
       
       const result = await Location.reverseGeocodeAsync({ latitude: lat, longitude: lon });
@@ -237,19 +269,19 @@ export default function Jobs(): React.ReactElement {
       
       if (!result || result.length === 0) {
         console.warn(`     ⚠️ No geocode results`);
-        return "Unknown location";
+        return t('unknownLocation');
       }
       
       const address = result[0];
       const area = address.name || address.street || "";
       const city = address.city || address.region || "";
-      const locationStr = area && city ? `${area}, ${city}` : area || city || "Unknown location";
+      const locationStr = area && city ? `${area}, ${city}` : area || city || t('unknownLocation');
       console.log(`     📌 Formatted location:`, locationStr);
       
       return locationStr;
     } catch (err) {
       console.error(`     ❌ Reverse geocoding error:`, err);
-      return "Unknown location";
+      return t('unknownLocation');
     }
   };
 
@@ -321,7 +353,7 @@ export default function Jobs(): React.ReactElement {
             console.error(`⚠️ Error processing job ${job._id}:`, mapErr);
             return {
               ...job,
-              location: job.location || "Unknown location",
+              location: job.location || t('unknownLocation'),
               paymentStatus: job.paymentStatus || null,
             };
           }
@@ -357,7 +389,7 @@ export default function Jobs(): React.ReactElement {
       }
       if (!isRefresh) {
         const errorMsg = err instanceof Error ? err.message : 'Unknown error';
-        Alert.alert("Error", `Could not fetch jobs:\n${errorMsg}`);
+        Alert.alert(t('error'), `${t('couldNotFetchJobs')}\n${errorMsg}`);
       }
     } finally {
       if (!isRefresh) setLoading(false);
@@ -561,7 +593,7 @@ export default function Jobs(): React.ReactElement {
 
       const payload = await res.json();
       if (!res.ok || !payload?.success) {
-        return Alert.alert("Error", payload?.message || "Failed to submit contractor rating");
+        return Alert.alert(t('error'), payload?.message || t('failedSubmitContractorRating'));
       }
 
       setAcceptedJobs((prev) =>
@@ -580,10 +612,10 @@ export default function Jobs(): React.ReactElement {
 
       setContractorRatingModalVisible(false);
       setSelectedJobForContractorRating(null);
-      Alert.alert("Success", "Contractor rated successfully");
+      Alert.alert(t('success'), t('contractorRatedSuccessfully'));
     } catch (err) {
       console.error("Failed to submit contractor rating:", err);
-      Alert.alert("Error", "Could not submit contractor rating");
+      Alert.alert(t('error'), t('couldNotSubmitContractorRating'));
     } finally {
       setSubmittingContractorRating(false);
     }
@@ -694,7 +726,7 @@ export default function Jobs(): React.ReactElement {
                 <Text style={{ color: "#666", fontSize: 12, marginLeft: 6 }}>
                   {job.date && !isNaN(Date.parse(job.date))
                     ? new Date(job.date).toLocaleDateString()
-                    : "N/A"}
+                    : t('notAvailable')}
                 </Text>
               </View>
 
@@ -703,7 +735,7 @@ export default function Jobs(): React.ReactElement {
                 <View style={{ flexDirection: "row", alignItems: "center", flex: 1, marginLeft: 10 }}>
                   <MaterialIcons name="schedule" size={14} color="#999" />
                   <Text style={{ color: "#666", fontSize: 12, marginLeft: 6 }}>
-                    {job.startTime || "N/A"} - {job.endTime || "N/A"}
+                    {job.startTime || t('notAvailable')} - {job.endTime || t('notAvailable')}
                   </Text>
                 </View>
               )}
@@ -714,7 +746,7 @@ export default function Jobs(): React.ReactElement {
               <View style={{ flexDirection: "row", alignItems: "center", marginBottom: 10 }}>
                 <MaterialIcons name="timer" size={14} color="#999" />
                 <Text style={{ color: "#666", fontSize: 12, marginLeft: 6 }}>
-                  Duration: {job.numberOfDays} {job.numberOfDays === 1 ? 'day' : 'days'}
+                  {t('durationLabel')}: {job.numberOfDays} {job.numberOfDays === 1 ? t('day') : t('days')}
                 </Text>
               </View>
             )}
@@ -747,7 +779,7 @@ export default function Jobs(): React.ReactElement {
                 }}>
                   <MaterialIcons name="check-circle" size={14} color="#2ecc71" />
                   <Text style={{ color: "#2ecc71", fontSize: 12, fontWeight: "600", marginLeft: 6 }}>
-                    Paid
+                    {t('paid')}
                   </Text>
                 </View>
               ) : (
@@ -761,7 +793,7 @@ export default function Jobs(): React.ReactElement {
                 }}>
                   <MaterialIcons name="schedule" size={14} color="#FF9800" />
                   <Text style={{ color: "#FF9800", fontSize: 12, fontWeight: "600", marginLeft: 6 }}>
-                    Pending
+                    {t('pending')}
                   </Text>
                 </View>
               )}
@@ -783,7 +815,7 @@ export default function Jobs(): React.ReactElement {
                   </Text>
                 </View>
               ) : (
-                <Text style={{ color: "#999", fontSize: 12 }}>No rating yet</Text>
+                <Text style={{ color: "#999", fontSize: 12 }}>{t('noRatingYet')}</Text>
               )}
             </View>
 
@@ -809,7 +841,7 @@ export default function Jobs(): React.ReactElement {
                 {job.contractorRating?.stars ? (
                   <View style={{ backgroundColor: "#EEF6FF", borderRadius: 8, padding: 10 }}>
                     <Text style={{ color: "#1e3a8a", fontWeight: "700", fontSize: 12, marginBottom: 4 }}>
-                      Your rating for contractor
+                      {t('yourRatingForContractor')}
                     </Text>
                     <Text style={{ color: "#1e3a8a", fontSize: 13, fontWeight: "700" }}>
                       {"⭐".repeat(job.contractorRating.stars)} ({job.contractorRating.stars}/5)
@@ -832,7 +864,7 @@ export default function Jobs(): React.ReactElement {
                     onPress={() => openRateContractorModal(job)}
                   >
                     <Text style={{ color: "#fff", fontSize: 13, fontWeight: "700" }}>
-                      Rate Contractor
+                      {t('rateContractor')}
                     </Text>
                   </TouchableOpacity>
                 )}
@@ -873,7 +905,7 @@ export default function Jobs(): React.ReactElement {
           onPress={() => setSeeAllModalVisible(true)}
         >
           <Text style={{ color: "#fff", fontSize: 14, fontWeight: "700" }}>
-            See All Jobs
+            {t('seeAllJobs')}
           </Text>
         </TouchableOpacity>
       </View>
@@ -888,9 +920,9 @@ export default function Jobs(): React.ReactElement {
         ListEmptyComponent={
           <View style={{ flex: 1, justifyContent: "center", alignItems: "center", paddingVertical: 40 }}>
             {loading ? (
-              <Text style={styles.loadingText}>Loading jobs...</Text>
+              <Text style={styles.loadingText}>{t('loadingJobs')}</Text>
             ) : (
-              <Text style={styles.noJobsText}>No pending jobs.</Text>
+              <Text style={styles.noJobsText}>{t('noPendingJobs')}</Text>
             )}
           </View>
         }
@@ -914,7 +946,7 @@ export default function Jobs(): React.ReactElement {
               alignItems: "center",
             }}
           >
-            <Text style={{ fontSize: 18, fontWeight: "800", color: "#111827" }}>This Week's Jobs</Text>
+            <Text style={{ fontSize: 18, fontWeight: "800", color: "#111827" }}>{t('thisWeeksJobs')}</Text>
             <TouchableOpacity
               onPress={() => setSeeAllModalVisible(false)}
               style={{
@@ -924,7 +956,7 @@ export default function Jobs(): React.ReactElement {
                 borderRadius: 8,
               }}
             >
-              <Text style={{ fontWeight: "700", color: "#111827" }}>Close</Text>
+              <Text style={{ fontWeight: "700", color: "#111827" }}>{t('close')}</Text>
             </TouchableOpacity>
           </View>
 
@@ -939,9 +971,9 @@ export default function Jobs(): React.ReactElement {
             ListEmptyComponent={
               <View style={{ flex: 1, justifyContent: "center", alignItems: "center", paddingVertical: 40 }}>
                 {loading ? (
-                  <Text style={styles.loadingText}>Loading jobs...</Text>
+                  <Text style={styles.loadingText}>{t('loadingJobs')}</Text>
                 ) : (
-                  <Text style={styles.noJobsText}>No jobs in this week.</Text>
+                  <Text style={styles.noJobsText}>{t('noJobsThisWeek')}</Text>
                 )}
               </View>
             }
@@ -995,7 +1027,7 @@ export default function Jobs(): React.ReactElement {
               marginBottom: 8,
               textAlign: "center",
             }}>
-              Payment Received! 🎉
+              {t('paymentReceivedTitle')}
             </Text>
 
             {/* Subtitle */}
@@ -1006,7 +1038,7 @@ export default function Jobs(): React.ReactElement {
               textAlign: "center",
               fontWeight: "600",
             }}>
-              Your payment has been processed successfully
+              {t('paymentProcessedSuccessfully')}
             </Text>
 
             {/* Job Details Card */}
@@ -1021,7 +1053,7 @@ export default function Jobs(): React.ReactElement {
             }}>
               <View style={{ marginBottom: 10 }}>
                 <Text style={{ fontSize: 11, color: "rgba(255, 255, 255, 0.8)", fontWeight: "600" }}>
-                  JOB TITLE
+                  {t('jobTitle')}
                 </Text>
                 <Text style={{ fontSize: 15, fontWeight: "800", color: "#FFF", marginTop: 2 }}>
                   {paymentJobData?.title}
@@ -1031,7 +1063,7 @@ export default function Jobs(): React.ReactElement {
               <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
                 <View>
                   <Text style={{ fontSize: 11, color: "rgba(255, 255, 255, 0.8)", fontWeight: "600" }}>
-                    AMOUNT
+                    {t('amount')}
                   </Text>
                   <Text style={{ fontSize: 18, fontWeight: "900", color: "#FFF", marginTop: 2 }}>
                     ₹{paymentJobData?.amount}
@@ -1039,7 +1071,7 @@ export default function Jobs(): React.ReactElement {
                 </View>
                 <View style={{ alignItems: "flex-end" }}>
                   <Text style={{ fontSize: 11, color: "rgba(255, 255, 255, 0.8)", fontWeight: "600" }}>
-                    FROM
+                    {t('fromLabel')}
                   </Text>
                   <Text style={{ fontSize: 15, fontWeight: "700", color: "#FFF", marginTop: 2 }}>
                     {paymentJobData?.contractor}
@@ -1062,7 +1094,7 @@ export default function Jobs(): React.ReactElement {
                 }}
               >
                 <Text style={{ color: "#FFF", fontSize: 14, fontWeight: "700", textAlign: "center" }}>
-                  Okay
+                  {t('okay')}
                 </Text>
               </TouchableOpacity>
 
@@ -1081,7 +1113,7 @@ export default function Jobs(): React.ReactElement {
                 }}
               >
                 <Text style={{ color: "#FFF", fontSize: 14, fontWeight: "700", textAlign: "center" }}>
-                  Didn't receive money
+                  {t('didntReceiveMoney')}
                 </Text>
               </TouchableOpacity>
             </View>
@@ -1100,16 +1132,16 @@ export default function Jobs(): React.ReactElement {
           <View style={{ backgroundColor: "#fff", width: "82%", borderRadius: 14, padding: 20, alignItems: "center" }}>
             <MaterialIcons name="support-agent" size={40} color="#2ecc71" />
             <Text style={{ fontSize: 18, fontWeight: "800", color: "#1f2937", marginTop: 10, marginBottom: 8 }}>
-              Support Request Sent
+              {t('supportRequestSent')}
             </Text>
             <Text style={{ fontSize: 14, color: "#4b5563", textAlign: "center", marginBottom: 16 }}>
-              Support will reach you in few minutes.
+              {t('supportWillReachSoon')}
             </Text>
             <TouchableOpacity
               onPress={() => setPaymentSupportModalVisible(false)}
               style={{ backgroundColor: "#2ecc71", paddingVertical: 10, paddingHorizontal: 24, borderRadius: 8 }}
             >
-              <Text style={{ color: "#fff", fontWeight: "700" }}>OK</Text>
+              <Text style={{ color: "#fff", fontWeight: "700" }}>{t('ok')}</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -1140,10 +1172,10 @@ export default function Jobs(): React.ReactElement {
         <View style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.6)", justifyContent: "center", alignItems: "center" }}>
           <View style={{ width: "88%", backgroundColor: "#fff", borderRadius: 14, padding: 16 }}>
             <Text style={{ fontSize: 18, fontWeight: "800", color: "#111827", marginBottom: 6 }}>
-              Rate Contractor
+              {t('rateContractor')}
             </Text>
             <Text style={{ fontSize: 13, color: "#6b7280", marginBottom: 12 }}>
-              {selectedJobForContractorRating?.contractorName || "Contractor"} • {selectedJobForContractorRating?.title || ""}
+              {selectedJobForContractorRating?.contractorName || t('contractor')} • {selectedJobForContractorRating?.title || ""}
             </Text>
 
             <View style={{ flexDirection: "row", justifyContent: "center", marginBottom: 14 }}>
@@ -1167,7 +1199,7 @@ export default function Jobs(): React.ReactElement {
                 textAlignVertical: "top",
                 marginBottom: 14,
               }}
-              placeholder="Feedback (optional)"
+              placeholder={t('feedbackOptional')}
               value={contractorRatingFeedback}
               onChangeText={setContractorRatingFeedback}
               multiline
@@ -1186,7 +1218,7 @@ export default function Jobs(): React.ReactElement {
                 onPress={() => setContractorRatingModalVisible(false)}
                 disabled={submittingContractorRating}
               >
-                <Text style={{ color: "#111827", fontWeight: "700" }}>Cancel</Text>
+                <Text style={{ color: "#111827", fontWeight: "700" }}>{t('cancel')}</Text>
               </TouchableOpacity>
               <TouchableOpacity
                 style={{
@@ -1204,7 +1236,7 @@ export default function Jobs(): React.ReactElement {
                 {submittingContractorRating ? (
                   <ActivityIndicator color="#fff" size="small" />
                 ) : (
-                  <Text style={{ color: "#fff", fontWeight: "700" }}>Submit</Text>
+                  <Text style={{ color: "#fff", fontWeight: "700" }}>{t('submit')}</Text>
                 )}
               </TouchableOpacity>
             </View>

@@ -215,16 +215,44 @@ function WorkerHome() {
   const router = useRouter();
 
   const dialNumber = async (number: string) => {
-    const telUrl = `tel:${number}`;
+    const normalized = String(number || "").trim();
+    if (!normalized) {
+      Alert.alert("Error", "Support number is not available.", [
+        { text: "Cancel", style: "cancel" },
+        { text: "Support Ticket", onPress: () => router.push("/SupportTickets" as any) },
+      ]);
+      return;
+    }
+    const telUrl = `tel:${normalized}`;
+    const smsUrl = `sms:${normalized}`;
     try {
       const supported = await Linking.canOpenURL(telUrl);
       if (!supported) {
-        Alert.alert("Error", "Calling is not supported on this device.");
+        const smsSupported = await Linking.canOpenURL(smsUrl);
+        if (smsSupported) {
+          Alert.alert(
+            "Call not available",
+            `Calling is not supported on this device. Send an SMS to ${normalized} instead?`,
+            [
+              { text: "Cancel", style: "cancel" },
+              { text: "Support Ticket", onPress: () => router.push("/SupportTickets" as any) },
+              { text: "Send SMS", onPress: () => Linking.openURL(smsUrl) },
+            ]
+          );
+          return;
+        }
+        Alert.alert("Call not available", `Please contact support at ${normalized}.`, [
+          { text: "OK" },
+          { text: "Support Ticket", onPress: () => router.push("/SupportTickets" as any) },
+        ]);
         return;
       }
       await Linking.openURL(telUrl);
     } catch {
-      Alert.alert("Error", "Could not start the call.");
+      Alert.alert("Error", `Could not start contact action for ${normalized}.`, [
+        { text: "Cancel", style: "cancel" },
+        { text: "Support Ticket", onPress: () => router.push("/SupportTickets" as any) },
+      ]);
     }
   };
 

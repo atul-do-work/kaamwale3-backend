@@ -3,6 +3,7 @@ const fs = require("fs").promises;
 const { authenticateToken } = require("../utils/auth");
 const User = require("../models/User");
 const { uploadImagePathToCloudinary } = require("../utils/cloudinaryUpload");
+const MAX_IMAGE_SIZE_BYTES = Math.floor(1.5 * 1024 * 1024);
 
 function createUsersProfileRouter({ upload, io, connectedWorkers }) {
   const router = express.Router();
@@ -10,6 +11,12 @@ function createUsersProfileRouter({ upload, io, connectedWorkers }) {
   router.post("/users/photo", authenticateToken, upload.single("photo"), async (req, res) => {
     try {
       if (!req.file) return res.status(400).json({ success: false, message: "No file uploaded" });
+      if (Number(req.file.size || 0) > MAX_IMAGE_SIZE_BYTES) {
+        return res.status(400).json({
+          success: false,
+          message: "Image too large. Maximum size is 1.5MB",
+        });
+      }
 
       const user = await User.findOne({ phone: req.user.phone });
       if (!user) return res.status(404).json({ success: false, message: "User not found" });

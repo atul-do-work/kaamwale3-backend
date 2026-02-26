@@ -80,19 +80,24 @@ export default function ContractorHome() {
     });
   }, [leaderboard, currentUserPhone]);
 
+  const toSafeNumber = React.useCallback((value: any) => {
+    const num = Number(value);
+    return Number.isFinite(num) ? num : 0;
+  }, []);
+
   const mapLeaderboardRows = React.useCallback((rows: any[] = []) => {
     return rows.map((contractor: any) => ({
       id: contractor.contractorId || contractor._id || contractor.phone,
       phone: contractor.phone || contractor.contractorPhone || contractor.contractorId || contractor._id,
       name: contractor.name || 'Unknown',
-      points: Number(contractor.score ?? contractor.points ?? 0),
+      points: toSafeNumber(contractor.score ?? contractor.points ?? contractor.finalScore ?? contractor.myPoints ?? 0),
       profile: contractor.profilePhoto ? contractor.profilePhoto : null,
-      rank: Number(contractor.rank || 0),
-      rating: Number(contractor.rating ?? contractor.avgRating ?? contractor.averageRating ?? 0),
-      jobsPosted: Number(contractor.jobCount ?? contractor.totalJobsPosted ?? 0),
+      rank: toSafeNumber(contractor.rank ?? contractor.position ?? 0),
+      rating: toSafeNumber(contractor.rating ?? contractor.avgRating ?? contractor.averageRating ?? 0),
+      jobsPosted: toSafeNumber(contractor.jobCount ?? contractor.totalJobsPosted ?? contractor.jobsPosted ?? 0),
       tier: contractor.tier || 'new',
     }));
-  }, []);
+  }, [toSafeNumber]);
 
   const fetchLeaderboardByDistrict = React.useCallback(async ({
     latitude,

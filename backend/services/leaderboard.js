@@ -931,12 +931,17 @@ router.get('/contractors/by-district', authenticateToken, async (req, res) => {
               },
             },
           },
+        },
+      },
+      // Stage 3.4: Calculate completion rate (separate stage to safely use computed fields)
+      {
+        $addFields: {
           completionRate: {
             $cond: [
-              { $gt: [{ $size: '$jobs' }, 0] },
+              { $gt: ['$jobCount', 0] },
               {
                 $multiply: [
-                  { $divide: ['$completedJobs', { $size: '$jobs' }] },
+                  { $divide: ['$completedJobs', '$jobCount'] },
                   100,
                 ],
               },
@@ -960,10 +965,10 @@ router.get('/contractors/by-district', authenticateToken, async (req, res) => {
             $round: [
               {
                 $add: [
-                  { $multiply: [0.5, '$normalizedRating'] },           // 50% rating weight
-                  { $multiply: [0.1667, '$normalizedJobsPosted'] },    // 16.67% jobs weight
-                  { $multiply: [0.1667, '$daysActivePercent'] },       // 16.67% days active weight
-                  { $multiply: [0.1667, '$completionRate'] },          // 16.67% completion weight
+                  { $multiply: [0.5, { $ifNull: ['$normalizedRating', 0] }] },           // 50% rating weight
+                  { $multiply: [0.1667, { $ifNull: ['$normalizedJobsPosted', 0] }] },    // 16.67% jobs weight
+                  { $multiply: [0.1667, { $ifNull: ['$daysActivePercent', 0] }] },       // 16.67% days active weight
+                  { $multiply: [0.1667, { $ifNull: ['$completionRate', 0] }] },          // 16.67% completion weight
                 ],
               },
               1,
