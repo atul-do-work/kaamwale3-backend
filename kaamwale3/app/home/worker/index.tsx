@@ -193,8 +193,6 @@ function WorkerHome() {
   const [avgCompletedRating, setAvgCompletedRating] = useState<number>(0);
   const [todayIncentiveEarnings, setTodayIncentiveEarnings] = useState<number>(0);
   const [overviewLoading, setOverviewLoading] = useState<boolean>(false);
-  const [overviewError, setOverviewError] = useState<string | null>(null);
-  const [overviewLastUpdatedAt, setOverviewLastUpdatedAt] = useState<Date | null>(null);
   const [notificationCount, setNotificationCount] = useState<number>(0);
   const [workerProfilePhoto, setWorkerProfilePhoto] = useState<string | null>(null); // ✅ Worker profile photo
 
@@ -1100,13 +1098,11 @@ function WorkerHome() {
 
     try {
       setOverviewLoading(true);
-      setOverviewError(null);
       const res = await fetch(`${API_BASE}/worker/overview-stats`, {
         headers: { Authorization: `Bearer ${token}` },
       });
 
       if (!res.ok) {
-        setOverviewError('Failed to load overview stats');
         return;
       }
 
@@ -1121,10 +1117,8 @@ function WorkerHome() {
       setJobsCompleted(Number(stats.jobsCompleted) || 0);
       setAvgCompletedRating(Number(stats.avgCompletedRating) || 0);
       setTodayIncentiveEarnings(Number(stats.activeBonuses) || 0);
-      setOverviewLastUpdatedAt(new Date());
     } catch (err) {
       console.error("Failed to calculate metrics:", err);
-      setOverviewError('Failed to load overview stats');
     } finally {
       setOverviewLoading(false);
     }
@@ -2259,8 +2253,6 @@ function WorkerHome() {
         averageRating={avgCompletedRating}
         activeBonuses={todayIncentiveEarnings}
         loading={overviewLoading}
-        errorText={overviewError}
-        lastUpdatedAt={overviewLastUpdatedAt}
         onRefresh={calculateMetrics}
       />
         </>

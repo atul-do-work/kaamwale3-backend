@@ -293,23 +293,55 @@ function createWorkersRouter({
           { acceptedWorkers: workerPhone },
         ],
       };
+      const paidStatusFilter = { $regex: /^paid$/i };
+      const paidJobCondition = {
+        $or: [
+          { paymentStatus: paidStatusFilter },
+          {
+            acceptedWorkers: {
+              $elemMatch: {
+                phone: workerPhone,
+                paymentStatus: paidStatusFilter,
+              },
+            },
+          },
+        ],
+      };
 
       const completedJobs = await Job.find({
         $and: [
           workerJobQuery,
-          { paymentStatus: { $in: ["paid"] } },
+          paidJobCondition,
           {
             $or: [
               { status: "completed" },
               { paymentTime: { $exists: true, $ne: null } },
+              {
+                acceptedWorkers: {
+                  $elemMatch: {
+                    phone: workerPhone,
+                    paymentTime: { $exists: true, $ne: null },
+                  },
+                },
+              },
             ],
           },
         ],
       })
-        .select("amount paymentTime timeSpentMinutes acceptedAt createdAt updatedAt rating")
+        .select("amount paymentTime timeSpentMinutes acceptedAt createdAt updatedAt rating acceptedWorkers")
         .lean();
 
+      const getPaidEntryForWorker = (job) => {
+        if (!Array.isArray(job?.acceptedWorkers)) return null;
+        return job.acceptedWorkers.find(
+          (w) => w?.phone === workerPhone && /^paid$/i.test(String(w?.paymentStatus || ""))
+        ) || null;
+      };
+
       const getEffectivePaidAt = (job) => {
+        const paidEntry = getPaidEntryForWorker(job);
+        const paidAtFromWorker = paidEntry?.paymentTime ? new Date(paidEntry.paymentTime) : null;
+        if (paidAtFromWorker && !Number.isNaN(paidAtFromWorker.getTime())) return paidAtFromWorker;
         const paidAt = job?.paymentTime ? new Date(job.paymentTime) : null;
         if (paidAt && !Number.isNaN(paidAt.getTime())) return paidAt;
         const updatedAt = job?.updatedAt ? new Date(job.updatedAt) : null;
@@ -366,7 +398,7 @@ function createWorkersRouter({
       }
 
       const historyCount = await Job.countDocuments({
-        $and: [workerJobQuery, { paymentStatus: { $in: ["paid"] } }],
+        $and: [workerJobQuery, paidJobCondition],
       });
 
       const wallet = await Wallet.findOne({ phone: workerPhone }).select("transactions").lean();

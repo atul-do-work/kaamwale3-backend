@@ -28,8 +28,6 @@ interface FullContainerProps {
   averageRating?: number;
   activeBonuses?: number;
   loading?: boolean;
-  errorText?: string | null;
-  lastUpdatedAt?: Date | null;
   onRefresh?: () => void;
 }
 
@@ -69,8 +67,6 @@ export default function FullContainer({
   averageRating = 0,
   activeBonuses = 0,
   loading = false,
-  errorText = null,
-  lastUpdatedAt = null,
   onRefresh,
 }: FullContainerProps) {
   const [refreshing, setRefreshing] = useState(false);
@@ -113,17 +109,7 @@ export default function FullContainer({
       {/* Welcome Section */}
       <View style={styles.welcomeSection}>
         <Text style={styles.welcomeText}>Today&apos;s Overview</Text>
-        <Text style={{ color: '#7c8aa3', fontSize: 12, marginTop: 4 }}>
-          {lastUpdatedAt ? `Last updated: ${lastUpdatedAt.toLocaleTimeString('en-IN', { hour12: true })}` : 'Last updated: --'}
-        </Text>
-        <Text style={{ color: '#94a3b8', fontSize: 11, marginTop: 2 }}>Pull down to refresh</Text>
       </View>
-
-      {errorText ? (
-        <View style={{ marginHorizontal: 4, marginBottom: 12, backgroundColor: '#FEE2E2', borderRadius: 10, padding: 10 }}>
-          <Text style={{ color: '#991B1B', fontWeight: '600' }}>{errorText}</Text>
-        </View>
-      ) : null}
 
       {loading ? (
         <View style={{ gap: 12 }}>

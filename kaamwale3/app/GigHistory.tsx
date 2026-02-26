@@ -133,6 +133,32 @@ export default function GigHistory() {
     { id: '20days', days: 20, reward: 300, icon: 'favorite', color: '#FF1493', completed: false, claimed: false, progress: 0 },
   ]);
 
+  const buildFallbackIncentiveData = (reason?: string): IncentiveProgress => ({
+    consecutiveDays: 0,
+    totalHours: 0,
+    cancellationsInWindow: 0,
+    requiredDailyHours: 8,
+    requiredDaysFor5: 5,
+    fiveDayWindow: {
+      requiredDays: 5,
+      requiredDailyHours: 8,
+      daysMetMinimumHours: 0,
+      allDaysHaveMinHours: false,
+      startDate: null,
+      endDate: null,
+      dailyStatus: [],
+      failedDates: [],
+      failureReason: reason || 'No completed paid job history found',
+    },
+    eligibleFor5Days: false,
+    eligibleFor10Days: false,
+    eligibleFor20Days: false,
+    unlockedMilestones: [],
+    claimedMilestones: [],
+    availableMilestones: [],
+    lastWorkDate: null,
+  });
+
   // ✅ Refs for cleanup (separate controllers for gigs vs incentive)
   const gigsAbortRef = useRef<AbortController | null>(null);
   const incentiveAbortRef = useRef<AbortController | null>(null);
@@ -276,7 +302,8 @@ export default function GigHistory() {
       setIncentiveError(null);
 
       if (!accessToken) {
-        setIncentiveError('Not authenticated');
+        setIncentiveData(buildFallbackIncentiveData('Not authenticated'));
+        setIncentiveError(null);
         return;
       }
 
@@ -291,7 +318,8 @@ export default function GigHistory() {
       // ✅ Handle authentication errors
       if (res.status === 401) {
         if (isMountedRef.current) {
-          setIncentiveError('Please log in to view incentives');
+          setIncentiveData(buildFallbackIncentiveData('Please log in to view incentives'));
+          setIncentiveError(null);
         }
         return;
       }
@@ -319,7 +347,8 @@ export default function GigHistory() {
       } else {
         const errData = await res.json().catch(() => ({}));
         if (isMountedRef.current) {
-          setIncentiveError(errData.message || 'Failed to load incentive data');
+          setIncentiveData(buildFallbackIncentiveData(errData.message || 'Failed to load incentive data'));
+          setIncentiveError(null);
         }
       }
     } catch (err: any) {
@@ -329,7 +358,8 @@ export default function GigHistory() {
       
       if (isMountedRef.current) {
         console.error('Error fetching incentive progress:', err);
-        setIncentiveError('Failed to load incentive data. Pull to refresh.');
+        setIncentiveData(buildFallbackIncentiveData('Failed to load incentive data'));
+        setIncentiveError(null);
       }
     } finally {
       if (isMountedRef.current) {
@@ -445,53 +475,53 @@ export default function GigHistory() {
   );
 
   const renderConditionsCard = () => {
-    if (!incentiveData) return null;
+    const safeIncentiveData: IncentiveProgress = incentiveData || buildFallbackIncentiveData(incentiveError || undefined);
 
     return (
       <View style={styles.conditionsCard}>
         <Text style={styles.conditionsTitle}>✓ {t('requirementsStatus')} - 5 Day Milestone</Text>
         <View style={styles.conditionsList}>
           {/* 5 Days Requirement */}
-          <View style={[styles.condition, { borderLeftColor: incentiveData.consecutiveDays >= 5 ? '#27AE60' : '#BDC3C7' }]}>
+          <View style={[styles.condition, { borderLeftColor: safeIncentiveData.consecutiveDays >= 5 ? '#27AE60' : '#BDC3C7' }]}>
             <MaterialIcons 
-              name={incentiveData.consecutiveDays >= 5 ? 'check-circle' : 'cancel'} 
+              name={safeIncentiveData.consecutiveDays >= 5 ? 'check-circle' : 'cancel'} 
               size={24} 
-              color={incentiveData.consecutiveDays >= 5 ? '#27AE60' : '#E74C3C'}
+              color={safeIncentiveData.consecutiveDays >= 5 ? '#27AE60' : '#E74C3C'}
             />
             <View style={styles.conditionText}>
               <Text style={styles.conditionLabel}>📅 {t('consecutiveDays')}</Text>
-              <Text style={styles.conditionValue}>{incentiveData.consecutiveDays}/5 days ({Math.round((Math.min(incentiveData.consecutiveDays / 5, 1)) * 100)}%)</Text>
+              <Text style={styles.conditionValue}>{safeIncentiveData.consecutiveDays}/5 days ({Math.round((Math.min(safeIncentiveData.consecutiveDays / 5, 1)) * 100)}%)</Text>
             </View>
           </View>
 
           {/* 8 Hours Per Day Requirement */}
-          <View style={[styles.condition, { borderLeftColor: (incentiveData.fiveDayWindow?.allDaysHaveMinHours || false) ? '#27AE60' : '#BDC3C7' }]}>
+          <View style={[styles.condition, { borderLeftColor: (safeIncentiveData.fiveDayWindow?.allDaysHaveMinHours || false) ? '#27AE60' : '#BDC3C7' }]}>
             <MaterialIcons 
-              name={(incentiveData.fiveDayWindow?.allDaysHaveMinHours || false) ? 'check-circle' : 'cancel'} 
+              name={(safeIncentiveData.fiveDayWindow?.allDaysHaveMinHours || false) ? 'check-circle' : 'cancel'} 
               size={24} 
-              color={(incentiveData.fiveDayWindow?.allDaysHaveMinHours || false) ? '#27AE60' : '#E74C3C'}
+              color={(safeIncentiveData.fiveDayWindow?.allDaysHaveMinHours || false) ? '#27AE60' : '#E74C3C'}
             />
             <View style={styles.conditionText}>
               <Text style={styles.conditionLabel}>⏰ 8 Hours Per Day</Text>
               <Text style={styles.conditionValue}>
-                {(incentiveData.fiveDayWindow?.daysMetMinimumHours || 0)}/{incentiveData.requiredDaysFor5 || 5} days met ({incentiveData.requiredDailyHours || 8}h/day)
+                {(safeIncentiveData.fiveDayWindow?.daysMetMinimumHours || 0)}/{safeIncentiveData.requiredDaysFor5 || 5} days met ({safeIncentiveData.requiredDailyHours || 8}h/day)
               </Text>
-              {!!incentiveData.fiveDayWindow?.failureReason && (
-                <Text style={[styles.conditionValue, { color: '#E74C3C' }]}>{incentiveData.fiveDayWindow.failureReason}</Text>
+              {!!safeIncentiveData.fiveDayWindow?.failureReason && (
+                <Text style={[styles.conditionValue, { color: '#E74C3C' }]}>{safeIncentiveData.fiveDayWindow.failureReason}</Text>
               )}
             </View>
           </View>
 
           {/* NO Declines Requirement */}
-          <View style={[styles.condition, { borderLeftColor: incentiveData.cancellationsInWindow === 0 ? '#27AE60' : '#BDC3C7' }]}>
+          <View style={[styles.condition, { borderLeftColor: safeIncentiveData.cancellationsInWindow === 0 ? '#27AE60' : '#BDC3C7' }]}>
             <MaterialIcons 
-              name={incentiveData.cancellationsInWindow === 0 ? 'check-circle' : 'cancel'} 
+              name={safeIncentiveData.cancellationsInWindow === 0 ? 'check-circle' : 'cancel'} 
               size={24} 
-              color={incentiveData.cancellationsInWindow === 0 ? '#27AE60' : '#E74C3C'}
+              color={safeIncentiveData.cancellationsInWindow === 0 ? '#27AE60' : '#E74C3C'}
             />
             <View style={styles.conditionText}>
               <Text style={styles.conditionLabel}>🚫 No Declines in Period</Text>
-              <Text style={styles.conditionValue}>{incentiveData.cancellationsInWindow} job declines ({incentiveData.cancellationsInWindow === 0 ? '✔ Pass' : '✗ Failed'})</Text>
+              <Text style={styles.conditionValue}>{safeIncentiveData.cancellationsInWindow} job declines ({safeIncentiveData.cancellationsInWindow === 0 ? '✔ Pass' : '✗ Failed'})</Text>
             </View>
           </View>
         </View>
