@@ -9,6 +9,8 @@ const NotificationHistory = require('../models/NotificationHistory');
 const WorkerEarnings = require('../models/WorkerEarnings');
 const ActivityLog = require('../models/ActivityLog');
 const JobEventLog = require('../models/JobEventLog');
+const { createGigHistoryEvent } = require('../services/gigHistoryService');
+const { updateGigDataOnCompletion } = require('../utils/gigsDataTracker');
 const { sendOpsAlert } = require('../utils/opsAlert');
 const { buildLogContext, info, warn, error } = require('../utils/logContext');
 
@@ -315,10 +317,24 @@ router.post('/verify-payment', authenticateToken, async (req, res) => {
     );
 
     // 🔐 STEP 9: Update job payment status (transactional)
+    const paymentTime = new Date();
+    const acceptedAtTime = job.acceptedAt ? new Date(job.acceptedAt) : null;
+    const computedTimeSpentMinutes =
+      acceptedAtTime && !Number.isNaN(acceptedAtTime.getTime())
+        ? Math.max(0, Math.round((paymentTime.getTime() - acceptedAtTime.getTime()) / 60000))
+        : Number(job.timeSpentMinutes || 0);
+    const computedHoursWorked = Math.round(((computedTimeSpentMinutes || 0) / 60) * 10) / 10;
+
     const nextJobStatus = computeFinalJobStatusForPaid(job.status);
     const updatedJobFromWebhook = await Job.findByIdAndUpdate(
       jobId,
-      { paymentStatus: 'Paid', paymentTime: new Date(), status: nextJobStatus },
+      {
+        paymentStatus: 'Paid',
+        paymentTime,
+        status: nextJobStatus,
+        timeSpentMinutes: computedTimeSpentMinutes,
+        hoursWorked: computedHoursWorked,
+      },
       { new: true, session }
     );
 
@@ -608,6 +624,39 @@ router.post('/webhook', async (req, res) => {
       }],
       { session }
     );
+
+    // Keep worker incentive/gig history in sync for webhook-only payment finalization path.
+    try {
+      if (workerPhone && updatedJobFromWebhook) {
+        await createGigHistoryEvent({
+          workerPhone,
+          workerName: updatedJobFromWebhook.acceptedWorker?.name || workerPhone,
+          jobId: updatedJobFromWebhook._id,
+          jobTitle: updatedJobFromWebhook.title,
+          contractorPhone: updatedJobFromWebhook.contractorPhone,
+          contractorName: updatedJobFromWebhook.contractorName,
+          eventType: 'job_completed',
+          status: updatedJobFromWebhook.status,
+          paymentStatus: updatedJobFromWebhook.paymentStatus,
+          hoursWorked: Number(updatedJobFromWebhook.hoursWorked || computedHoursWorked || 0),
+          timeSpentMinutes: Number(updatedJobFromWebhook.timeSpentMinutes || computedTimeSpentMinutes || 0),
+          eventTime: updatedJobFromWebhook.paymentTime || paymentTime,
+          metadata: { source: 'payment-webhook', paymentId, orderId },
+        });
+
+        await updateGigDataOnCompletion(workerPhone, {
+          _id: updatedJobFromWebhook._id,
+          title: updatedJobFromWebhook.title,
+          amount: Number(updatedJobFromWebhook.amount || actualAmount || 0),
+          workerType: updatedJobFromWebhook.workerType,
+          contractorName: updatedJobFromWebhook.contractorName,
+          hoursWorked: Number(updatedJobFromWebhook.hoursWorked || computedHoursWorked || 0),
+          timeSpentMinutes: Number(updatedJobFromWebhook.timeSpentMinutes || computedTimeSpentMinutes || 0),
+        });
+      }
+    } catch (gigErr) {
+      warn('Webhook gig completion sync failed', buildLogContext(req, { jobId, workerPhone, paymentId, error: gigErr?.message || String(gigErr) }));
+    }
 
     // Create notification
     const notification = await NotificationHistory.create(

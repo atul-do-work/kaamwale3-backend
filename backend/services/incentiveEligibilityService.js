@@ -53,7 +53,7 @@ function calculateEligibility(events) {
     }
 
     const workDays = Array.from(completedByDay.entries())
-      .filter(([, info]) => Number(info?.hours || 0) >= REQUIRED_DAILY_HOURS && Number(info?.jobs || 0) > 0)
+      .filter(([, info]) => Number(info?.jobs || 0) > 0)
       .map(([day, info]) => ({
         dateObj: new Date(`${day}T00:00:00.000Z`),
         dateStr: day,
@@ -95,7 +95,7 @@ function calculateEligibility(events) {
       return d >= streakStart && d <= latest;
     }).length;
 
-    // Build strict 5-day requirement window ending on latest qualifying day.
+    // Build strict 5-day requirement window ending on latest completed-work day.
     const fiveDayDailyStatus = [];
     for (let i = REQUIRED_DAYS_FOR_5 - 1; i >= 0; i--) {
       const dayDate = new Date(latest);
@@ -113,12 +113,15 @@ function calculateEligibility(events) {
         meetsMinimumHours,
       });
     }
+    const daysWithCompletedJob = fiveDayDailyStatus.filter((d) => d.hasCompletedJob).length;
     const daysMetMinimumHours = fiveDayDailyStatus.filter((d) => d.meetsMinimumHours).length;
     const failedDates = fiveDayDailyStatus.filter((d) => !d.meetsMinimumHours).map((d) => d.date);
     const allDaysHaveMinHours = daysMetMinimumHours === REQUIRED_DAYS_FOR_5;
 
     let failureReason = null;
-    if (!allDaysHaveMinHours) {
+    if (daysWithCompletedJob === 0) {
+      failureReason = "No completed paid-job history found";
+    } else if (!allDaysHaveMinHours) {
       failureReason = failedDates.length
         ? `Daily minimum ${REQUIRED_DAILY_HOURS}h not met on: ${failedDates.join(", ")}`
         : `Need ${REQUIRED_DAYS_FOR_5} consecutive days with at least ${REQUIRED_DAILY_HOURS} hours`;

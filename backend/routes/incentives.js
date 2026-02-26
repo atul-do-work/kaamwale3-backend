@@ -6,7 +6,47 @@ const Worker = require('../models/Worker');
 const IncentiveLedger = require('../models/IncentiveLedger');
 const Wallet = require('../models/Wallet');
 const GigHistory = require('../models/GigHistory');
+const Job = require('../models/Jobs');
 const { calculateEligibility } = require('../services/incentiveEligibilityService');
+
+async function hydrateEventsWithPaidJobs(phone, events) {
+  const baseEvents = Array.isArray(events) ? [...events] : [];
+  if (!phone) return baseEvents;
+
+  const completedEventJobIds = new Set(
+    baseEvents
+      .filter((e) => String(e?.eventType || '') === 'job_completed' && e?.jobId)
+      .map((e) => String(e.jobId))
+  );
+
+  const paidJobs = await Job.find({
+    $or: [{ acceptedBy: phone }, { 'acceptedWorkers.phone': phone }],
+    paymentStatus: { $in: ['Paid', 'paid'] },
+  })
+    .select('_id title contractorPhone contractorName status paymentStatus paymentTime hoursWorked timeSpentMinutes createdAt')
+    .lean();
+
+  for (const job of paidJobs) {
+    const jobId = String(job?._id || '');
+    if (!jobId || completedEventJobIds.has(jobId)) continue;
+
+    const timeSpentMinutes = Number(job?.timeSpentMinutes || 0);
+    const derivedHours = Number(job?.hoursWorked || (timeSpentMinutes > 0 ? timeSpentMinutes / 60 : 0));
+    baseEvents.push({
+      workerPhone: phone,
+      jobId,
+      eventType: 'job_completed',
+      eventTime: job?.paymentTime || job?.createdAt || new Date(),
+      hoursWorked: Math.round(derivedHours * 10) / 10,
+      timeSpentMinutes,
+      status: job?.status || '',
+      paymentStatus: job?.paymentStatus || 'Paid',
+      metadata: { source: 'jobs-fallback' },
+    });
+  }
+
+  return baseEvents;
+}
 
 router.get('/progress', authenticateToken, async (req, res) => {
   try {
@@ -24,7 +64,8 @@ router.get('/progress', authenticateToken, async (req, res) => {
       .sort({ eventTime: -1 })
       .limit(365)
       .lean();
-    const eligibilityData = calculateEligibility(events);
+    const hydratedEvents = await hydrateEventsWithPaidJobs(phone, events);
+    const eligibilityData = calculateEligibility(hydratedEvents);
 
     const claimedMilestones = await IncentiveLedger.find({
       phone,
@@ -91,7 +132,8 @@ router.post('/claim/:milestoneId', authenticateToken, async (req, res) => {
       .sort({ eventTime: -1 })
       .limit(365)
       .lean();
-    const eligibilityData = calculateEligibility(events);
+    const hydratedEvents = await hydrateEventsWithPaidJobs(phone, events);
+    const eligibilityData = calculateEligibility(hydratedEvents);
 
     let rewardAmount = 0;
     if (milestoneId === '5days' && eligibilityData.eligibleFor5Days) rewardAmount = 50;

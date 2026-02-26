@@ -1026,10 +1026,20 @@ function WorkerHome() {
       }
     };
 
+    const handleWalletUpdatedForStats = (data: any) => {
+      try {
+        if (!data || data.phone !== currentUserPhone) return;
+        calculateMetrics();
+      } catch (err) {
+        console.error("Error handling walletUpdated stats refresh:", err);
+      }
+    };
+
     socket.on("newJob", handleNewJob);
     socket.on("jobUpdated", handleJobUpdated);
     socket.on("jobAccepted", handleJobAccepted);
     socket.on("jobCancelled", handleJobCancelled);
+    socket.on("walletUpdated", handleWalletUpdatedForStats);
     socket.on("notificationCountUpdated", handleNotificationCountUpdate);
     socket.on("profilePhotoUpdated", handleProfilePhotoUpdate);
     socket.on("workerControlUpdated", handleWorkerControlUpdated);
@@ -1040,6 +1050,7 @@ function WorkerHome() {
       socket.off("jobUpdated", handleJobUpdated);
       socket.off("jobAccepted", handleJobAccepted);
       socket.off("jobCancelled", handleJobCancelled);
+      socket.off("walletUpdated", handleWalletUpdatedForStats);
       socket.off("notificationCountUpdated", handleNotificationCountUpdate);
       socket.off("profilePhotoUpdated", handleProfilePhotoUpdate);
       socket.off("workerControlUpdated", handleWorkerControlUpdated);
@@ -2232,6 +2243,7 @@ function WorkerHome() {
         offersClaimed={jobsCompleted}
         averageRating={avgCompletedRating}
         activeBonuses={todayIncentiveEarnings}
+        onRefresh={calculateMetrics}
       />
         </>
       )}

@@ -288,7 +288,9 @@ function createWorkersRouter({
       const workerJobQuery = {
         $or: [
           { acceptedBy: workerPhone },
+          { "acceptedWorker.phone": workerPhone },
           { "acceptedWorkers.phone": workerPhone },
+          { acceptedWorkers: workerPhone },
         ],
       };
 
@@ -304,26 +306,51 @@ function createWorkersRouter({
           },
         ],
       })
-        .select("amount paymentTime timeSpentMinutes rating")
+        .select("amount paymentTime timeSpentMinutes acceptedAt createdAt updatedAt rating")
         .lean();
 
+      const getEffectivePaidAt = (job) => {
+        const paidAt = job?.paymentTime ? new Date(job.paymentTime) : null;
+        if (paidAt && !Number.isNaN(paidAt.getTime())) return paidAt;
+        const updatedAt = job?.updatedAt ? new Date(job.updatedAt) : null;
+        if (updatedAt && !Number.isNaN(updatedAt.getTime())) return updatedAt;
+        const createdAt = job?.createdAt ? new Date(job.createdAt) : null;
+        if (createdAt && !Number.isNaN(createdAt.getTime())) return createdAt;
+        return null;
+      };
+
+      const resolveTimeSpentMinutes = (job) => {
+        const explicit = Number(job?.timeSpentMinutes || 0);
+        if (explicit > 0) return explicit;
+        const acceptedAt = job?.acceptedAt ? new Date(job.acceptedAt) : null;
+        const paidAt = getEffectivePaidAt(job);
+        if (acceptedAt && paidAt && !Number.isNaN(acceptedAt.getTime()) && !Number.isNaN(paidAt.getTime())) {
+          return Math.max(0, Math.round((paidAt.getTime() - acceptedAt.getTime()) / 60000));
+        }
+        return 0;
+      };
+
       const todayCompletedJobs = completedJobs.filter((j) => {
-        const d = j.paymentTime ? new Date(j.paymentTime) : null;
+        const d = getEffectivePaidAt(j);
         return d && d >= todayStart && d < todayEnd;
       });
       const weeklyCompletedJobs = completedJobs.filter((j) => {
-        const d = j.paymentTime ? new Date(j.paymentTime) : null;
+        const d = getEffectivePaidAt(j);
         return d && d >= weekStart && d < weekEnd;
       });
 
       const todayEarnings = todayCompletedJobs.reduce((sum, j) => sum + (Number(j.amount) || 0), 0);
-      const timeOnOrder = todayCompletedJobs.reduce((sum, j) => sum + (Number(j.timeSpentMinutes) || 0), 0);
+      const timeOnOrder = todayCompletedJobs.reduce((sum, j) => sum + resolveTimeSpentMinutes(j), 0);
       const todayJobs = todayCompletedJobs.length;
-      const totalEarnings = weeklyCompletedJobs.reduce((sum, j) => sum + (Number(j.amount) || 0), 0);
-      const jobsCompleted = weeklyCompletedJobs.length;
+      const totalEarnings = completedJobs.reduce((sum, j) => sum + (Number(j.amount) || 0), 0);
+      const jobsCompleted = completedJobs.length;
 
-      const ratings = weeklyCompletedJobs
-        .map((j) => Number(j.rating?.stars || 0))
+      const ratings = completedJobs
+        .map((j) => {
+          const nested = Number(j?.rating?.stars || 0);
+          const flat = Number(j?.rating || 0);
+          return nested > 0 ? nested : flat;
+        })
         .filter((v) => Number.isFinite(v) && v > 0);
       let avgCompletedRating = ratings.length
         ? Number((ratings.reduce((s, v) => s + v, 0) / ratings.length).toFixed(2))
@@ -339,8 +366,7 @@ function createWorkersRouter({
       }
 
       const historyCount = await Job.countDocuments({
-        ...workerJobQuery,
-        createdAt: { $gte: weekStart, $lt: weekEnd },
+        $and: [workerJobQuery, { paymentStatus: { $in: ["Paid", "paid"] } }],
       });
 
       const wallet = await Wallet.findOne({ phone: workerPhone }).select("transactions").lean();
