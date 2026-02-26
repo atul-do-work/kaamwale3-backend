@@ -2,6 +2,12 @@ const express = require("express");
 
 function createJobsReadRouter({ authenticateToken, Job, getDistanceFromLatLonInKm }) {
   const router = express.Router();
+  const setNoStore = (res) => {
+    res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+    res.set('Pragma', 'no-cache');
+    res.set('Expires', '0');
+    res.set('Surrogate-Control', 'no-store');
+  };
   const normalizeStatus = (v) => String(v || "").trim().toLowerCase();
   const normalizeJobForApi = (job) => {
     if (!job || typeof job !== "object") return job;
@@ -106,6 +112,7 @@ function createJobsReadRouter({ authenticateToken, Job, getDistanceFromLatLonInK
 
   router.get("/jobs", authenticateToken, async (req, res) => {
     try {
+      setNoStore(res);
       const userRole = req.user.role;
 
       let jobs;
@@ -128,6 +135,7 @@ function createJobsReadRouter({ authenticateToken, Job, getDistanceFromLatLonInK
 
   router.get("/jobs/my-accepted", authenticateToken, async (req, res) => {
     try {
+      setNoStore(res);
       const workerName = req.user.name;
       const workerPhone = req.user.phone;
 

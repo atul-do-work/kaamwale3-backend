@@ -34,6 +34,18 @@ const withdrawLimiter = rateLimit({
   message: { success: false, message: "Too many withdrawal attempts, please try again later." },
 });
 
+function forceFreshJson(req, res) {
+  // Prevent Express fresh-check from converting JSON responses to 304 for app clients.
+  if (req?.headers) {
+    delete req.headers["if-none-match"];
+    delete req.headers["if-modified-since"];
+  }
+  res.set("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+  res.set("Pragma", "no-cache");
+  res.set("Expires", "0");
+  res.set("Surrogate-Control", "no-store");
+}
+
 function appendAuditFields({
   type,
   amount,
@@ -160,6 +172,7 @@ async function requirePayoutAccess(req, res) {
 // GET wallet
 router.get("/", authenticateToken, async (req, res) => {
   try {
+    forceFreshJson(req, res);
     let wallet = await Wallet.findOne({ phone: req.user.phone });
     if (!wallet) {
       wallet = new Wallet({ phone: req.user.phone, balance: 0 });
@@ -184,6 +197,7 @@ router.get("/", authenticateToken, async (req, res) => {
 // GET transactions
 router.get("/transactions", authenticateToken, async (req, res) => {
   try {
+    forceFreshJson(req, res);
     let wallet = await Wallet.findOne({ phone: req.user.phone });
     if (!wallet) {
       return res.json({ success: true, transactions: [] });
@@ -213,6 +227,7 @@ router.get("/transactions", authenticateToken, async (req, res) => {
 // ✅ GET bank account details
 router.get("/bank-account", authenticateToken, async (req, res) => {
   try {
+    forceFreshJson(req, res);
     if (!(await requirePayoutAccess(req, res))) return;
     const bankAccount = await BankAccount.findOne({ phone: req.user.phone });
     
@@ -603,6 +618,7 @@ router.post("/bank-account/add", authenticateToken, async (req, res) => {
 
 router.get("/payout-method", authenticateToken, async (req, res) => {
   try {
+    forceFreshJson(req, res);
     if (!(await requirePayoutAccess(req, res))) return;
 
     let wallet = await Wallet.findOne({ phone: req.user.phone }).select("preferredPayoutMethod upiId");
@@ -936,6 +952,7 @@ router.post("/upi/add", authenticateToken, async (req, res) => {
 // GET UPI payout details
 router.get("/upi", authenticateToken, async (req, res) => {
   try {
+    forceFreshJson(req, res);
     if (!(await requirePayoutAccess(req, res))) return;
     let wallet = await Wallet.findOne({ phone: req.user.phone });
     if (!wallet) {

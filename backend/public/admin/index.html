@@ -1444,6 +1444,88 @@
                     <button class="btn-small btn-view" onclick="window.open(`${API_BASE}/admin/analytics/funnel/export.excel`, '_blank')">Export Excel</button>
                     <div id="opsFunnelOut" style="margin-top:10px;max-height:200px;overflow:auto;background:#fff;padding:10px;border-radius:8px;font-size:12px;border:1px solid #e5e7eb;"></div>
                 </div>
+
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:16px;">
+                    <div style="background:#f9fafb;padding:14px;border-radius:10px;border:1px solid #e5e7eb;">
+                        <h4>Finance Disputes + Refund</h4>
+                        <input id="opsDisputeId" class="search-box" placeholder="Dispute ID (for update)" style="width:100%;margin-bottom:8px;">
+                        <input id="opsDisputeJobId" class="search-box" placeholder="Job ID" style="width:100%;margin-bottom:8px;">
+                        <input id="opsDisputeWorkerPhone" class="search-box" placeholder="Worker phone" style="width:100%;margin-bottom:8px;">
+                        <input id="opsDisputeContractorPhone" class="search-box" placeholder="Contractor phone" style="width:100%;margin-bottom:8px;">
+                        <input id="opsDisputeIssueType" class="search-box" placeholder="Issue type (payment_dispute)" style="width:100%;margin-bottom:8px;">
+                        <input id="opsDisputeStatus" class="search-box" placeholder="Status: open/under_review/resolved/rejected" style="width:100%;margin-bottom:8px;">
+                        <input id="opsDisputeResolution" class="search-box" placeholder="Resolution notes" style="width:100%;margin-bottom:8px;">
+                        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+                            <button class="btn-small btn-view" onclick="opsListDisputes()">List Disputes</button>
+                            <button class="btn-small btn-approve" onclick="opsCreateDispute()">Create Dispute</button>
+                            <button class="btn-small btn-view" onclick="opsUpdateDispute()">Update Dispute</button>
+                            <button class="btn-small btn-reject" onclick="opsProcessRefund()">Refund</button>
+                        </div>
+                        <input id="opsRefundAmount" class="search-box" placeholder="Refund amount" style="width:100%;margin-top:8px;margin-bottom:8px;">
+                        <div id="opsFinanceOut" style="margin-top:10px;max-height:220px;overflow:auto;background:#fff;padding:10px;border-radius:8px;font-size:12px;border:1px solid #e5e7eb;"></div>
+                    </div>
+
+                    <div style="background:#f9fafb;padding:14px;border-radius:10px;border:1px solid #e5e7eb;">
+                        <h4>Report Schedules + Payout State</h4>
+                        <input id="opsReportName" class="search-box" placeholder="Report name" style="width:100%;margin-bottom:8px;">
+                        <input id="opsReportCadence" class="search-box" placeholder="Cadence (weekly)" style="width:100%;margin-bottom:8px;">
+                        <input id="opsReportRecipients" class="search-box" placeholder="Recipients (comma-separated emails)" style="width:100%;margin-bottom:8px;">
+                        <input id="opsReportFormat" class="search-box" placeholder="Format (csv/json)" style="width:100%;margin-bottom:8px;">
+                        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+                            <button class="btn-small btn-view" onclick="opsListReportSchedules()">List Schedules</button>
+                            <button class="btn-small btn-approve" onclick="opsCreateReportSchedule()">Create Schedule</button>
+                        </div>
+                        <input id="opsPayoutBatchIdState" class="search-box" placeholder="Payout batchId" style="width:100%;margin-top:8px;margin-bottom:8px;">
+                        <input id="opsPayoutNextState" class="search-box" placeholder="State: queued/pending/processing/success/completed/failed/retry" style="width:100%;margin-bottom:8px;">
+                        <button class="btn-small btn-view" onclick="opsUpdatePayoutState()">Update Payout State</button>
+                        <textarea id="opsGeojsonInput" class="search-box" placeholder='GeoJSON features array, e.g. [{"type":"Feature",...}]' style="width:100%;margin-top:8px;min-height:80px;"></textarea>
+                        <button class="btn-small btn-view" style="margin-top:8px;" onclick="opsImportGeojson()">Import District GeoJSON</button>
+                        <div id="opsReportsOut" style="margin-top:10px;max-height:220px;overflow:auto;background:#fff;padding:10px;border-radius:8px;font-size:12px;border:1px solid #e5e7eb;"></div>
+                    </div>
+                </div>
+
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:16px;">
+                    <div style="background:#f9fafb;padding:14px;border-radius:10px;border:1px solid #e5e7eb;">
+                        <h4>User Detail + Restrict</h4>
+                        <input id="opsUserPhone" class="search-box" placeholder="User phone" style="width:100%;margin-bottom:8px;">
+                        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+                            <button class="btn-small btn-view" onclick="opsLoadUserByPhone()">Load User</button>
+                            <button class="btn-small btn-reject" onclick="opsSetUserRestricted(true)">Restrict</button>
+                            <button class="btn-small btn-approve" onclick="opsSetUserRestricted(false)">Unrestrict</button>
+                        </div>
+                        <input id="opsSupportTicketId" class="search-box" placeholder="Support ticket ID" style="width:100%;margin-top:8px;margin-bottom:8px;">
+                        <input id="opsSupportTicketStatus" class="search-box" placeholder="Ticket status (open/under_review/waiting_user_response/resolved/closed)" style="width:100%;margin-bottom:8px;">
+                        <input id="opsSupportTicketNotes" class="search-box" placeholder="Ticket notes/resolution" style="width:100%;margin-bottom:8px;">
+                        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+                            <button class="btn-small btn-view" onclick="opsLoadSupportTicket()">Load Ticket</button>
+                            <button class="btn-small btn-approve" onclick="opsUpdateSupportTicketStatus()">Update Ticket Status</button>
+                        </div>
+                        <input id="opsRegisterPhone" class="search-box" placeholder="New admin/user phone" style="width:100%;margin-top:8px;margin-bottom:8px;">
+                        <input id="opsRegisterName" class="search-box" placeholder="Name" style="width:100%;margin-bottom:8px;">
+                        <input id="opsRegisterEmail" class="search-box" placeholder="Email (optional)" style="width:100%;margin-bottom:8px;">
+                        <input id="opsRegisterPassword" class="search-box" placeholder="Password (min 6 chars)" style="width:100%;margin-bottom:8px;">
+                        <input id="opsRegisterRole" class="search-box" placeholder="Role (admin/user/worker)" style="width:100%;margin-bottom:8px;">
+                        <button class="btn-small btn-view" onclick="opsRegisterUser()">Register User</button>
+                        <div id="opsUserSupportOut" style="margin-top:10px;max-height:220px;overflow:auto;background:#fff;padding:10px;border-radius:8px;font-size:12px;border:1px solid #e5e7eb;"></div>
+                    </div>
+
+                    <div style="background:#f9fafb;padding:14px;border-radius:10px;border:1px solid #e5e7eb;">
+                        <h4>Verification + Adjustment Controls</h4>
+                        <input id="opsVerificationDocId" class="search-box" placeholder="Verification doc ID" style="width:100%;margin-bottom:8px;">
+                        <input id="opsVerificationRejectReason" class="search-box" placeholder="Reject reason" style="width:100%;margin-bottom:8px;">
+                        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+                            <button class="btn-small btn-approve" onclick="opsApproveVerificationDoc()">Approve Doc</button>
+                            <button class="btn-small btn-reject" onclick="opsRejectVerificationDoc()">Reject Doc</button>
+                        </div>
+                        <input id="opsAdjustmentId" class="search-box" placeholder="Adjustment ID" style="width:100%;margin-top:8px;margin-bottom:8px;">
+                        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+                            <button class="btn-small btn-approve" onclick="opsApproveAdjustment()">Approve Adjustment</button>
+                            <button class="btn-small btn-reject" onclick="opsRejectAdjustment()">Reject Adjustment</button>
+                        </div>
+                        <button class="btn-small btn-view" style="margin-top:8px;" onclick="opsRunDebugGeoCheck()">Run Debug Checks</button>
+                        <div id="opsVerificationAdjOut" style="margin-top:10px;max-height:220px;overflow:auto;background:#fff;padding:10px;border-radius:8px;font-size:12px;border:1px solid #e5e7eb;"></div>
+                    </div>
+                </div>
             </div>
         </div>
     </div>
@@ -3596,6 +3678,208 @@
                 const data = await adminApi(`/admin/analytics/funnel${qs}`);
                 const m = data.metrics || {};
                 renderTable('opsFunnelOut', [{ key: 'metric', label: 'Metric' }, { key: 'value', label: 'Value' }], [{ metric: 'Posted', value: m.posted || 0 }, { metric: 'Accepted', value: m.accepted || 0 }, { metric: 'Present', value: m.present || 0 }, { metric: 'Paid', value: m.paid || 0 }, { metric: 'Cancelled', value: m.cancelled || 0 }, { metric: 'Total Jobs', value: m.totalJobs || 0 }]);
+            } catch (err) { alert(err.message); }
+        }
+
+        async function opsListDisputes() {
+            try {
+                const data = await adminApi('/admin/finance/disputes');
+                renderTable('opsFinanceOut', [{ key: 'id', label: 'ID' }, { key: 'jobId', label: 'Job ID' }, { key: 'workerPhone', label: 'Worker' }, { key: 'contractorPhone', label: 'Contractor' }, { key: 'issueType', label: 'Issue' }, { key: 'status', label: 'Status' }, { key: 'createdAt', label: 'Created At' }], data.rows || []);
+            } catch (err) { alert(err.message); }
+        }
+
+        async function opsCreateDispute() {
+            try {
+                const body = {
+                    jobId: (document.getElementById('opsDisputeJobId').value || '').trim(),
+                    workerPhone: (document.getElementById('opsDisputeWorkerPhone').value || '').trim(),
+                    contractorPhone: (document.getElementById('opsDisputeContractorPhone').value || '').trim(),
+                    issueType: (document.getElementById('opsDisputeIssueType').value || 'payment_dispute').trim(),
+                    reason: (document.getElementById('opsDisputeResolution').value || '').trim(),
+                };
+                const data = await adminApi('/admin/finance/disputes', { method: 'POST', body: JSON.stringify(body) });
+                renderTable('opsFinanceOut', [{ key: 'id', label: 'ID' }, { key: 'jobId', label: 'Job ID' }, { key: 'status', label: 'Status' }, { key: 'issueType', label: 'Issue' }, { key: 'reason', label: 'Reason' }], [data.dispute || {}]);
+            } catch (err) { alert(err.message); }
+        }
+
+        async function opsUpdateDispute() {
+            try {
+                const disputeId = (document.getElementById('opsDisputeId').value || '').trim();
+                const status = (document.getElementById('opsDisputeStatus').value || '').trim();
+                const resolution = (document.getElementById('opsDisputeResolution').value || '').trim();
+                if (!disputeId || !status) return alert('Enter dispute ID and status');
+                const data = await adminApi(`/admin/finance/disputes/${encodeURIComponent(disputeId)}`, { method: 'PATCH', body: JSON.stringify({ status, resolution }) });
+                renderTable('opsFinanceOut', [{ key: 'id', label: 'ID' }, { key: 'status', label: 'Status' }, { key: 'resolution', label: 'Resolution' }, { key: 'resolvedBy', label: 'Resolved By' }, { key: 'resolvedAt', label: 'Resolved At' }], [data.dispute || {}]);
+            } catch (err) { alert(err.message); }
+        }
+
+        async function opsProcessRefund() {
+            try {
+                const jobId = (document.getElementById('opsDisputeJobId').value || '').trim();
+                const contractorPhone = (document.getElementById('opsDisputeContractorPhone').value || '').trim();
+                const amount = Number((document.getElementById('opsRefundAmount').value || '').trim());
+                if (!jobId || !contractorPhone || !Number.isFinite(amount) || amount <= 0) return alert('Enter job ID, contractor phone and valid refund amount');
+                const idempotencyKey = `refund_${jobId}_${contractorPhone}_${Date.now()}`;
+                const data = await adminApi('/admin/finance/refund', {
+                    method: 'POST',
+                    headers: { 'X-Idempotency-Key': idempotencyKey },
+                    body: JSON.stringify({ jobId, contractorPhone, amount, idempotencyKey, reason: 'admin_console_refund' }),
+                });
+                renderTable('opsFinanceOut', [{ key: 'success', label: 'Success' }, { key: 'contractorPhone', label: 'Contractor' }, { key: 'amount', label: 'Amount' }, { key: 'idempotencyKey', label: 'Idempotency Key' }], [data]);
+            } catch (err) { alert(err.message); }
+        }
+
+        async function opsListReportSchedules() {
+            try {
+                const data = await adminApi('/admin/analytics/report-schedules');
+                renderTable('opsReportsOut', [{ key: 'id', label: 'ID' }, { key: 'name', label: 'Name' }, { key: 'cadence', label: 'Cadence' }, { key: 'format', label: 'Format' }, { key: 'active', label: 'Active' }, { key: 'recipients', label: 'Recipients', format: (v) => Array.isArray(v) ? v.join(', ') : '' }], data.rows || []);
+            } catch (err) { alert(err.message); }
+        }
+
+        async function opsCreateReportSchedule() {
+            try {
+                const recipients = (document.getElementById('opsReportRecipients').value || '')
+                    .split(',')
+                    .map((v) => v.trim())
+                    .filter(Boolean);
+                const body = {
+                    name: (document.getElementById('opsReportName').value || 'weekly-funnel-report').trim(),
+                    cadence: (document.getElementById('opsReportCadence').value || 'weekly').trim(),
+                    recipients,
+                    format: (document.getElementById('opsReportFormat').value || 'csv').trim(),
+                    active: true,
+                };
+                const data = await adminApi('/admin/analytics/report-schedules', { method: 'POST', body: JSON.stringify(body) });
+                renderTable('opsReportsOut', [{ key: 'id', label: 'ID' }, { key: 'name', label: 'Name' }, { key: 'cadence', label: 'Cadence' }, { key: 'format', label: 'Format' }, { key: 'active', label: 'Active' }], [data.schedule || {}]);
+            } catch (err) { alert(err.message); }
+        }
+
+        async function opsUpdatePayoutState() {
+            try {
+                const batchId = (document.getElementById('opsPayoutBatchIdState').value || '').trim();
+                const status = (document.getElementById('opsPayoutNextState').value || '').trim();
+                if (!batchId || !status) return alert('Enter batch ID and target status');
+                const data = await adminApi(`/admin/payouts/${encodeURIComponent(batchId)}/state`, { method: 'PATCH', body: JSON.stringify({ status }) });
+                renderTable('opsReportsOut', [{ key: 'batchId', label: 'Batch ID' }, { key: 'status', label: 'Status' }, { key: 'processedAt', label: 'Processed At' }, { key: 'completedAt', label: 'Completed At' }], [data.batch || {}]);
+            } catch (err) { alert(err.message); }
+        }
+
+        async function opsImportGeojson() {
+            try {
+                const raw = (document.getElementById('opsGeojsonInput').value || '').trim();
+                if (!raw) return alert('Paste features array JSON first');
+                let features = null;
+                try { features = JSON.parse(raw); } catch (_e) { return alert('Invalid JSON for features array'); }
+                if (!Array.isArray(features)) return alert('Expected JSON array of features');
+                const data = await adminApi('/admin/districts/import-geojson', { method: 'POST', body: JSON.stringify({ features }) });
+                renderTable('opsReportsOut', [{ key: 'success', label: 'Success' }, { key: 'message', label: 'Message' }, { key: 'imported', label: 'Imported', format: (_, row) => row.importedDistricts?.length || 0 }, { key: 'errors', label: 'Errors', format: (_, row) => row.errors?.length || 0 }], [data]);
+            } catch (err) { alert(err.message); }
+        }
+
+        async function opsLoadUserByPhone() {
+            try {
+                const phone = (document.getElementById('opsUserPhone').value || '').trim();
+                if (!phone) return alert('Enter user phone');
+                const data = await adminApi(`/admin/users/${encodeURIComponent(phone)}`);
+                renderTable('opsUserSupportOut', [{ key: 'phone', label: 'Phone' }, { key: 'name', label: 'Name' }, { key: 'role', label: 'Role' }, { key: 'isRestricted', label: 'Restricted' }, { key: 'city', label: 'City' }, { key: 'createdAt', label: 'Created At' }], [data.user || {}]);
+            } catch (err) { alert(err.message); }
+        }
+
+        async function opsSetUserRestricted(isRestricted) {
+            try {
+                const phone = (document.getElementById('opsUserPhone').value || '').trim();
+                if (!phone) return alert('Enter user phone');
+                const data = await adminApi(`/admin/users/${encodeURIComponent(phone)}/restrict`, { method: 'POST', body: JSON.stringify({ isRestricted: !!isRestricted }) });
+                renderTable('opsUserSupportOut', [{ key: 'success', label: 'Success' }, { key: 'message', label: 'Message' }], [data]);
+            } catch (err) { alert(err.message); }
+        }
+
+        async function opsLoadSupportTicket() {
+            try {
+                const ticketId = (document.getElementById('opsSupportTicketId').value || '').trim();
+                if (!ticketId) return alert('Enter support ticket ID');
+                const data = await adminApi(`/admin/support-tickets/${encodeURIComponent(ticketId)}`);
+                renderTable('opsUserSupportOut', [{ key: 'ticketId', label: 'Ticket ID' }, { key: 'reporterPhone', label: 'Phone' }, { key: 'type', label: 'Type' }, { key: 'subject', label: 'Subject' }, { key: 'status', label: 'Status' }, { key: 'createdAt', label: 'Created At' }], [data.ticket || {}]);
+            } catch (err) { alert(err.message); }
+        }
+
+        async function opsUpdateSupportTicketStatus() {
+            try {
+                const ticketId = (document.getElementById('opsSupportTicketId').value || '').trim();
+                const status = (document.getElementById('opsSupportTicketStatus').value || '').trim();
+                const notes = (document.getElementById('opsSupportTicketNotes').value || '').trim();
+                if (!ticketId || !status) return alert('Enter ticket ID and status');
+                const data = await adminApi(`/admin/support-tickets/${encodeURIComponent(ticketId)}/status`, { method: 'PATCH', body: JSON.stringify({ status, resolutionNotes: notes }) });
+                renderTable('opsUserSupportOut', [{ key: 'success', label: 'Success' }, { key: 'message', label: 'Message' }, { key: 'status', label: 'Status', format: (_, row) => row.ticket?.status || '-' }], [data]);
+            } catch (err) { alert(err.message); }
+        }
+
+        async function opsRegisterUser() {
+            try {
+                const body = {
+                    phone: (document.getElementById('opsRegisterPhone').value || '').trim(),
+                    name: (document.getElementById('opsRegisterName').value || '').trim(),
+                    email: (document.getElementById('opsRegisterEmail').value || '').trim(),
+                    password: (document.getElementById('opsRegisterPassword').value || '').trim(),
+                    role: (document.getElementById('opsRegisterRole').value || 'admin').trim(),
+                };
+                if (!body.phone || !body.name || !body.password || !body.role) return alert('Phone, name, password and role are required');
+                const data = await adminApi('/admin/register', { method: 'POST', body: JSON.stringify(body) });
+                renderTable('opsUserSupportOut', [{ key: 'success', label: 'Success' }, { key: 'message', label: 'Message' }, { key: 'phone', label: 'Phone', format: (_, row) => row.user?.phone || '' }, { key: 'name', label: 'Name', format: (_, row) => row.user?.name || '' }, { key: 'role', label: 'Role', format: (_, row) => row.user?.role || '' }], [data]);
+            } catch (err) { alert(err.message); }
+        }
+
+        async function opsApproveVerificationDoc() {
+            try {
+                const docId = (document.getElementById('opsVerificationDocId').value || '').trim();
+                if (!docId) return alert('Enter verification doc ID');
+                const data = await adminApi(`/admin/verifications/${encodeURIComponent(docId)}/approve`, { method: 'POST', body: JSON.stringify({}) });
+                renderTable('opsVerificationAdjOut', [{ key: 'success', label: 'Success' }, { key: 'message', label: 'Message' }], [data]);
+            } catch (err) { alert(err.message); }
+        }
+
+        async function opsRejectVerificationDoc() {
+            try {
+                const docId = (document.getElementById('opsVerificationDocId').value || '').trim();
+                if (!docId) return alert('Enter verification doc ID');
+                const reason = (document.getElementById('opsVerificationRejectReason').value || 'Rejected by admin').trim();
+                const data = await adminApi(`/admin/verifications/${encodeURIComponent(docId)}/reject`, { method: 'POST', body: JSON.stringify({ reason }) });
+                renderTable('opsVerificationAdjOut', [{ key: 'success', label: 'Success' }, { key: 'message', label: 'Message' }], [data]);
+            } catch (err) { alert(err.message); }
+        }
+
+        async function opsApproveAdjustment() {
+            try {
+                const id = (document.getElementById('opsAdjustmentId').value || '').trim();
+                if (!id) return alert('Enter adjustment ID');
+                const data = await adminApi(`/admin/wallet-adjustments/${encodeURIComponent(id)}/approve`, { method: 'POST', body: JSON.stringify({}) });
+                renderTable('opsVerificationAdjOut', [{ key: 'success', label: 'Success' }, { key: 'message', label: 'Message' }], [data]);
+            } catch (err) { alert(err.message); }
+        }
+
+        async function opsRejectAdjustment() {
+            try {
+                const id = (document.getElementById('opsAdjustmentId').value || '').trim();
+                if (!id) return alert('Enter adjustment ID');
+                const data = await adminApi(`/admin/wallet-adjustments/${encodeURIComponent(id)}/reject`, { method: 'POST', body: JSON.stringify({}) });
+                renderTable('opsVerificationAdjOut', [{ key: 'success', label: 'Success' }, { key: 'message', label: 'Message' }], [data]);
+            } catch (err) { alert(err.message); }
+        }
+
+        async function opsRunDebugGeoCheck() {
+            try {
+                const checks = await Promise.all([
+                    fetch(`${API_BASE}/admin/debug/check-point`).then((r) => r.json()).catch(() => ({ success: false, message: 'check-point failed' })),
+                    fetch(`${API_BASE}/admin/debug/geospatial/28.6139/77.2090`).then((r) => r.json()).catch(() => ({ success: false, message: 'geospatial failed' })),
+                ]);
+                renderTable(
+                    'opsVerificationAdjOut',
+                    [{ key: 'endpoint', label: 'Endpoint' }, { key: 'success', label: 'Success' }, { key: 'message', label: 'Message' }],
+                    [
+                        { endpoint: '/admin/debug/check-point', success: checks[0].success, message: checks[0].message || 'ok' },
+                        { endpoint: '/admin/debug/geospatial/:lat/:lon', success: checks[1].success, message: checks[1].message || 'ok' },
+                    ]
+                );
             } catch (err) { alert(err.message); }
         }
 

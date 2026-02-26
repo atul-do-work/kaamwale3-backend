@@ -50,6 +50,24 @@ async function hydrateEventsWithPaidJobs(phone, events) {
 
 async function persistEligibilityAuditSnapshot(worker, eligibilityData) {
   if (!worker || !eligibilityData) return;
+  const toAllowedLower = (value, allowed, fallback) => {
+    const normalized = String(value || '').trim().toLowerCase();
+    return allowed.has(normalized) ? normalized : fallback;
+  };
+
+  // Backward-compat migration in-place: old records may contain "Pending"/"Paid".
+  if (Array.isArray(worker.recentGigs) && worker.recentGigs.length > 0) {
+    for (const gig of worker.recentGigs) {
+      if (!gig) continue;
+      if (gig.paymentStatus !== undefined && gig.paymentStatus !== null) {
+        gig.paymentStatus = toAllowedLower(gig.paymentStatus, new Set(['paid', 'pending', 'failed']), 'pending');
+      }
+      if (gig.status !== undefined && gig.status !== null) {
+        gig.status = toAllowedLower(gig.status, new Set(['accepted', 'completed', 'cancelled', 'pending']), 'pending');
+      }
+    }
+  }
+
   const rows = Array.isArray(eligibilityData.dailyQualificationTrail)
     ? eligibilityData.dailyQualificationTrail.slice(0, 35)
     : [];
@@ -68,7 +86,7 @@ async function persistEligibilityAuditSnapshot(worker, eligibilityData) {
     snapshotAt: new Date(),
   }));
   worker.gigsData.lastUpdated = new Date();
-  await worker.save();
+  await worker.save({ validateModifiedOnly: true });
 }
 
 router.get('/progress', authenticateToken, async (req, res) => {
