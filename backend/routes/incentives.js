@@ -9,9 +9,37 @@ const GigHistory = require('../models/GigHistory');
 const Job = require('../models/Jobs');
 const { calculateEligibility } = require('../services/incentiveEligibilityService');
 
+const normalizePhoneDigits = (value) => String(value || '').replace(/\D/g, '').slice(-10);
+const setNoStore = (req, res) => {
+  if (req?.headers) {
+    delete req.headers['if-none-match'];
+    delete req.headers['if-modified-since'];
+  }
+  res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+  res.set('Pragma', 'no-cache');
+  res.set('Expires', '0');
+  res.set('Surrogate-Control', 'no-store');
+};
+const buildPhoneOr = (field, phone) => {
+  const raw = String(phone || '').trim();
+  const digits = normalizePhoneDigits(raw);
+  const variants = Array.from(new Set([raw, digits].filter(Boolean)));
+  return [
+    { [field]: { $in: variants } },
+    ...(digits ? [{ [field]: { $regex: `${digits}$` } }] : []),
+  ];
+};
+
 async function hydrateEventsWithPaidJobs(phone, events) {
   const baseEvents = Array.isArray(events) ? [...events] : [];
   if (!phone) return baseEvents;
+  const phoneDigits = normalizePhoneDigits(phone);
+  const samePhone = (value) => {
+    const raw = String(value || '').trim();
+    if (!raw) return false;
+    const rawDigits = normalizePhoneDigits(raw);
+    return (!!phoneDigits && rawDigits === phoneDigits) || raw === String(phone || '').trim();
+  };
 
   const completedEventJobIds = new Set(
     baseEvents
@@ -20,15 +48,30 @@ async function hydrateEventsWithPaidJobs(phone, events) {
   );
 
   const paidJobs = await Job.find({
-    $or: [{ acceptedBy: phone }, { 'acceptedWorkers.phone': phone }],
-    paymentStatus: { $in: ['paid'] },
+    $or: [
+      ...buildPhoneOr('acceptedBy', phone),
+      ...buildPhoneOr('acceptedWorker.phone', phone),
+      ...buildPhoneOr('acceptedWorkers.phone', phone),
+      ...buildPhoneOr('acceptedWorkers', phone),
+    ],
   })
-    .select('_id title contractorPhone contractorName status paymentStatus paymentTime hoursWorked timeSpentMinutes createdAt')
+    .select('_id title contractorPhone contractorName status paymentStatus paymentTime hoursWorked timeSpentMinutes createdAt acceptedBy acceptedWorker acceptedWorkers')
     .lean();
 
   for (const job of paidJobs) {
     const jobId = String(job?._id || '');
     if (!jobId || completedEventJobIds.has(jobId)) continue;
+
+    const paidWorkerEntry = Array.isArray(job?.acceptedWorkers)
+      ? job.acceptedWorkers.find((w) =>
+          samePhone(w?.phone || w?.workerPhone) &&
+          String(w?.paymentStatus || '').toLowerCase() === 'paid'
+        )
+      : null;
+    const isSingleWorkerPaid =
+      samePhone(job?.acceptedBy || job?.acceptedWorker?.phone) &&
+      String(job?.paymentStatus || '').toLowerCase() === 'paid';
+    if (!paidWorkerEntry && !isSingleWorkerPaid) continue;
 
     const timeSpentMinutes = Number(job?.timeSpentMinutes || 0);
     const derivedHours = Number(job?.hoursWorked || (timeSpentMinutes > 0 ? timeSpentMinutes / 60 : 0));
@@ -36,11 +79,11 @@ async function hydrateEventsWithPaidJobs(phone, events) {
       workerPhone: phone,
       jobId,
       eventType: 'job_completed',
-      eventTime: job?.paymentTime || job?.createdAt || new Date(),
+      eventTime: paidWorkerEntry?.paymentTime || job?.paymentTime || job?.createdAt || new Date(),
       hoursWorked: Math.round(derivedHours * 10) / 10,
       timeSpentMinutes,
       status: job?.status || '',
-      paymentStatus: job?.paymentStatus || 'paid',
+      paymentStatus: 'paid',
       metadata: { source: 'jobs-fallback' },
     });
   }
@@ -91,17 +134,18 @@ async function persistEligibilityAuditSnapshot(worker, eligibilityData) {
 
 router.get('/progress', authenticateToken, async (req, res) => {
   try {
+    setNoStore(req, res);
     const phone = req.user?.phone;
     if (!phone) {
       return res.status(401).json({ success: false, message: 'Not authenticated' });
     }
 
-    const worker = await Worker.findOne({ phone });
+    const worker = await Worker.findOne({ $or: buildPhoneOr('phone', phone) });
     if (!worker) {
       return res.status(404).json({ success: false, message: 'Worker not found' });
     }
 
-    const events = await GigHistory.find({ workerPhone: phone })
+    const events = await GigHistory.find({ $or: buildPhoneOr('workerPhone', phone) })
       .sort({ eventTime: -1 })
       .limit(365)
       .lean();
@@ -166,12 +210,12 @@ router.post('/claim/:milestoneId', authenticateToken, async (req, res) => {
       return res.status(400).json({ success: false, message: 'Invalid milestone ID' });
     }
 
-    const worker = await Worker.findOne({ phone });
+    const worker = await Worker.findOne({ $or: buildPhoneOr('phone', phone) });
     if (!worker) {
       return res.status(404).json({ success: false, message: 'Worker not found' });
     }
 
-    const events = await GigHistory.find({ workerPhone: phone })
+    const events = await GigHistory.find({ $or: buildPhoneOr('workerPhone', phone) })
       .sort({ eventTime: -1 })
       .limit(365)
       .lean();

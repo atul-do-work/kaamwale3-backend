@@ -16,6 +16,16 @@ function createWorkersRouter({
   sendNotificationToUserPhone,
 }) {
   const router = express.Router();
+  const setNoStore = (req, res) => {
+    if (req?.headers) {
+      delete req.headers["if-none-match"];
+      delete req.headers["if-modified-since"];
+    }
+    res.set("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+    res.set("Pragma", "no-cache");
+    res.set("Expires", "0");
+    res.set("Surrogate-Control", "no-store");
+  };
 
   router.get("/workers/nearby", authenticateToken, async (req, res) => {
     try {
@@ -228,13 +238,27 @@ function createWorkersRouter({
 
   router.get("/worker/incentive-data", authenticateToken, async (req, res) => {
     try {
+      setNoStore(req, res);
       const workerPhone = req.user.phone;
-      const worker = await WorkerModel.findOne({ phone: workerPhone });
+      const normalizePhoneDigits = (value) => String(value || "").replace(/\D/g, "").slice(-10);
+      const workerDigits = normalizePhoneDigits(workerPhone);
+      const workerPhoneOr = {
+        $or: [
+          { phone: { $in: Array.from(new Set([String(workerPhone || "").trim(), workerDigits].filter(Boolean))) } },
+          ...(workerDigits ? [{ phone: { $regex: `${workerDigits}$` } }] : []),
+        ],
+      };
+      const worker = await WorkerModel.findOne(workerPhoneOr);
       if (!worker) {
         return res.status(404).json({ success: false, message: "Worker not found" });
       }
 
-      const events = await GigHistory.find({ workerPhone })
+      const events = await GigHistory.find({
+        $or: [
+          { workerPhone: { $in: Array.from(new Set([String(workerPhone || "").trim(), workerDigits].filter(Boolean))) } },
+          ...(workerDigits ? [{ workerPhone: { $regex: `${workerDigits}$` } }] : []),
+        ],
+      })
         .sort({ eventTime: -1 })
         .limit(365)
         .lean();
@@ -266,10 +290,21 @@ function createWorkersRouter({
 
   router.get("/worker/overview-stats", authenticateToken, async (req, res) => {
     try {
+      setNoStore(req, res);
       const workerPhone = req.user?.phone;
       if (!workerPhone) {
         return res.status(401).json({ success: false, message: "Not authenticated" });
       }
+      const normalizePhoneDigits = (value) => String(value || "").replace(/\D/g, "").slice(-10);
+      const workerDigits = normalizePhoneDigits(workerPhone);
+      const workerVariants = Array.from(new Set([String(workerPhone || "").trim(), workerDigits].filter(Boolean)));
+      const sameWorkerPhone = (value) => {
+        const raw = String(value || "").trim();
+        if (!raw) return false;
+        if (workerVariants.includes(raw)) return true;
+        const digits = normalizePhoneDigits(raw);
+        return !!digits && !!workerDigits && digits === workerDigits;
+      };
 
       const now = new Date();
       const todayStart = new Date(now);
@@ -287,48 +322,35 @@ function createWorkersRouter({
 
       const workerJobQuery = {
         $or: [
-          { acceptedBy: workerPhone },
-          { "acceptedWorker.phone": workerPhone },
-          { "acceptedWorkers.phone": workerPhone },
-          { acceptedWorkers: workerPhone },
-        ],
-      };
-      const paidStatusFilter = { $regex: /^paid$/i };
-      const paidJobCondition = {
-        $or: [
-          { paymentStatus: paidStatusFilter },
-          {
-            acceptedWorkers: {
-              $elemMatch: {
-                phone: workerPhone,
-                paymentStatus: paidStatusFilter,
-              },
-            },
-          },
+          { acceptedBy: { $in: workerVariants } },
+          { "acceptedWorker.phone": { $in: workerVariants } },
+          { "acceptedWorkers.phone": { $in: workerVariants } },
+          { acceptedWorkers: { $in: workerVariants } },
+          ...(workerDigits
+            ? [
+                { acceptedBy: { $regex: `${workerDigits}$` } },
+                { "acceptedWorker.phone": { $regex: `${workerDigits}$` } },
+                { "acceptedWorkers.phone": { $regex: `${workerDigits}$` } },
+                { acceptedWorkers: { $regex: `${workerDigits}$` } },
+              ]
+            : []),
         ],
       };
 
-      const completedJobs = await Job.find({
+      const paidStatusFilter = { $regex: /^paid$/i };
+      const candidateCompletedJobs = await Job.find({
         $and: [
           workerJobQuery,
-          paidJobCondition,
           {
             $or: [
               { status: "completed" },
               { paymentTime: { $exists: true, $ne: null } },
-              {
-                acceptedWorkers: {
-                  $elemMatch: {
-                    phone: workerPhone,
-                    paymentTime: { $exists: true, $ne: null },
-                  },
-                },
-              },
+              { "acceptedWorkers.paymentTime": { $exists: true, $ne: null } },
             ],
           },
         ],
       })
-        .select("amount paymentTime timeSpentMinutes acceptedAt createdAt updatedAt rating acceptedWorkers")
+        .select("amount status paymentStatus paymentTime timeSpentMinutes acceptedAt createdAt updatedAt rating acceptedBy acceptedWorker acceptedWorkers")
         .lean();
 
       const operationalJobs = await Job.find({
@@ -343,9 +365,20 @@ function createWorkersRouter({
       const getPaidEntryForWorker = (job) => {
         if (!Array.isArray(job?.acceptedWorkers)) return null;
         return job.acceptedWorkers.find(
-          (w) => w?.phone === workerPhone && /^paid$/i.test(String(w?.paymentStatus || ""))
+          (w) =>
+            sameWorkerPhone(w?.phone || w?.workerPhone) &&
+            /^paid$/i.test(String(w?.paymentStatus || ""))
         ) || null;
       };
+
+      const isPaidForWorker = (job) => {
+        const paidEntry = getPaidEntryForWorker(job);
+        if (paidEntry) return true;
+        const isSingleWorkerMatch = sameWorkerPhone(job?.acceptedBy || job?.acceptedWorker?.phone);
+        return isSingleWorkerMatch && /^paid$/i.test(String(job?.paymentStatus || ""));
+      };
+
+      const completedJobs = candidateCompletedJobs.filter((j) => isPaidForWorker(j));
 
       const getEffectivePaidAt = (job) => {
         const paidEntry = getPaidEntryForWorker(job);
@@ -362,7 +395,7 @@ function createWorkersRouter({
 
       const getOperationalAnchorTime = (job) => {
         const acceptedEntry = Array.isArray(job?.acceptedWorkers)
-          ? job.acceptedWorkers.find((w) => w?.phone === workerPhone)
+          ? job.acceptedWorkers.find((w) => sameWorkerPhone(w?.phone || w?.workerPhone))
           : null;
         const acceptedAtFromWorker = acceptedEntry?.acceptedAt ? new Date(acceptedEntry.acceptedAt) : null;
         if (acceptedAtFromWorker && !Number.isNaN(acceptedAtFromWorker.getTime())) return acceptedAtFromWorker;

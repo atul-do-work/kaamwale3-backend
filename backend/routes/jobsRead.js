@@ -9,6 +9,16 @@ function createJobsReadRouter({ authenticateToken, Job, getDistanceFromLatLonInK
     res.set('Surrogate-Control', 'no-store');
   };
   const normalizeStatus = (v) => String(v || "").trim().toLowerCase();
+  const normalizePhoneDigits = (v) => String(v || "").replace(/\D/g, "").slice(-10);
+  const buildPhoneVariants = (phone) => {
+    const raw = String(phone || "").trim();
+    const digits = normalizePhoneDigits(raw);
+    return {
+      raw,
+      digits,
+      variants: Array.from(new Set([raw, digits].filter(Boolean))),
+    };
+  };
   const normalizeJobForApi = (job) => {
     if (!job || typeof job !== "object") return job;
     const copy = { ...job };
@@ -144,6 +154,7 @@ function createJobsReadRouter({ authenticateToken, Job, getDistanceFromLatLonInK
       setNoStore(res);
       const workerName = req.user.name;
       const workerPhone = req.user.phone;
+      const { digits: workerDigits, variants: workerVariants } = buildPhoneVariants(workerPhone);
 
       console.log(`\n[/jobs/my-accepted] Request from ${workerName} (${workerPhone})`);
 
@@ -156,8 +167,18 @@ function createJobsReadRouter({ authenticateToken, Job, getDistanceFromLatLonInK
       // Keep cancelled/expired too so history screens can show full lifecycle.
       const myAcceptedFilter = {
         $or: [
-          { acceptedBy: workerPhone },
-          { "acceptedWorkers.phone": workerPhone },
+          { acceptedBy: { $in: workerVariants } },
+          { "acceptedWorker.phone": { $in: workerVariants } },
+          { "acceptedWorkers.phone": { $in: workerVariants } },
+          { acceptedWorkers: { $in: workerVariants } },
+          ...(workerDigits
+            ? [
+                { acceptedBy: { $regex: `${workerDigits}$` } },
+                { "acceptedWorker.phone": { $regex: `${workerDigits}$` } },
+                { "acceptedWorkers.phone": { $regex: `${workerDigits}$` } },
+                { acceptedWorkers: { $regex: `${workerDigits}$` } },
+              ]
+            : []),
         ],
       };
       const totalCount = await Job.countDocuments(myAcceptedFilter);
