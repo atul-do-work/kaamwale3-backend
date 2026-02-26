@@ -325,13 +325,11 @@ function createWorkersRouter({
           { acceptedBy: { $in: workerVariants } },
           { "acceptedWorker.phone": { $in: workerVariants } },
           { "acceptedWorkers.phone": { $in: workerVariants } },
-          { acceptedWorkers: { $in: workerVariants } },
           ...(workerDigits
             ? [
                 { acceptedBy: { $regex: `${workerDigits}$` } },
                 { "acceptedWorker.phone": { $regex: `${workerDigits}$` } },
                 { "acceptedWorkers.phone": { $regex: `${workerDigits}$` } },
-                { acceptedWorkers: { $regex: `${workerDigits}$` } },
               ]
             : []),
         ],

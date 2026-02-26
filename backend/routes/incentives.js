@@ -52,7 +52,6 @@ async function hydrateEventsWithPaidJobs(phone, events) {
       ...buildPhoneOr('acceptedBy', phone),
       ...buildPhoneOr('acceptedWorker.phone', phone),
       ...buildPhoneOr('acceptedWorkers.phone', phone),
-      ...buildPhoneOr('acceptedWorkers', phone),
     ],
   })
     .select('_id title contractorPhone contractorName status paymentStatus paymentTime hoursWorked timeSpentMinutes createdAt acceptedBy acceptedWorker acceptedWorkers')
