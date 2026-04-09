@@ -1,4 +1,4 @@
-function startBackgroundSchedulers({
+  function startBackgroundSchedulers({
   Job,
   Wallet,
   User,
@@ -15,40 +15,6 @@ function startBackgroundSchedulers({
 }) {
   const { cancelDispatchState } = require("../services/dispatchStateService");
   const { sendOpsAlert } = require("../utils/opsAlert");
-  const startJobOfferCleanupScheduler = () => {
-    setInterval(async () => {
-      try {
-        const now = new Date();
-
-        const expiredJobs = await Job.find({
-          offerExpiresAt: { $lt: now },
-          status: "pending",
-        }).select("_id");
-
-        if (expiredJobs.length === 0) return;
-
-        console.log(`Job Offer Cleanup: Found ${expiredJobs.length} expired offers`);
-
-        for (const job of expiredJobs) {
-          const jobId = job._id.toString();
-          if (pendingJobTimeouts.has(jobId)) {
-            clearTimeout(pendingJobTimeouts.get(jobId));
-            pendingJobTimeouts.delete(jobId);
-            console.log(`  Cleared timeout for job ${jobId}`);
-          }
-          if (pendingJobExpirations.has(jobId)) {
-            clearTimeout(pendingJobExpirations.get(jobId));
-            pendingJobExpirations.delete(jobId);
-          }
-          await cancelDispatchState({ jobId, reason: "cleanup_scheduler" });
-        }
-
-        console.log(`Job offer cleanup completed. Memory map size: ${pendingJobTimeouts.size}`);
-      } catch (err) {
-        console.error("Error in job offer cleanup scheduler:", err);
-      }
-    }, 5 * 60 * 1000);
-  };
 
   const startAvailabilityDriftGuard = () => {
     setInterval(async () => {
@@ -233,16 +199,52 @@ function startBackgroundSchedulers({
   };
 
   setTimeout(() => {
-    startLeaderboardScheduler();
-    startJobOfferCleanupScheduler();
-    startWalletReconciliationScheduler();
-    startJobReconciliationScheduler();
-    startPremiumReconciliationScheduler();
-    startWeeklyWalletSettlementScheduler({ io });
-    startCancellationReconciliationScheduler();
-    startAvailabilityDriftGuard();
-    startPaidJobFinalizationGuard();
-    startOpsHealthAlertScheduler();
+    try {
+      console.log("🚀 Starting background schedulers...");
+      
+      if (typeof startLeaderboardScheduler === "function") {
+        startLeaderboardScheduler();
+        console.log("✅ Leaderboard scheduler started");
+      }
+      
+      if (typeof startWalletReconciliationScheduler === "function") {
+        startWalletReconciliationScheduler();
+        console.log("✅ Wallet reconciliation scheduler started");
+      }
+      
+      if (typeof startJobReconciliationScheduler === "function") {
+        startJobReconciliationScheduler();
+        console.log("✅ Job reconciliation scheduler started");
+      }
+      
+      if (typeof startPremiumReconciliationScheduler === "function") {
+        startPremiumReconciliationScheduler();
+        console.log("✅ Premium reconciliation scheduler started");
+      }
+      
+      if (typeof startWeeklyWalletSettlementScheduler === "function") {
+        startWeeklyWalletSettlementScheduler({ io });
+        console.log("✅ Weekly wallet settlement scheduler started");
+      }
+      
+      if (typeof startCancellationReconciliationScheduler === "function") {
+        startCancellationReconciliationScheduler();
+        console.log("✅ Cancellation reconciliation scheduler started");
+      }
+      
+      startAvailabilityDriftGuard();
+      console.log("✅ Availability drift guard started");
+      
+      startPaidJobFinalizationGuard();
+      console.log("✅ Paid job finalization guard started");
+      
+      startOpsHealthAlertScheduler();
+      console.log("✅ Ops health alert scheduler started");
+      
+      console.log("✅ All background schedulers initialized successfully!");
+    } catch (err) {
+      console.error("❌ Fatal error starting schedulers:", err);
+    }
   }, 2000);
 }
 

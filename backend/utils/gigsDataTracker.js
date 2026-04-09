@@ -196,21 +196,28 @@ async function updateIncentiveEligibility(worker) {
     worker.gigsData.eligibleFor20Days = eligibleFor20;
 
     // Track when milestones were unlocked
+    // Bug #6 Fix: Store milestone as object with unlock date (not boolean)
     if (eligibleFor5 && !worker.gigsData.milestonesUnlocked.fiveDaysMilestone) {
-      worker.gigsData.milestonesUnlocked.fiveDaysMilestone = true;
-      worker.gigsData.milestonesUnlocked.fiveDaysMilestone.unlockedDate = new Date();
+      worker.gigsData.milestonesUnlocked.fiveDaysMilestone = {
+        unlocked: true,
+        unlockedDate: new Date()
+      };
       console.log(`✅ 5-day milestone unlocked for ${worker.phone}`);
     }
 
     if (eligibleFor10 && !worker.gigsData.milestonesUnlocked.tenDaysMilestone) {
-      worker.gigsData.milestonesUnlocked.tenDaysMilestone = true;
-      worker.gigsData.milestonesUnlocked.tenDaysMilestone.unlockedDate = new Date();
+      worker.gigsData.milestonesUnlocked.tenDaysMilestone = {
+        unlocked: true,
+        unlockedDate: new Date()
+      };
       console.log(`✅ 10-day milestone unlocked for ${worker.phone}`);
     }
 
     if (eligibleFor20 && !worker.gigsData.milestonesUnlocked.twentyDaysMilestone) {
-      worker.gigsData.milestonesUnlocked.twentyDaysMilestone = true;
-      worker.gigsData.milestonesUnlocked.twentyDaysMilestone.unlockedDate = new Date();
+      worker.gigsData.milestonesUnlocked.twentyDaysMilestone = {
+        unlocked: true,
+        unlockedDate: new Date()
+      };
       console.log(`✅ 20-day milestone unlocked for ${worker.phone}`);
     }
   } catch (err) {

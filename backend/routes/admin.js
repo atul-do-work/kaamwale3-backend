@@ -133,12 +133,40 @@ const buildWorkerGigSummary = (jobs, phone) => {
         return j.acceptedBy === phone || inBulk;
     });
 
-    const completed = workerJobs.filter((j) => String(j.paymentStatus || '').toLowerCase() === 'paid').length;
+    // Bug #3 Fix: Check per-worker payment status in bulk jobs
+    const completed = workerJobs.filter((j) => {
+        if (j.acceptedBy === phone && !Array.isArray(j.acceptedWorkers)) {
+            return String(j.paymentStatus || '').toLowerCase() === 'paid';
+        }
+        if (Array.isArray(j.acceptedWorkers)) {
+            return j.acceptedWorkers.some(w => w.phone === phone && String(w.paymentStatus || '').toLowerCase() === 'paid');
+        }
+        return false;
+    }).length;
     const cancelled = workerJobs.filter((j) => j.status === 'cancelled' || j.isCancelled === true).length;
-    const pending = workerJobs.filter((j) => String(j.paymentStatus || '').toLowerCase() !== 'paid' && j.status !== 'cancelled').length;
-    const earnings = workerJobs
-        .filter((j) => String(j.paymentStatus || '').toLowerCase() === 'paid')
-        .reduce((sum, j) => sum + (Number(j.amount) || 0), 0);
+    const pending = workerJobs.filter((j) => {
+        if (j.acceptedBy === phone && !Array.isArray(j.acceptedWorkers)) {
+            return String(j.paymentStatus || '').toLowerCase() !== 'paid' && j.status !== 'cancelled';
+        }
+        if (Array.isArray(j.acceptedWorkers)) {
+            return j.acceptedWorkers.some(w => w.phone === phone && String(w.paymentStatus || '').toLowerCase() !== 'paid' && j.status !== 'cancelled');
+        }
+        return false;
+    }).length;
+    const earnings = workerJobs.reduce((sum, j) => {
+        if (j.acceptedBy === phone && !Array.isArray(j.acceptedWorkers)) {
+            if (String(j.paymentStatus || '').toLowerCase() === 'paid') {
+                return sum + (Number(j.amount) || 0);
+            }
+        }
+        if (Array.isArray(j.acceptedWorkers)) {
+            const workerPaid = j.acceptedWorkers.some(w => w.phone === phone && String(w.paymentStatus || '').toLowerCase() === 'paid');
+            if (workerPaid) {
+                return sum + (Number(j.amount) || 0);
+            }
+        }
+        return sum;
+    }, 0);
 
     return {
         totalJobs: workerJobs.length,
@@ -314,7 +342,7 @@ router.get('/dashboard', authenticateToken, checkAdmin, async (req, res) => {
         
         // Average worker rating
         const avgWorkerRating = await Worker.aggregate([
-            { $group: { _id: null, avg: { $avg: '$avgRating' } } }
+            { $group: { _id: null, avg: { $avg: '$performanceMetrics.averageRating' } } }
         ]);
         
         // Worker skills distribution
@@ -1437,27 +1465,40 @@ router.post('/jobs/:jobId/bulk/payment', authenticateToken, checkAdmin, async (r
         if (duplicate) return res.json({ success: true, idempotent: true, transaction: duplicate });
 
         const amount = Number(job.amount || 0);
-        const opening = Number(workerWallet.availableBalance || workerWallet.balance || 0);
-        const closing = opening + amount;
+        if (amount <= 0) {
+          return res.status(400).json({ success: false, message: 'Invalid payment amount' });
+        }
 
-        workerWallet.availableBalance = closing;
-        workerWallet.balance = closing;
-        workerWallet.totalEarned = Number(workerWallet.totalEarned || 0) + amount;
-        workerWallet.transactions.push({
-            type: 'payment',
-            amount,
-            description: `Admin bulk payout for job ${job.title || ''}`.trim(),
-            jobId: job._id,
-            idempotencyKey,
-            status: 'completed',
-            openingBalance: opening,
-            closingBalance: closing,
-            source: 'admin',
-            provider: 'internal',
-            metadata: { workerPhone, paymentMode, actor: req.user.phone || 'admin' },
-        });
-        workerWallet.updateTotals();
-        await workerWallet.save();
+        // 🔐 ATOMIC WALLET UPDATE: Use $inc + $push with MongoDB atomicity (prevents race conditions and phantom credits)
+        const updatedWallet = await Wallet.findOneAndUpdate(
+          { phone: workerPhone },
+          {
+            $inc: {
+              balance: amount,
+              availableBalance: amount,
+              totalEarned: amount
+            },
+            $push: {
+              transactions: {
+                type: 'payment',
+                amount,
+                description: `Admin bulk payout for job ${job.title || ''}`.trim(),
+                jobId: job._id,
+                idempotencyKey,
+                status: 'completed',
+                date: new Date(),
+                source: 'admin',
+                provider: 'internal',
+                metadata: { workerPhone, paymentMode, actor: req.user.phone || 'admin' },
+              }
+            }
+          },
+          { new: true }
+        );
+
+        if (!updatedWallet) {
+          return res.status(500).json({ success: false, message: 'Failed to update worker wallet' });
+        }
 
         try {
             const week = getWeekRange();
@@ -1521,7 +1562,7 @@ router.post('/jobs/:jobId/bulk/payment', authenticateToken, checkAdmin, async (r
 
         await logAdminAudit({ req, action: 'job_payment_admin', phone: workerPhone, description: `Bulk payment marked paid`, before: acceptedWorker, after: { paymentStatus: 'paid', paymentMode }, metadata: { idempotencyKey, jobId: String(job._id) } });
 
-        return res.json({ success: true, amount, workerPhone, idempotencyKey });
+        return res.json({ success: true, amount, workerPhone, idempotencyKey, walletBalance: updatedWallet.balance, availableBalance: updatedWallet.availableBalance });
     } catch (error) {
         console.error('Bulk payment error:', error);
         return res.status(500).json({ success: false, message: error.message });

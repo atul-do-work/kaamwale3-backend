@@ -5,12 +5,30 @@ function registerCoreRoutes(app) {
   const razorpayRoutes = require("../routes/razorpay");
   app.use("/api/payment", razorpayRoutes);
 
-  const { router: leaderboardRoutes, startLeaderboardScheduler } = require("../services/leaderboard");
-  const { startWalletReconciliationScheduler } = require("../services/walletReconciliation");
-  const { startJobReconciliationScheduler } = require("../services/jobReconciliation");
-  const { startPremiumReconciliationScheduler } = require("../services/premiumReconciliation");
-  const { startWeeklyWalletSettlementScheduler } = require("../services/weeklyWalletSettlement");
-  const { startCancellationReconciliationScheduler } = require("../services/cancellationReconciliation");
+  const leaderboardModule = require("../services/leaderboard");
+  const { router: leaderboardRoutes, startLeaderboardScheduler } = leaderboardModule;
+  console.log("✓ Leaderboard scheduler loaded:", typeof startLeaderboardScheduler);
+  
+  const walletRecModule = require("../services/walletReconciliation");
+  const { startWalletReconciliationScheduler } = walletRecModule;
+  console.log("✓ Wallet reconciliation scheduler loaded:", typeof startWalletReconciliationScheduler);
+  
+  const jobRecModule = require("../services/jobReconciliation");
+  const { startJobReconciliationScheduler } = jobRecModule;
+  console.log("✓ Job reconciliation scheduler loaded:", typeof startJobReconciliationScheduler);
+  
+  const premiumRecModule = require("../services/premiumReconciliation");
+  const { startPremiumReconciliationScheduler } = premiumRecModule;
+  console.log("✓ Premium reconciliation scheduler loaded:", typeof startPremiumReconciliationScheduler);
+  
+  const weeklySettleModule = require("../services/weeklyWalletSettlement");
+  const { startWeeklyWalletSettlementScheduler } = weeklySettleModule;
+  console.log("✓ Weekly wallet settlement scheduler loaded:", typeof startWeeklyWalletSettlementScheduler);
+  
+  const cancelRecModule = require("../services/cancellationReconciliation");
+  const { startCancellationReconciliationScheduler } = cancelRecModule;
+  console.log("✓ Cancellation reconciliation scheduler loaded:", typeof startCancellationReconciliationScheduler);
+  
   app.use("/leaderboard", leaderboardRoutes);
 
   const payoutRoutes = require("../routes/payout");

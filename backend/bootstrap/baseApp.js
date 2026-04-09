@@ -1,7 +1,6 @@
 const cors = require("cors");
 const express = require("express");
 const path = require("path");
-const fs = require("fs").promises;
 const crypto = require("crypto");
 const { createCriticalRouteLogger } = require("../utils/logContext");
 
@@ -18,14 +17,17 @@ function setupBaseApp(app, { rootDir }) {
     res.setHeader("x-request-id", requestId);
     next();
   });
-  app.use(express.json({ limit: "50mb" }));
-  app.use(express.urlencoded({ extended: true, limit: "50mb" }));
+  app.use(express.json({
+    limit: "1mb",
+    verify: (req, res, buf) => {
+      if (buf && buf.length) {
+        req.rawBody = buf.toString("utf8");
+      }
+    }
+  }));
+  app.use(express.urlencoded({ extended: true, limit: "1mb" }));
   app.use(createCriticalRouteLogger());
-  app.use("/uploads", express.static(path.join(rootDir, "uploads")));
   app.use("/admin", express.static(path.join(rootDir, "public/admin")));
-
-  const uploadsDir = path.join(rootDir, "uploads");
-  fs.mkdir(uploadsDir, { recursive: true }).catch(console.error);
 }
 
 module.exports = {

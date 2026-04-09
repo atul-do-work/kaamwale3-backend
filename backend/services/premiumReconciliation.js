@@ -100,10 +100,83 @@ async function runPremiumReconciliation() {
       }
     }
 
-    // Reconcile premium lifecycle state transitions and record audit events.
-    const premiumUsers = await User.find({
-      "premiumPlan.type": { $ne: "free" },
-    }).select("phone premiumPlan");
+    // Check for subscriptions expiring soon (send renewal reminders)
+    const subscriptionsExpiringSoon = await PremiumSubscription.find({
+      status: "active",
+      expiryDate: {
+        $gt: now,
+        $lte: new Date(now.getTime() + 3 * 24 * 60 * 60 * 1000) // Expiring in next 3 days
+      }
+    }).select("subscriptionId userPhone expiryDate plan");
+
+    for (const sub of subscriptionsExpiringSoon) {
+      const user = await User.findOne({ phone: sub.userPhone }).select("fcmToken");
+      if (user?.fcmToken) {
+        // Send renewal reminder notification
+        try {
+          await sendOpsAlert(`Premium subscription expiring soon for ${sub.userPhone}`, {
+            subscriptionId: sub.subscriptionId,
+            expiryDate: sub.expiryDate,
+            plan: sub.plan,
+            daysLeft: Math.ceil((sub.expiryDate - now) / (24 * 60 * 60 * 1000))
+          });
+        } catch (err) {
+          console.warn('Failed to send renewal reminder:', err);
+        }
+      }
+    }
+
+    for (const sub of subscriptionsNeedingRenewal) {
+      // ✅ FIXED: Basic renewal logic - extend subscription by original duration
+      const originalSub = await PremiumSubscription.findOne({
+        subscriptionId: sub.subscriptionId
+      }).select("plan startAt endAt");
+
+      if (originalSub) {
+        const durationMs = originalSub.endAt - originalSub.startAt;
+        const newExpiry = new Date(sub.renewalAt.getTime() + durationMs);
+        const newGraceUntil = new Date(newExpiry.getTime() + 7 * 24 * 60 * 60 * 1000);
+
+        // Update subscription
+        await PremiumSubscription.updateOne(
+          { subscriptionId: sub.subscriptionId },
+          {
+            $set: {
+              expiryDate: newExpiry,
+              graceUntil: newGraceUntil,
+              renewalAt: newExpiry,
+              status: "active"
+            }
+          }
+        );
+
+        // Update user premium plan
+        await User.updateOne(
+          { phone: sub.userPhone },
+          {
+            $set: {
+              "premiumPlan.expiryDate": newExpiry,
+              "premiumPlan.graceUntil": newGraceUntil,
+              "premiumPlan.renewalAt": newExpiry,
+              "premiumPlan.status": "active"
+            }
+          }
+        );
+
+        await ActivityLog.create({
+          userId: sub.userPhone,
+          phone: sub.userPhone,
+          action: "premium_renewed",
+          description: `Premium subscription auto-renewed`,
+          status: "success",
+          metadata: {
+            subscriptionId: sub.subscriptionId,
+            newExpiryDate: newExpiry,
+            autoRenew: true
+          },
+        });
+      }
+    }
 
     for (const user of premiumUsers) {
       const plan = user.premiumPlan || {};
@@ -116,13 +189,26 @@ async function runPremiumReconciliation() {
         nextStatus = "grace";
       } else if (expiryDate && expiryDate > now) {
         nextStatus = "active";
+      } else if (graceUntil && graceUntil <= now) {
+        nextStatus = "expired";
       } else {
         nextStatus = "expired";
       }
 
       if (nextStatus === previousStatus) continue;
 
+      // ✅ FIXED: Update both user and subscription status
       user.premiumPlan.status = nextStatus;
+
+      // ✅ FIXED: Set/clear graceUntil based on status transitions
+      if (nextStatus === "active" && !user.premiumPlan.graceUntil) {
+        // If becoming active and no grace period set, set one
+        user.premiumPlan.graceUntil = new Date(expiryDate.getTime() + 7 * 24 * 60 * 60 * 1000);
+      } else if (nextStatus === "expired") {
+        // Clear grace period when fully expired
+        user.premiumPlan.graceUntil = null;
+      }
+
       await user.save();
 
       const transitionAction =

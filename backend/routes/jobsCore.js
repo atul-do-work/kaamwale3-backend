@@ -1,4 +1,5 @@
 const express = require("express");
+const mongoose = require("mongoose");
 const crypto = require("crypto");
 const fs = require("fs").promises;
 const { scheduleDispatchState, cancelDispatchState } = require("../services/dispatchStateService");
@@ -171,34 +172,69 @@ function createJobsCoreRouter({
         walletQuery["transactions.idempotencyKey"] = { $ne: walletIdempotencyKey };
       }
 
-      const chargedWallet = await Wallet.findOneAndUpdate(
-        walletQuery,
-        {
-          $inc: isContractor ? { pocketBalance: -requiredBalance } : { balance: -requiredBalance },
-          $push: {
-            transactions: {
-              type: "job_post_fee",
-              amount: requiredBalance,
-              workersCount,
-              idempotencyKey: walletIdempotencyKey || undefined,
-              date: new Date(),
-              metadata: { deductedFrom: isContractor ? "pocketBalance" : "balance" },
-            },
-          },
-        },
-        { new: true }
-      );
+      // Use MongoDB session for atomic wallet balance check and deduction
+      const session = await mongoose.startSession();
+      let chargedWallet = null;
+      
+      try {
+        await session.withTransaction(async () => {
+          // First, get the current wallet state
+          const currentWallet = await Wallet.findOne(walletQuery).session(session);
+          if (!currentWallet) {
+            throw new Error('INSUFFICIENT_BALANCE');
+          }
 
-      if (!chargedWallet) {
-        info("Insufficient wallet balance for job post", buildLogContext(req, {
-          requiredBalance,
-          workersCount,
-          spendableBalance,
-        }));
-        return res.status(400).json({
-          success: false,
-          message: `Insufficient wallet balance. You need ₹${requiredBalance} to post this job for ${workersCount} worker(s). Current balance: ₹${spendableBalance}`,
+          // Double-check balance in transaction
+          const currentBalance = isContractor ? currentWallet.pocketBalance : currentWallet.balance;
+          if (currentBalance < requiredBalance) {
+            throw new Error('INSUFFICIENT_BALANCE');
+          }
+
+          // Deduct the balance atomically
+          const updateField = isContractor ? 'pocketBalance' : 'balance';
+          chargedWallet = await Wallet.findOneAndUpdate(
+            { _id: currentWallet._id },
+            {
+              $inc: { [updateField]: -requiredBalance },
+              $push: {
+                transactions: {
+                  type: "job_post_fee",
+                  amount: requiredBalance,
+                  workersCount,
+                  idempotencyKey: walletIdempotencyKey || undefined,
+                  date: new Date(),
+                  openingBalance: currentBalance,
+                  closingBalance: currentBalance - requiredBalance,
+                  source: 'app',
+                  provider: 'internal',
+                  metadata: { 
+                    deductedFrom: updateField,
+                    jobPosting: true,
+                    requiredBalance,
+                    workersCount
+                  },
+                },
+              },
+            },
+            { new: true, session }
+          );
         });
+      } catch (error) {
+        await session.endSession();
+        if (error.message === 'INSUFFICIENT_BALANCE') {
+          info("Insufficient wallet balance for job post", buildLogContext(req, {
+            requiredBalance,
+            workersCount,
+            spendableBalance,
+          }));
+          return res.status(400).json({
+            success: false,
+            message: `Insufficient wallet balance. You need ₹${requiredBalance} to post this job for ${workersCount} worker(s). Current balance: ₹${spendableBalance}`,
+          });
+        }
+        throw error;
+      } finally {
+        await session.endSession();
       }
 
       const newJob = new Job({

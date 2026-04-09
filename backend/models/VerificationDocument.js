@@ -15,6 +15,7 @@ const verificationDocumentSchema = new mongoose.Schema(
         fileName: String,
         documentNumber: String, // Aadhar no, PAN no, etc.
         uploadedAt: { type: Date, default: Date.now },
+        cloudinaryPublicId: String,
         // Verification details
         verificationStatus: {
           type: String,

@@ -30,39 +30,65 @@ async function runJobReconciliation() {
     const paidJobs = await Job.find({
       paymentStatus: "paid",
       paymentTime: { $gte: since },
-    }).select("_id acceptedBy amount paymentTime");
+    }).select("_id acceptedBy acceptedWorkers amount paymentTime");
 
     for (const job of paidJobs) {
-      const workerPhone = job.acceptedBy;
-      if (!workerPhone) {
-        mismatches.push({
-          entityType: "payment",
-          localId: job._id.toString(),
-          issue: "paid_job_missing_worker",
-        });
-        continue;
+      // Check single job payments
+      if (job.acceptedBy) {
+        const earning = await WorkerEarnings.findOne({ jobId: job._id, workerPhone: job.acceptedBy }).select("_id");
+        if (!earning) {
+          mismatches.push({
+            entityType: "payment",
+            localId: job._id.toString(),
+            issue: "missing_worker_earning",
+            workerPhone: job.acceptedBy,
+          });
+        }
+
+        const wallet = await Wallet.findOne({
+          phone: job.acceptedBy,
+          transactions: { $elemMatch: { type: "payment", jobId: job._id } },
+        }).select("_id");
+
+        if (!wallet) {
+          mismatches.push({
+            entityType: "wallet_tx",
+            localId: job._id.toString(),
+            issue: "missing_wallet_payment_transaction",
+            workerPhone: job.acceptedBy,
+          });
+        }
       }
 
-      const earning = await WorkerEarnings.findOne({ jobId: job._id, workerPhone }).select("_id");
-      if (!earning) {
-        mismatches.push({
-          entityType: "payment",
-          localId: job._id.toString(),
-          issue: "missing_worker_earning",
-        });
-      }
+      // Check bulk job payments
+      if (Array.isArray(job.acceptedWorkers)) {
+        for (const worker of job.acceptedWorkers) {
+          if (!worker?.phone || worker.paymentStatus !== "paid") continue;
 
-      const wallet = await Wallet.findOne({
-        phone: workerPhone,
-        transactions: { $elemMatch: { type: "payment", jobId: job._id } },
-      }).select("_id");
+          const earning = await WorkerEarnings.findOne({ jobId: job._id, workerPhone: worker.phone }).select("_id");
+          if (!earning) {
+            mismatches.push({
+              entityType: "payment",
+              localId: job._id.toString(),
+              issue: "missing_worker_earning_bulk",
+              workerPhone: worker.phone,
+            });
+          }
 
-      if (!wallet) {
-        mismatches.push({
-          entityType: "wallet_tx",
-          localId: job._id.toString(),
-          issue: "missing_wallet_payment_transaction",
-        });
+          const wallet = await Wallet.findOne({
+            phone: worker.phone,
+            transactions: { $elemMatch: { type: "payment", jobId: job._id } },
+          }).select("_id");
+
+          if (!wallet) {
+            mismatches.push({
+              entityType: "wallet_tx",
+              localId: job._id.toString(),
+              issue: "missing_wallet_payment_transaction_bulk",
+              workerPhone: worker.phone,
+            });
+          }
+        }
       }
     }
 

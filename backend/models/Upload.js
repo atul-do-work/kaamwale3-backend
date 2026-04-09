@@ -5,6 +5,7 @@ const uploadSchema = new mongoose.Schema({
   type: { type: String, enum: ["profilePhoto", "document"], default: "document" },
   fileName: String,
   fileUrl: String,
+  cloudinaryPublicId: String,
   createdAt: { type: Date, default: Date.now },
 });
 

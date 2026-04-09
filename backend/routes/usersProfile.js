@@ -1,32 +1,44 @@
 const express = require("express");
-const fs = require("fs").promises;
 const { authenticateToken } = require("../utils/auth");
 const User = require("../models/User");
-const { uploadImagePathToCloudinary } = require("../utils/cloudinaryUpload");
+const { uploadImageBufferToCloudinary } = require("../utils/cloudinaryUpload");
 const MAX_IMAGE_SIZE_BYTES = Math.floor(1.5 * 1024 * 1024);
 
 function createUsersProfileRouter({ upload, io, connectedWorkers }) {
   const router = express.Router();
 
-  router.post("/users/photo", authenticateToken, upload.single("photo"), async (req, res) => {
+  router.post("/users/photo", authenticateToken, async (req, res) => {
     try {
-      if (!req.file) return res.status(400).json({ success: false, message: "No file uploaded" });
-      if (Number(req.file.size || 0) > MAX_IMAGE_SIZE_BYTES) {
-        return res.status(400).json({
-          success: false,
-          message: "Image too large. Maximum size is 1.5MB",
+      let uploaded;
+
+      // Check if it's a direct Cloudinary URL upload (new method)
+      if (req.body.fileUrl && req.body.cloudinaryPublicId) {
+        // Direct upload - URL already uploaded to Cloudinary
+        uploaded = {
+          secure_url: req.body.fileUrl,
+          public_id: req.body.cloudinaryPublicId
+        };
+      } else {
+        // Legacy method - handle file upload via multer
+        if (!req.file || !req.file.buffer) return res.status(400).json({ success: false, message: "No file uploaded" });
+        if (Number(req.file.size || 0) > MAX_IMAGE_SIZE_BYTES) {
+          return res.status(400).json({
+            success: false,
+            message: "Image too large. Maximum size is 1.5MB",
+          });
+        }
+
+        uploaded = await uploadImageBufferToCloudinary({
+          buffer: req.file.buffer,
+          mimeType: req.file.mimetype || "image/jpeg",
+          folder: "kaamwale/profile",
+          publicId: `profile-${req.user.phone}-${Date.now()}`,
         });
       }
 
       const user = await User.findOne({ phone: req.user.phone });
       if (!user) return res.status(404).json({ success: false, message: "User not found" });
 
-      const uploaded = await uploadImagePathToCloudinary({
-        filePath: req.file.path,
-        mimeType: req.file.mimetype || "image/jpeg",
-        folder: "kaamwale/profile",
-        publicId: `profile-${req.user.phone}-${Date.now()}`,
-      });
       user.profilePhoto = uploaded.secure_url;
       await user.save();
 
@@ -39,10 +51,6 @@ function createUsersProfileRouter({ upload, io, connectedWorkers }) {
     } catch (err) {
       console.error("Profile photo upload error", err);
       return res.status(500).json({ success: false, message: "Internal server error" });
-    } finally {
-      if (req.file?.path) {
-        fs.rm(req.file.path, { force: true }).catch(() => {});
-      }
     }
   });
 

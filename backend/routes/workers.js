@@ -140,7 +140,9 @@ function createWorkersRouter({
           recipientPhone: workerPhone,
           phone: workerPhone,
           type: "worker_request",
-          message: `Requested by ${req.user.phone}: ${message || ""}`,
+          title: "Request from contractor",
+          body: `You have a new request from ${req.user.phone}`,
+          metadata: { from: req.user.phone, message: message || "" },
         });
       } catch (e) {
         console.warn("Could not save notification history:", e.message);
@@ -162,6 +164,208 @@ function createWorkersRouter({
     } catch (err) {
       console.error("workers/request error", err);
       return res.status(500).json({ success: false, message: "Failed to request worker" });
+    }
+  });
+
+  router.post("/workers/request-job", authenticateToken, async (req, res) => {
+    try {
+      const { workerPhone, date, startTime, endTime, location, message } = req.body || {};
+
+      if (!workerPhone || !date || !startTime || !endTime || !location) {
+        return res.status(400).json({
+          success: false,
+          message: "workerPhone, date, startTime, endTime, and location are required"
+        });
+      }
+
+      const worker = await WorkerModel.findOne({ phone: workerPhone });
+      if (!worker) {
+        return res.status(404).json({ success: false, message: "Worker not found" });
+      }
+
+      const contractor = await User.findOne({ phone: req.user.phone });
+      if (!contractor) {
+        return res.status(404).json({ success: false, message: "Contractor not found" });
+      }
+
+      // Create job request notification
+      const requestId = `req_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+
+      const notificationData = {
+        recipientPhone: workerPhone,
+        phone: workerPhone,
+        type: "job_request",
+        title: "New Job Request",
+        body: `Job request from ${contractor.name || req.user.phone} for ${date}`,
+        metadata: {
+          requestId,
+          contractorPhone: req.user.phone,
+          contractorName: contractor.name,
+          date,
+          startTime,
+          endTime,
+          location,
+          message: message || "",
+          timestamp: new Date().toISOString(),
+        },
+      };
+
+      await NotificationHistory.create(notificationData);
+
+      // Send real-time notification if worker is online
+      if (worker.socketId) {
+        try {
+          io.to(worker.socketId).emit("jobRequest", {
+            requestId,
+            contractorPhone: req.user.phone,
+            contractorName: contractor.name,
+            date,
+            startTime,
+            endTime,
+            location,
+            message: message || "",
+            timestamp: new Date().toISOString(),
+          });
+        } catch (e) {
+          console.warn("Could not emit jobRequest to socket:", e.message);
+        }
+      }
+
+      // Send push notification
+      try {
+        const payload = {
+          type: "job_request",
+          title: "New Job Request",
+          body: `Job request from ${contractor.name || req.user.phone} for ${date}`,
+          metadata: {
+            requestId,
+            contractorPhone: req.user.phone,
+            contractorName: contractor.name,
+            date,
+            startTime,
+            endTime,
+            location,
+            message: message || "",
+          },
+        };
+        await sendNotificationToUserPhone(workerPhone, payload);
+      } catch (e) {
+        console.error("Error sending push notification for job request:", e && e.message);
+      }
+
+      return res.json({
+        success: true,
+        message: "Job request sent successfully",
+        requestId
+      });
+    } catch (err) {
+      console.error("workers/request-job error", err);
+      return res.status(500).json({ success: false, message: "Failed to send job request" });
+    }
+  });
+
+  router.post("/workers/respond-job-request", authenticateToken, async (req, res) => {
+    try {
+      const { requestId, accepted } = req.body || {};
+
+      if (!requestId || typeof accepted !== 'boolean') {
+        return res.status(400).json({
+          success: false,
+          message: "requestId and accepted (boolean) are required"
+        });
+      }
+
+      // Find the notification
+      const notification = await NotificationHistory.findOne({
+        'metadata.requestId': requestId,
+        recipientPhone: req.user.phone,
+        type: 'job_request'
+      });
+
+      if (!notification) {
+        return res.status(404).json({ success: false, message: "Job request not found" });
+      }
+
+      const contractorPhone = notification.metadata.contractorPhone;
+      const contractor = await User.findOne({ phone: contractorPhone });
+
+      // Update notification with response
+      await NotificationHistory.findByIdAndUpdate(notification._id, {
+        $set: {
+          'metadata.responded': true,
+          'metadata.accepted': accepted,
+          'metadata.responseTime': new Date().toISOString(),
+        }
+      });
+
+      // Send response notification to contractor
+      const responseNotificationData = {
+        recipientPhone: contractorPhone,
+        phone: contractorPhone,
+        type: accepted ? "job_request_accepted" : "job_request_declined",
+        title: accepted ? "Job Request Accepted!" : "Job Request Declined",
+        body: `Your job request was ${accepted ? 'accepted' : 'declined'} by ${req.user.name || req.user.phone}`,
+        metadata: {
+          workerPhone: req.user.phone,
+          workerName: req.user.name,
+          requestId,
+          date: notification.metadata.date,
+          startTime: notification.metadata.startTime,
+          endTime: notification.metadata.endTime,
+          location: notification.metadata.location,
+          responseTime: new Date().toISOString(),
+        },
+      };
+
+      await NotificationHistory.create(responseNotificationData);
+
+      // Send real-time notification to contractor if online
+      if (contractor && contractor.socketId) {
+        try {
+          io.to(contractor.socketId).emit("jobRequestResponse", {
+            requestId,
+            workerPhone: req.user.phone,
+            workerName: req.user.name,
+            accepted,
+            date: notification.metadata.date,
+            startTime: notification.metadata.startTime,
+            endTime: notification.metadata.endTime,
+            location: notification.metadata.location,
+            responseTime: new Date().toISOString(),
+          });
+        } catch (e) {
+          console.warn("Could not emit jobRequestResponse to socket:", e.message);
+        }
+      }
+
+      // Send push notification to contractor
+      try {
+        const payload = {
+          type: accepted ? "job_request_accepted" : "job_request_declined",
+          title: accepted ? "Job Request Accepted!" : "Job Request Declined",
+          body: `Your job request was ${accepted ? 'accepted' : 'declined'} by ${req.user.name || req.user.phone}`,
+          metadata: {
+            workerPhone: req.user.phone,
+            workerName: req.user.name,
+            requestId,
+            date: notification.metadata.date,
+            startTime: notification.metadata.startTime,
+            endTime: notification.metadata.endTime,
+            location: notification.metadata.location,
+          },
+        };
+        await sendNotificationToUserPhone(contractorPhone, payload);
+      } catch (e) {
+        console.error("Error sending push notification for job response:", e && e.message);
+      }
+
+      return res.json({
+        success: true,
+        message: `Job request ${accepted ? 'accepted' : 'declined'} successfully`
+      });
+    } catch (err) {
+      console.error("workers/respond-job-request error", err);
+      return res.status(500).json({ success: false, message: "Failed to respond to job request" });
     }
   });
 
@@ -360,11 +564,13 @@ function createWorkersRouter({
         .select("status timeSpentMinutes hoursWorked acceptedAt paymentTime createdAt updatedAt acceptedWorkers")
         .lean();
 
+      // Bug #8 Fix: Check attendance status in addition to payment
       const getPaidEntryForWorker = (job) => {
         if (!Array.isArray(job?.acceptedWorkers)) return null;
         return job.acceptedWorkers.find(
           (w) =>
             sameWorkerPhone(w?.phone || w?.workerPhone) &&
+            w?.attendanceStatus === 'Present' &&
             /^paid$/i.test(String(w?.paymentStatus || ""))
         ) || null;
       };
@@ -455,10 +661,21 @@ function createWorkersRouter({
       const jobsCompleted = completedJobs.length;
 
       const ratings = completedJobs
-        .map((j) => {
-          const nested = Number(j?.rating?.stars || 0);
-          const flat = Number(j?.rating || 0);
-          return nested > 0 ? nested : flat;
+        .flatMap((j) => {
+          const jobLevelRating = Number(j?.rating?.stars || j?.rating || 0);
+          const workerLevelRatings = Array.isArray(j?.acceptedWorkers)
+            ? j.acceptedWorkers
+                .filter((w) => sameWorkerPhone(w?.phone))
+                .map((w) => Number(w?.rating?.stars || 0))
+                .filter((r) => r > 0)
+            : [];
+          
+          // Include both job-level rating (for single jobs) and worker-level ratings (for bulk jobs)
+          const allRatings = [];
+          if (jobLevelRating > 0) allRatings.push(jobLevelRating);
+          allRatings.push(...workerLevelRatings);
+          
+          return allRatings;
         })
         .filter((v) => Number.isFinite(v) && v > 0);
       let avgCompletedRating = ratings.length

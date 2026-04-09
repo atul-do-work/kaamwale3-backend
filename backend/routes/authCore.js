@@ -1,5 +1,6 @@
 const express = require("express");
 const crypto = require("crypto");
+const { isPremiumEntitled } = require("../utils/premiumEntitlement");
 
 function createAuthCoreRouter({ User, Wallet, WorkerModel, bcrypt, jwt, jwtSecret, loginLimiter }) {
   const router = express.Router();
@@ -195,6 +196,7 @@ function createAuthCoreRouter({ User, Wallet, WorkerModel, bcrypt, jwt, jwtSecre
       const refreshToken = crypto.randomBytes(40).toString("hex");
       const expiresAt = new Date(Date.now() + 1000 * 60 * 60 * 24 * 30);
       user.refreshTokens.push({ token: refreshToken, issuedAt: new Date(), expiresAt, deviceInfo: req.headers["user-agent"] || "unknown" });
+
       await user.save();
 
       let wallet = await Wallet.findOne({ phone: user.phone });
@@ -215,7 +217,8 @@ function createAuthCoreRouter({ User, Wallet, WorkerModel, bcrypt, jwt, jwtSecre
           state: user.state,
           latitude: user.latitude,
           longitude: user.longitude,
-          premiumPlan: user.premiumPlan,
+          // ✅ FIXED: Validate premium status before including in response
+          premiumPlan: user.premiumPlan && isPremiumEntitled(user) ? user.premiumPlan : { type: "free" },
           isAvailable: user.isAvailable || false,
         },
         accessToken,

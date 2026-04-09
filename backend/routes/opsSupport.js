@@ -6,6 +6,7 @@ const crypto = require("crypto");
 const ActivityLog = require("../models/ActivityLog");
 const SupportTicket = require("../models/SupportTicket");
 const VerificationDocument = require("../models/VerificationDocument");
+const { uploadFileBufferToCloudinary } = require("../utils/cloudinaryUpload");
 
 function createOpsSupportRouter({ upload, PORT }) {
   const router = express.Router();
@@ -204,12 +205,41 @@ function createOpsSupportRouter({ upload, PORT }) {
     }
   });
 
-  router.post("/verification/upload", authenticateToken, upload.single("file"), async (req, res) => {
+  router.post("/verification/upload", authenticateToken, async (req, res) => {
     try {
-      const type = req.body?.type || req.query?.type;
+      const type = req.body?.type || req.body?.documentType || req.query?.type;
       const documentNumber = req.body?.documentNumber || req.query?.documentNumber;
       const expiryDate = req.body?.expiryDate || req.query?.expiryDate;
 
+      // Check if it's a direct Cloudinary URL upload (new method)
+      if (req.body?.fileUrl && req.body?.cloudinaryPublicId) {
+        // Direct upload - URL already uploaded to Cloudinary
+        let verification = await VerificationDocument.findOne({ phone: req.user.phone });
+        if (!verification) {
+          verification = new VerificationDocument({
+            userId: req.user._id || req.user.phone,
+            phone: req.user.phone,
+            documents: [],
+            accountStatus: "restricted",
+          });
+        }
+
+        verification.documents.push({
+          type: type || "unknown",
+          fileUrl: req.body.fileUrl,
+          fileName: req.body.fileName || `${type || "doc"}_${Date.now()}`,
+          documentNumber: documentNumber || undefined,
+          uploadedAt: new Date(),
+          verificationStatus: "pending",
+          expiryDate: expiryDate ? new Date(expiryDate) : undefined,
+          cloudinaryPublicId: req.body.cloudinaryPublicId,
+        });
+        await verification.save();
+
+        return res.json({ success: true, verification, message: "Document uploaded for verification" });
+      }
+
+      // Legacy method - handle file upload via multer
       if (!type && !req.file && !req.body?.imageData) {
         return res.status(400).json({ success: false, message: "Missing document type or file" });
       }
@@ -226,12 +256,25 @@ function createOpsSupportRouter({ upload, PORT }) {
 
       let fileUrl = null;
       let fileName = null;
+      let cloudinaryPublicId = null;
 
-      if (req.file) {
+      if (req.file && req.file.buffer) {
         fileName = req.file.originalname || req.file.filename;
-        const host = req.headers.host || `localhost:${PORT}`;
-        const protocol = req.headers["x-forwarded-proto"] || req.protocol || "http";
-        fileUrl = `${protocol}://${host}/uploads/${req.file.filename}`;
+        const mimeType = req.file.mimetype || "application/octet-stream";
+        const isImage = mimeType.startsWith("image/");
+        const resourceType = isImage ? "image" : "raw";
+        const folder = "kaamwale/verification";
+
+        const uploadResult = await uploadFileBufferToCloudinary({
+          buffer: req.file.buffer,
+          mimeType,
+          folder,
+          publicId: `verification-${req.user.phone}-${Date.now()}-${fileName}`,
+          resourceType,
+        });
+
+        fileUrl = uploadResult.secure_url;
+        cloudinaryPublicId = uploadResult.public_id;
       } else if (req.body?.imageData) {
         fileUrl = req.body.imageData;
         fileName = req.body.fileName || `${type || "doc"}_${Date.now()}`;
@@ -245,6 +288,7 @@ function createOpsSupportRouter({ upload, PORT }) {
         uploadedAt: new Date(),
         verificationStatus: "pending",
         expiryDate: expiryDate ? new Date(expiryDate) : undefined,
+        cloudinaryPublicId,
       });
       await verification.save();
 

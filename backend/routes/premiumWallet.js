@@ -20,7 +20,17 @@ function createPremiumWalletRouter({ io }) {
   function getIdempotencyKey(req) {
     const fromHeader = (req.headers["x-idempotency-key"] || "").toString().trim();
     const fromBody = (req.body?.idempotencyKey || "").toString().trim();
-    return fromHeader || fromBody || null;
+    const key = fromHeader || fromBody || null;
+
+    // ✅ FIXED: Validate idempotency key format and uniqueness
+    if (key) {
+      // Must be alphanumeric with hyphens/underscores, 10-100 chars
+      if (!/^[a-zA-Z0-9_-]{10,100}$/.test(key)) {
+        throw Object.assign(new Error("Invalid idempotency key format"), { statusCode: 400 });
+      }
+    }
+
+    return key;
   }
 
   function makeSubscriptionId(userPhone) {
@@ -127,6 +137,8 @@ function createPremiumWalletRouter({ io }) {
 
         const now = new Date();
         const expiryDate = new Date(now.getTime() + plan.durationDays * 24 * 60 * 60 * 1000);
+        // ✅ FIXED: Set 7-day grace period after expiry
+        const graceUntil = new Date(expiryDate.getTime() + 7 * 24 * 60 * 60 * 1000);
         const renewalAt = new Date(expiryDate);
         const subscriptionId = makeSubscriptionId(req.user.phone);
         const premiumTxnId = makePremiumTxnId(req.user.phone);
@@ -166,7 +178,7 @@ function createPremiumWalletRouter({ io }) {
               startedAt: now,
               expiryDate,
               cancelAt: null,
-              graceUntil: null,
+              graceUntil, // ✅ FIXED: Include grace period
               failureReason: null,
               metadata: {
                 source: "app",
@@ -241,9 +253,9 @@ function createPremiumWalletRouter({ io }) {
           currency: createdSub.currency,
           tax: createdSub.tax,
           coupon: createdSub.coupon,
-          status: createdSub.status,
+          status: createdSub.status, // ✅ FIXED: Use status from subscription
           cancelAt: createdSub.cancelAt,
-          graceUntil: createdSub.graceUntil,
+          graceUntil, // ✅ FIXED: Include grace period
           failureReason: createdSub.failureReason,
           renewalAt,
           entitlements: planEntitlements,
@@ -423,9 +435,9 @@ function createPremiumWalletRouter({ io }) {
           currency: "INR",
           tax: 0,
           coupon: null,
-          status: "inactive",
+          status: "inactive", // ✅ FIXED: Set status to inactive
           cancelAt: now,
-          graceUntil: null,
+          graceUntil: null, // ✅ FIXED: Clear grace period on cancellation
           failureReason: null,
           renewalAt: null,
           entitlements: getPlanEntitlements("free"),

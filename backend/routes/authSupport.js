@@ -7,26 +7,59 @@ const User = require("../models/User");
 const { sendOtp } = require("../utils/sendOtp");
 const { authenticateToken } = require("../utils/auth");
 
-function createAuthSupportRouter({ JWT_SECRET, sendNotificationToUserPhone }) {
+// ✅ SECURITY: Generic response for failed password reset attempts
+const GENERIC_ERROR = "Invalid phone or password reset failed";
+
+// ✅ SECURITY: Phone validation - exactly 10 digits, numeric only
+function isValidPhoneNumber(phone) {
+  if (!phone || typeof phone !== 'string') return false;
+  // Must be exactly 10 digits
+  return /^\d{10}$/.test(phone);
+}
+
+function createAuthSupportRouter({ JWT_SECRET, sendNotificationToUserPhone, sessionStore }) {
   const router = express.Router();
 
   router.post("/auth/forgot-password-request", async (req, res) => {
     try {
       const { phone } = req.body;
 
-      if (!phone || phone.length < 10) {
-        return res.status(400).json({ success: false, message: "Invalid phone number" });
+      // ✅ SECURITY: Validate phone format (exactly 10 digits, numeric only)
+      if (!isValidPhoneNumber(phone)) {
+        return res.status(400).json({ success: false, message: GENERIC_ERROR });
       }
 
       const user = await User.findOne({ phone });
       if (!user) {
-        return res.status(404).json({ success: false, message: "User not found" });
+        // ✅ SECURITY: Generic error to prevent phone enumeration
+        return res.status(400).json({ success: false, message: GENERIC_ERROR });
+      }
+
+      // ✅ SECURITY: Rate limiting - max 3 OTP requests per hour
+      const now = new Date();
+      const oneHourAgo = new Date(now - 60 * 60 * 1000);
+
+      if (user.otpRequestResetAt && user.otpRequestResetAt > oneHourAgo) {
+        // Still in the same hour
+        if (user.otpRequestCount >= 3) {
+          return res.status(429).json({ 
+            success: false, 
+            message: "Too many OTP requests. Please try again later." 
+          });
+        }
+        user.otpRequestCount += 1;
+      } else {
+        // New hour
+        user.otpRequestCount = 1;
+        user.otpRequestResetAt = now;
       }
 
       const otp = Math.floor(100000 + Math.random() * 900000).toString();
       const otpExpiry = new Date(Date.now() + 10 * 60 * 1000);
       user.otpCode = otp;
       user.otpExpiry = otpExpiry;
+      user.otpAttempts = 0; // Reset attempt counter on new OTP request
+      user.otpAttemptLockoutUntil = null;
       await user.save();
 
       try {
@@ -35,7 +68,7 @@ function createAuthSupportRouter({ JWT_SECRET, sendNotificationToUserPhone }) {
             type: "forgot_password_otp",
             title: "Password Reset OTP",
             body: `Your OTP is: ${otp}. Valid for 10 minutes.`,
-            data: { otp, type: "forgot_password", actionRequired: true },
+            data: { type: "forgot_password", actionRequired: true },
           });
         }
       } catch (pushErr) {
@@ -52,21 +85,56 @@ function createAuthSupportRouter({ JWT_SECRET, sendNotificationToUserPhone }) {
   router.post("/auth/forgot-password-verify-otp", async (req, res) => {
     try {
       const { phone, otp } = req.body;
-      if (!phone || !otp) {
-        return res.status(400).json({ success: false, message: "Phone and OTP required" });
+      
+      // ✅ SECURITY: Validate phone format
+      if (!isValidPhoneNumber(phone) || !otp) {
+        return res.status(400).json({ success: false, message: GENERIC_ERROR });
       }
 
       const user = await User.findOne({ phone });
       if (!user) {
-        return res.status(404).json({ success: false, message: "User not found" });
+        // ✅ SECURITY: Generic error to prevent phone enumeration
+        return res.status(400).json({ success: false, message: GENERIC_ERROR });
+      }
+
+      // ✅ SECURITY: Brute force protection - check if locked out
+      const now = new Date();
+      if (user.otpAttemptLockoutUntil && now < user.otpAttemptLockoutUntil) {
+        const remainingMinutes = Math.ceil((user.otpAttemptLockoutUntil - now) / (60 * 1000));
+        return res.status(429).json({ 
+          success: false, 
+          message: `Too many failed attempts. Try again in ${remainingMinutes} minutes.` 
+        });
       }
 
       if (user.otpCode !== otp) {
-        return res.status(401).json({ success: false, message: "Invalid OTP" });
+        // ✅ SECURITY: Increment attempt counter
+        user.otpAttempts = (user.otpAttempts || 0) + 1;
+        
+        // Lock account after 5 failed attempts for 30 minutes
+        if (user.otpAttempts >= 5) {
+          user.otpAttemptLockoutUntil = new Date(Date.now() + 30 * 60 * 1000);
+          await user.save();
+          return res.status(429).json({ 
+            success: false, 
+            message: "Too many failed attempts. Please try again later." 
+          });
+        }
+
+        await user.save();
+        return res.status(400).json({ success: false, message: GENERIC_ERROR });
       }
+
       if (!user.otpExpiry || new Date() > user.otpExpiry) {
-        return res.status(401).json({ success: false, message: "OTP has expired" });
+        return res.status(400).json({ success: false, message: GENERIC_ERROR });
       }
+
+      // ✅ SECURITY: Clear OTP immediately after successful verification
+      user.otpCode = null;
+      user.otpExpiry = null;
+      user.otpAttempts = 0;
+      user.otpAttemptLockoutUntil = null;
+      await user.save();
 
       return res.json({ success: true, message: "OTP verified successfully" });
     } catch (err) {
@@ -77,12 +145,14 @@ function createAuthSupportRouter({ JWT_SECRET, sendNotificationToUserPhone }) {
 
   router.post("/auth/forgot-password-reset", async (req, res) => {
     try {
-      const { phone, otp, newPassword } = req.body;
+      const { phone, otp, newPassword, confirmPassword } = req.body;
 
-      if (!phone || !otp || !newPassword) {
-        return res.status(400).json({ success: false, message: "All fields required" });
+      // ✅ SECURITY: Validate phone format and all required fields
+      if (!isValidPhoneNumber(phone) || !otp || !newPassword || !confirmPassword) {
+        return res.status(400).json({ success: false, message: GENERIC_ERROR });
       }
 
+      // ✅ SECURITY: Validate password requirements
       if (!newPassword || newPassword.length < 8) {
         return res.status(400).json({ success: false, message: "Password must be at least 8 characters long" });
       }
@@ -96,21 +166,55 @@ function createAuthSupportRouter({ JWT_SECRET, sendNotificationToUserPhone }) {
         return res.status(400).json({ success: false, message: "Password must contain at least one lowercase letter" });
       }
 
+      // ✅ SECURITY: Validate password confirmation matches
+      if (newPassword !== confirmPassword) {
+        return res.status(400).json({ success: false, message: "Passwords do not match" });
+      }
+
       const user = await User.findOne({ phone });
       if (!user) {
-        return res.status(404).json({ success: false, message: "User not found" });
+        // ✅ SECURITY: Generic error to prevent phone enumeration
+        return res.status(400).json({ success: false, message: GENERIC_ERROR });
       }
 
       if (user.otpCode !== otp) {
-        return res.status(401).json({ success: false, message: "Invalid OTP" });
+        return res.status(400).json({ success: false, message: GENERIC_ERROR });
       }
       if (!user.otpExpiry || new Date() > user.otpExpiry) {
-        return res.status(401).json({ success: false, message: "OTP has expired" });
+        return res.status(400).json({ success: false, message: GENERIC_ERROR });
       }
 
-      user.password = await bcrypt.hash(newPassword, 10);
+      // ✅ SECURITY: Hash password and clear OTP BEFORE saving to prevent race conditions
+      const hashedPassword = await bcrypt.hash(newPassword, 10);
+      user.password = hashedPassword;
+      // Clear OTP IMMEDIATELY to invalidate it
       user.otpCode = null;
       user.otpExpiry = null;
+      user.otpAttempts = 0;
+      user.otpAttemptLockoutUntil = null;
+      // Strong security: revoke all existing refresh tokens after password change
+      user.refreshTokens = [];
+
+      // Invalidate all server-side sessions (if using express-session)
+      if (sessionStore && typeof sessionStore.all === 'function') {
+        sessionStore.all((err, sessions) => {
+          if (!err && sessions) {
+            Object.entries(sessions).forEach(([sid, sess]) => {
+              try {
+                const s = typeof sess === 'string' ? JSON.parse(sess) : sess;
+                if (s?.userId && s.userId.toString() === user._id.toString()) {
+                  sessionStore.destroy(sid, (destroyErr) => {
+                    if (destroyErr) console.error('Failed to destroy session', sid, destroyErr);
+                  });
+                }
+              } catch (parseErr) {
+                console.warn('Could not parse session content', parseErr);
+              }
+            });
+          }
+        });
+      }
+
       await user.save();
 
       try {
@@ -139,7 +243,11 @@ function createAuthSupportRouter({ JWT_SECRET, sendNotificationToUserPhone }) {
   router.post("/auth/request-otp", async (req, res) => {
     try {
       const { phone, name, role, fcmToken } = req.body;
-      if (!phone) return res.status(400).json({ success: false, message: "Phone is required" });
+      
+      // ✅ SECURITY: Validate phone format (exactly 10 digits, numeric only)
+      if (!isValidPhoneNumber(phone)) {
+        return res.status(400).json({ success: false, message: "Invalid phone number format" });
+      }
 
       let user = await User.findOne({ phone });
       if (!user) {
@@ -173,19 +281,48 @@ function createAuthSupportRouter({ JWT_SECRET, sendNotificationToUserPhone }) {
   router.post("/auth/verify-otp", async (req, res) => {
     try {
       const { phone, otp } = req.body;
-      if (!phone || !otp) return res.status(400).json({ success: false, message: "Phone and OTP required" });
+      
+      // ✅ SECURITY: Validate phone format
+      if (!isValidPhoneNumber(phone) || !otp) {
+        return res.status(400).json({ success: false, message: "Invalid phone or OTP" });
+      }
 
       const user = await User.findOne({ phone });
-      if (!user) return res.status(404).json({ success: false, message: "User not found" });
+      if (!user) {
+        return res.status(400).json({ success: false, message: "Invalid phone or OTP" });
+      }
+
+      // ✅ SECURITY: Check for brute force lockout
+      const now = new Date();
+      if (user.otpAttemptLockoutUntil && now < user.otpAttemptLockoutUntil) {
+        const remainingMinutes = Math.ceil((user.otpAttemptLockoutUntil - now) / (60 * 1000));
+        return res.status(429).json({ 
+          success: false, 
+          message: `Too many failed attempts. Try again in ${remainingMinutes} minutes.` 
+        });
+      }
 
       if (!user.otpCode || !user.otpExpiry || new Date() > user.otpExpiry || user.otpCode !== otp) {
-        return res.status(400).json({ success: false, message: "Invalid or expired OTP" });
+        // ✅ SECURITY: Increment attempt counter and lock after 5 failures
+        user.otpAttempts = (user.otpAttempts || 0) + 1;
+        if (user.otpAttempts >= 5) {
+          user.otpAttemptLockoutUntil = new Date(Date.now() + 30 * 60 * 1000);
+          await user.save();
+          return res.status(429).json({ 
+            success: false, 
+            message: "Too many failed attempts. Please try again later." 
+          });
+        }
+        await user.save();
+        return res.status(400).json({ success: false, message: "Invalid phone or OTP" });
       }
 
       user.phoneVerified = true;
       user.phoneVerifiedAt = new Date();
       user.otpCode = null;
       user.otpExpiry = null;
+      user.otpAttempts = 0;
+      user.otpAttemptLockoutUntil = null;
 
       const accessToken = jwt.sign(
         { name: user.name, phone: user.phone, role: user.role },

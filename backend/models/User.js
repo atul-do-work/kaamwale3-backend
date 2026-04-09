@@ -25,6 +25,12 @@ const userSchema = new mongoose.Schema({
   otpExpiry: { type: Date, default: null },
   phoneVerified: { type: Boolean, default: false },
   phoneVerifiedAt: { type: Date, default: null },
+  // Security: OTP attempt tracking (brute force protection)
+  otpAttempts: { type: Number, default: 0 },
+  otpAttemptLockoutUntil: { type: Date, default: null },
+  // Security: OTP request rate limiting
+  otpRequestCount: { type: Number, default: 0 },
+  otpRequestResetAt: { type: Date, default: null },
   // Device tokens for push notifications
   fcmToken: { type: String, default: null }, // ✅ Firebase Cloud Messaging token for OTP
   deviceTokens: { type: [String], default: [] },

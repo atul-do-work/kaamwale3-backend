@@ -1,6 +1,6 @@
 // auth.js
 const jwt = require("jsonwebtoken");
-const JWT_SECRET = "supersecretkey"; // same secret used in server
+const JWT_SECRET = process.env.JWT_SECRET || "supersecretkey";
 
 function authenticateToken(req, res, next) {
   const authHeader = req.headers["authorization"];

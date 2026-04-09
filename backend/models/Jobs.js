@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const { normalizePhoneNumber } = require('../utils/dataNormalization');
 
 const JOB_STATUS = ['pending', 'posted', 'offered', 'accepted', 'in_progress', 'completed', 'cancelled', 'expired'];
 const PAYMENT_STATUS = ['pending', 'authorized', 'captured', 'failed', 'refunded', 'paid'];
@@ -131,6 +132,9 @@ jobSchema.index({ contractorPhone: 1, createdAt: -1 });
 jobSchema.index({ contractorPhone: 1, idempotencyKey: 1 }, { unique: true, sparse: true });
 jobSchema.index({ acceptedBy: 1, createdAt: -1 });
 jobSchema.index({ jobLocation: '2dsphere' });
+jobSchema.index({ status: 1, jobLocation: '2dsphere', createdAt: -1 }); // For nearby jobs queries
+jobSchema.index({ bulkHiring: 1, status: 1, createdAt: -1 }); // For bulk job queries
+jobSchema.index({ 'acceptedWorkers.phone': 1, status: 1 }); // For worker job status checks
 
 function getUpdatedValue(update, key) {
   if (!update || typeof update !== 'object') return undefined;
@@ -158,6 +162,25 @@ jobSchema.pre('validate', function syncGeoLocation() {
   if (this.paymentStatus) {
     this.paymentStatus = normalizePaymentStatusValue(this.paymentStatus);
   }
+
+  // Normalize phone numbers
+  if (this.contractorPhone) {
+    this.contractorPhone = normalizePhoneNumber(this.contractorPhone);
+  }
+  if (this.acceptedBy) {
+    this.acceptedBy = normalizePhoneNumber(this.acceptedBy);
+  }
+  if (Array.isArray(this.acceptedWorkers)) {
+    for (const worker of this.acceptedWorkers) {
+      if (worker && worker.phone) {
+        worker.phone = normalizePhoneNumber(worker.phone);
+      }
+    }
+  }
+  if (Array.isArray(this.declinedBy)) {
+    this.declinedBy = this.declinedBy.map(phone => normalizePhoneNumber(phone)).filter(Boolean);
+  }
+
   if (Array.isArray(this.acceptedWorkers)) {
     for (const worker of this.acceptedWorkers) {
       if (worker && worker.paymentStatus) {
@@ -167,13 +190,20 @@ jobSchema.pre('validate', function syncGeoLocation() {
   }
 });
 
-jobSchema.pre('save', async function enforceTransitionsOnSave() {
-  // Enforce terminal consistency: paid jobs should not remain in non-terminal in-flight states.
-  if (String(this.paymentStatus || "").toLowerCase() === "paid") {
-    const currentStatus = String(this.status || "").toLowerCase();
-    if (currentStatus !== "completed" && currentStatus !== "cancelled" && currentStatus !== "expired") {
-      this.status = "completed";
+jobSchema.pre('save', async function enforcePaymentStatusConsistency() {
+  // Enforce strict rule: payment can only be marked as "paid" when job is in terminal states
+  if (this.paymentStatus === 'paid') {
+    const validTerminalStatuses = ['completed', 'cancelled', 'expired'];
+    if (!validTerminalStatuses.includes(this.status)) {
+      throw new Error(`Cannot mark payment as paid when job status is ${this.status}. Job must be completed, cancelled, or expired first.`);
     }
+  }
+
+  // Additional validation: prevent invalid status transitions
+  if (this.isModified('status') && this.status === 'completed' && this.paymentStatus !== 'paid') {
+    // Allow completed status even if payment is not yet marked as paid (payment might be processed separately)
+    // But log this for monitoring
+    console.warn(`Job ${this._id} marked as completed but payment status is ${this.paymentStatus}`);
   }
 
   if (this.isNew) return;
@@ -255,6 +285,25 @@ jobSchema.pre('findOneAndUpdate', async function enforceTransitions() {
       coordinates: [getUpdatedValue(update, 'lon'), getUpdatedValue(update, 'lat')],
     };
     this.setUpdate(update);
+  }
+
+  // Normalize phone numbers in updates
+  const phoneFields = ['contractorPhone', 'acceptedBy'];
+  for (const field of phoneFields) {
+    const phoneValue = getUpdatedValue(update, field);
+    if (phoneValue) {
+      update.$set = update.$set || {};
+      update.$set[field] = normalizePhoneNumber(phoneValue);
+      this.setUpdate(update);
+    }
+  }
+
+  // Handle acceptedWorkers phone normalization
+  if (update.$addToSet && update.$addToSet.acceptedWorkers) {
+    const worker = update.$addToSet.acceptedWorkers;
+    if (worker && worker.phone) {
+      worker.phone = normalizePhoneNumber(worker.phone);
+    }
   }
 });
 

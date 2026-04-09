@@ -1,58 +1,121 @@
 const express = require("express");
 const router = express.Router();
 const multer = require("multer");
-const path = require("path");
 const Upload = require("../models/Upload");
 const User = require("../models/User");
-const jwt = require("jsonwebtoken");
 const { authenticateToken } = require("../utils/auth");
+const { uploadFileBufferToCloudinary, signUploadParams, getCloudinaryConfig } = require("../utils/cloudinaryUpload");
 
-const JWT_SECRET = process.env.JWT_SECRET || "supersecretkey";
-const SERVER_PUBLIC_URL = process.env.SERVER_PUBLIC_URL || "";
-
-function getPublicBaseUrl(req) {
-  if (SERVER_PUBLIC_URL) return SERVER_PUBLIC_URL.replace(/\/$/, "");
-  const forwardedProto = req.headers["x-forwarded-proto"];
-  const protocol = (Array.isArray(forwardedProto) ? forwardedProto[0] : (forwardedProto || req.protocol || "https"))
-    .toString()
-    .split(",")[0]
-    .trim();
-  const host = process.env.SERVER_URL_DOMAIN || req.get("host");
-  return `${protocol}://${host}`;
-}
-
-// Multer storage setup
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => cb(null, "uploads/"),
-  filename: (req, file, cb) => cb(null, Date.now() + "-" + file.originalname),
+// Configure multer for file uploads in memory only
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: 10 * 1024 * 1024, // 10 MB limit
+  },
 });
 
-const upload = multer({ storage });
-
-// Upload a file (profile photo or document)
-router.post("/upload", authenticateToken, upload.single("file"), async (req, res) => {
+router.post("/cloudinary-signature", authenticateToken, async (req, res) => {
   try {
-    if (!req.file) return res.status(400).json({ success: false, message: "No file uploaded" });
+    const { folder, publicId, resourceType = "image" } = req.body || {};
+    const cfg = getCloudinaryConfig();
+    if (!cfg.configured) {
+      return res.status(500).json({ success: false, message: "Cloudinary is not configured" });
+    }
+
+    const timestamp = Math.floor(Date.now() / 1000);
+    const paramsToSign = {
+      timestamp,
+      ...(folder ? { folder } : {}),
+      ...(publicId ? { public_id: publicId } : {}),
+      ...(resourceType ? { resource_type: resourceType } : {}),
+    };
+    const signature = signUploadParams(paramsToSign, cfg.apiSecret);
+
+    return res.json({
+      success: true,
+      cloudName: cfg.cloudName,
+      apiKey: cfg.apiKey,
+      timestamp,
+      signature,
+      folder,
+      publicId,
+      resourceType,
+    });
+  } catch (err) {
+    console.error("Cloudinary signature error", err);
+    return res.status(500).json({ success: false, message: "Failed to generate Cloudinary upload signature" });
+  }
+});
+
+// Save uploaded file URL to database (for tracking after direct Cloudinary upload)
+router.post("/save-url", authenticateToken, async (req, res) => {
+  try {
+    const { fileUrl, cloudinaryPublicId, type = "document" } = req.body;
+
+    if (!fileUrl) {
+      return res.status(400).json({ success: false, message: "fileUrl is required" });
+    }
 
     const user = await User.findOne({ phone: req.user.phone });
     if (!user) return res.status(404).json({ success: false, message: "User not found" });
 
-    const fileUrl = `${getPublicBaseUrl(req)}/uploads/${req.file.filename}`;
-
-    // ✅ Handle type safely - it may not exist in req.body
-    const type = (req.body && req.body.type) || "document";
-
-    // Save in uploads collection
     const newUpload = new Upload({
       userId: user._id,
       type: type,
-      fileName: req.file.filename,
+      fileName: cloudinaryPublicId || `uploaded-${Date.now()}`,
       fileUrl,
+      cloudinaryPublicId,
     });
 
     await newUpload.save();
 
     // If it's a profile photo, also update User
+    if (type === "profilePhoto") {
+      user.profilePhoto = fileUrl;
+      await user.save();
+    }
+
+    return res.json({ success: true, upload: newUpload });
+  } catch (err) {
+    console.error("Save URL error", err);
+    return res.status(500).json({ success: false, message: "Internal server error" });
+  }
+});
+
+// Upload a file (profile photo or document) to Cloudinary
+router.post("/upload", authenticateToken, upload.single("file"), async (req, res) => {
+  try {
+    if (!req.file || !req.file.buffer) return res.status(400).json({ success: false, message: "No file uploaded" });
+
+    const user = await User.findOne({ phone: req.user.phone });
+    if (!user) return res.status(404).json({ success: false, message: "User not found" });
+
+    const mimeType = req.file.mimetype || "application/octet-stream";
+    const isImage = mimeType.startsWith("image/");
+    const resourceType = isImage ? "image" : "raw";
+    const folder = isImage ? "kaamwale/uploads/images" : "kaamwale/uploads/documents";
+    const publicId = `${req.user.phone}-${Date.now()}-${req.file.originalname}`;
+
+    const uploadResult = await uploadFileBufferToCloudinary({
+      buffer: req.file.buffer,
+      mimeType,
+      folder,
+      publicId,
+      resourceType,
+    });
+
+    const fileUrl = uploadResult.secure_url;
+    const type = (req.body && req.body.type) || "document";
+
+    const newUpload = new Upload({
+      userId: user._id,
+      type: type,
+      fileName: req.file.originalname,
+      fileUrl,
+      cloudinaryPublicId: uploadResult.public_id,
+    });
+    await newUpload.save();
+
     if (req.body.type === "profilePhoto") {
       user.profilePhoto = fileUrl;
       await user.save();

@@ -24,9 +24,11 @@ async function checkAdmin(req, res, next) {
 }
 
 function getWeekNumber(date = new Date()) {
-  const firstDay = new Date(date.getFullYear(), 0, 1);
-  const pastDaysOfYear = (date - firstDay) / 86400000;
-  return Math.ceil((pastDaysOfYear + firstDay.getDay() + 1) / 7);
+  const d = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
+  const dayNum = d.getUTCDay() || 7;
+  d.setUTCDate(d.getUTCDate() + 4 - dayNum);
+  const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
+  return Math.ceil((((d - yearStart) / 86400000) + 1) / 7);
 }
 
 router.get('/worker/earnings', authenticateToken, async (req, res) => {

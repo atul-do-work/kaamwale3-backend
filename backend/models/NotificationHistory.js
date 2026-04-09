@@ -9,6 +9,9 @@ const notificationHistorySchema = new mongoose.Schema(
       type: String,
       enum: [
         "job_offer",
+        "job_request",
+        "job_request_accepted",
+        "job_request_declined",
         "job_accepted",
         "job_rejected",
         "job_cancelled",
@@ -25,8 +28,14 @@ const notificationHistorySchema = new mongoose.Schema(
         "forgot_password_otp",
         "password_reset_success",
         "document_verified",
+        "document_rejected",
         "verification_required",
         "account_warning",
+        "account_restricted",
+        "refund_processed",
+        "job_completed",
+        "review_reminder",
+        "ops_alert",
       ],
       required: true,
       index: true,
@@ -34,14 +43,8 @@ const notificationHistorySchema = new mongoose.Schema(
     title: { type: String, required: true },
     body: { type: String, required: true },
     jobId: { type: mongoose.Schema.Types.ObjectId, ref: "Job", index: true },
-    // Metadata
-    metadata: {
-      amount: Number,
-      rating: Number,
-      jobTitle: String,
-      location: String,
-      actionRequired: Boolean,
-    },
+    // Metadata - flexible object for additional data
+    metadata: mongoose.Schema.Types.Mixed,
     // Navigation
     deepLink: String, // to navigate to specific screen on click
     // Read status

@@ -1,4 +1,5 @@
 const express = require("express");
+const mongoose = require("mongoose");
 const { createGigHistoryEvent } = require("../services/gigHistoryService");
 const { cancelDispatchState } = require("../services/dispatchStateService");
 
@@ -137,32 +138,64 @@ function createJobsLifecycleCoreRouter({
           return finish(200, { success: true, message: "Job already accepted by you", job, idempotent: true });
         }
 
-        // Atomic slot claim for bulk jobs: only add worker if current accepted count < requiredWorkers.
-        const updated = await Job.findOneAndUpdate(
-          {
-            _id: jobId,
-            bulkHiring: true,
-            status: { $in: ["pending", "posted", "offered", "accepted"] },
-            "acceptedWorkers.phone": { $ne: workerPhone },
-            $expr: {
-              $lt: [
-                { $size: { $ifNull: ["$acceptedWorkers", []] } },
-                { $ifNull: ["$requiredWorkers", 1] },
-              ],
-            },
-          },
-          {
-            $addToSet: { acceptedWorkers: acceptedWorkerSnapshot },
-          },
-          { new: true }
-        );
+        // Atomic slot claim for bulk jobs using MongoDB transactions
+        const session = await mongoose.startSession();
+        let updated = null;
+        
+        try {
+          await session.withTransaction(async () => {
+            // First, get the current job state
+            const currentJob = await Job.findById(jobId).session(session);
+            if (!currentJob || !currentJob.bulkHiring) {
+              throw new Error('JOB_NOT_AVAILABLE');
+            }
+            
+            // Check if worker already accepted
+            const alreadyAccepted = (currentJob.acceptedWorkers || []).find((w) => w.phone === workerPhone);
+            if (alreadyAccepted) {
+              updated = currentJob;
+              return;
+            }
+            
+            // Check if slots are full
+            const currentAcceptedCount = (currentJob.acceptedWorkers || []).length;
+            const requiredWorkers = currentJob.requiredWorkers || 1;
+            if (currentAcceptedCount >= requiredWorkers) {
+              throw new Error('SLOTS_FULL');
+            }
+            
+            // Check job status
+            if (!["pending", "posted", "offered", "accepted"].includes(currentJob.status)) {
+              throw new Error('JOB_NOT_AVAILABLE');
+            }
+            
+            // Atomically add the worker
+            updated = await Job.findOneAndUpdate(
+              { _id: jobId },
+              {
+                $addToSet: { acceptedWorkers: acceptedWorkerSnapshot },
+              },
+              { new: true, session }
+            );
+          });
+        } catch (error) {
+          await session.endSession();
+          if (error.message === 'SLOTS_FULL' || error.message === 'JOB_NOT_AVAILABLE') {
+            return finish(400, { success: false, message: "Could not accept job (slots full or job not available)" }, false);
+          }
+          throw error;
+        } finally {
+          await session.endSession();
+        }
 
         if (!updated) {
-          const checkJob = await Job.findById(jobId);
-          if (checkJob && checkJob.acceptedWorkers?.find((w) => w.phone === workerPhone)) {
-            return finish(200, { success: true, message: "You have already accepted this job", job: checkJob, idempotent: true });
-          }
           return finish(400, { success: false, message: "Could not accept job (slots full or job not available)" }, false);
+        }
+
+        // Check if this was a duplicate acceptance after transaction
+        const alreadyAcceptedAfter = (updated.acceptedWorkers || []).find((w) => w.phone === workerPhone);
+        if (alreadyAcceptedAfter && alreadyAcceptedAfter.acceptedAt < acceptedWorkerSnapshot.acceptedAt) {
+          return finish(200, { success: true, message: "Job already accepted by you", job: updated, idempotent: true });
         }
 
         const bulkJob = updated;

@@ -37,6 +37,11 @@ const razorpay = new Razorpay({
 
 console.log('✅ Razorpay initialized with Key ID:', process.env.RAZORPAY_KEY_ID.substring(0, 15) + '...');
 
+if (!process.env.RAZORPAY_WEBHOOK_SECRET) {
+  console.error('🚨 FATAL: RAZORPAY_WEBHOOK_SECRET not configured');
+  throw new Error('Razorpay webhook secret is required. Set RAZORPAY_WEBHOOK_SECRET environment variable.');
+}
+
 // ✅ Create Payment Order
 router.post('/create-order', authenticateToken, async (req, res) => {
   try {
@@ -220,13 +225,24 @@ router.post('/verify-payment', authenticateToken, async (req, res) => {
 
     info('✅ Job payment status verified: not yet paid', buildLogContext(req, { orderId, paymentId, jobId, workerPhone }));
 
-    // Calculate current week for payout tracking
+    // Calculate current week for payout tracking (Monday-Sunday week)
     const now = new Date();
-    const weekNumber = Math.ceil((now.getDate() + new Date(now.getFullYear(), 0, 1).getDay()) / 7);
     const weekStart = new Date(now);
-    weekStart.setDate(now.getDate() - now.getDay());
+    const dayOfWeek = weekStart.getDay(); // 0=Sunday, 1=Monday...
+    const diffToMonday = (dayOfWeek + 6) % 7; // Days to subtract to get to Monday
+    weekStart.setDate(now.getDate() - diffToMonday);
+    weekStart.setHours(0, 0, 0, 0);
     const weekEnd = new Date(weekStart);
     weekEnd.setDate(weekStart.getDate() + 6);
+    weekEnd.setHours(23, 59, 59, 999);
+    
+    // Calculate ISO week number (1-53)
+    const getWeekNumber = (date) => {
+      const firstDay = new Date(date.getFullYear(), 0, 1);
+      const pastDaysOfYear = (date - firstDay) / 86400000;
+      return Math.ceil((pastDaysOfYear + firstDay.getDay() + 1) / 7);
+    };
+    const weekNumber = getWeekNumber(now);
 
     // 🔐 STEP 6: ATOMIC wallet update - prevents duplicate credits
     const updatedWallet = await Wallet.findOneAndUpdate(
@@ -435,19 +451,16 @@ router.post('/webhook', async (req, res) => {
   session.startTransaction();
 
   try {
-    const crypto = require('crypto');
     const webhookSignature = req.headers['x-razorpay-signature'];
-
-    // Validate webhook signature (Razorpay authenticity check)
-    // CRITICAL: Webhook secret is different from API key secret
     const webhookSecret = process.env.RAZORPAY_WEBHOOK_SECRET;
-    if (!webhookSecret) {
-      error('🚨 CRITICAL: RAZORPAY_WEBHOOK_SECRET not configured', buildLogContext(req));
-      // Don't crash, just acknowledge (Razorpay will retry)
-      return res.status(200).json({ received: true });
+
+    if (!webhookSignature) {
+      error('🔴 WEBHOOK SIGNATURE MISSING', buildLogContext(req));
+      await session.abortTransaction();
+      return res.status(403).json({ success: false, message: 'Missing webhook signature' });
     }
 
-    const body = JSON.stringify(req.body);
+    const body = req.rawBody || (req.body && typeof req.body === 'object' ? JSON.stringify(req.body) : String(req.body || ''));
     const expectedSignature = crypto
       .createHmac('sha256', webhookSecret)
       .update(body)
@@ -461,9 +474,9 @@ router.post('/webhook', async (req, res) => {
 
     info('✅ Webhook signature verified', buildLogContext(req));
 
-    // Extract event type and payment data
-    const event = req.body.event;
-    const payment = req.body.payload?.payment?.entity;
+    const payload = req.body && typeof req.body === 'object' ? req.body : JSON.parse(body);
+    const event = payload.event;
+    const payment = payload.payload?.payment?.entity;
 
     // Only process payment.captured events
     if (event !== 'payment.captured') {
@@ -554,12 +567,24 @@ router.post('/webhook', async (req, res) => {
     }
 
     // Create WorkerEarnings record (transactional)
+    // Calculate current week for payout tracking (Monday-Sunday week)
     const now = new Date();
-    const weekNumber = Math.ceil((now.getDate() + new Date(now.getFullYear(), 0, 1).getDay()) / 7);
     const weekStart = new Date(now);
-    weekStart.setDate(now.getDate() - now.getDay());
+    const dayOfWeek = weekStart.getDay(); // 0=Sunday, 1=Monday...
+    const diffToMonday = (dayOfWeek + 6) % 7; // Days to subtract to get to Monday
+    weekStart.setDate(now.getDate() - diffToMonday);
+    weekStart.setHours(0, 0, 0, 0);
     const weekEnd = new Date(weekStart);
     weekEnd.setDate(weekStart.getDate() + 6);
+    weekEnd.setHours(23, 59, 59, 999);
+    
+    // Calculate ISO week number (1-53)
+    const getWeekNumber = (date) => {
+      const firstDay = new Date(date.getFullYear(), 0, 1);
+      const pastDaysOfYear = (date - firstDay) / 86400000;
+      return Math.ceil((pastDaysOfYear + firstDay.getDay() + 1) / 7);
+    };
+    const weekNumber = getWeekNumber(now);
 
     await WorkerEarnings.findOneAndUpdate(
       { workerPhone, jobId },

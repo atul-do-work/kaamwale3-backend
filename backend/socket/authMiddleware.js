@@ -6,8 +6,9 @@ function attachSocketAuthMiddleware(io, { jwt, jwtSecret, WorkerModel, User, con
       console.log(`Socket handshake - checking token... token=${token ? `present (${token.substring(0, 20)}...)` : "MISSING"}`);
 
       if (!token) {
-        console.warn(`Socket ${socket.id} connecting WITHOUT token`);
-        return next();
+        console.warn(`Socket ${socket.id} connecting WITHOUT token - DISCONNECTING`);
+        socket.emit('auth_error', { message: 'Authentication required' });
+        return socket.disconnect();
       }
 
       try {

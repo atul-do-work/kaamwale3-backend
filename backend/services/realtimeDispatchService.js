@@ -11,26 +11,60 @@ function createUpdateContractorStats({ Job, ContractorStats }) {
       });
 
       const jobsPosted = todayJobs.length;
-      const jobsCompleted = todayJobs.filter((j) => j.attendanceStatus && String(j.paymentStatus || "").toLowerCase() === "paid").length;
+      const jobsCompleted = todayJobs.filter((j) => {
+        // For single jobs: check attendance and payment
+        if (j.acceptedBy && !Array.isArray(j.acceptedWorkers)) {
+          return j.attendanceStatus && String(j.paymentStatus || "").toLowerCase() === "paid";
+        }
+        // For bulk jobs: check if any worker has attendance 'Present' and payment 'paid'
+        if (Array.isArray(j.acceptedWorkers)) {
+          return j.acceptedWorkers.some(w => w?.attendanceStatus === 'Present' && String(w?.paymentStatus || "").toLowerCase() === "paid");
+        }
+        return false;
+      }).length;
       const workersList = [
         ...new Set(
-          todayJobs.flatMap((j) => [
-            ...(j.acceptedBy ? [j.acceptedBy] : []),
-            ...((Array.isArray(j.acceptedWorkers) ? j.acceptedWorkers : [])
-              .map((w) => w?.phone)
-              .filter(Boolean)),
-          ])
+          todayJobs.flatMap((j) => {
+            const workers = [];
+            // Handle single jobs
+            if (j.acceptedBy && !Array.isArray(j.acceptedWorkers)) {
+              if (j.attendanceStatus && String(j.paymentStatus || "").toLowerCase() === "paid") {
+                workers.push(j.acceptedBy);
+              }
+            }
+            // Handle bulk jobs - only count workers who have been marked present and paid
+            if (Array.isArray(j.acceptedWorkers)) {
+              j.acceptedWorkers.forEach((w) => {
+                if (w?.phone && w.attendanceStatus === 'Present' && String(w.paymentStatus || "").toLowerCase() === "paid") {
+                  workers.push(w.phone);
+                }
+              });
+            }
+            return workers;
+          })
         ),
       ];
-      const totalSpending = todayJobs.reduce((sum, j) => sum + (Number(j.amount) || 0), 0);
+      const totalSpending = todayJobs
+        .filter((j) => {
+          // For single jobs
+          if (j.acceptedBy && !Array.isArray(j.acceptedWorkers)) {
+            return String(j.paymentStatus || "").toLowerCase() === "paid";
+          }
+          // For bulk jobs: check if any worker is paid
+          if (Array.isArray(j.acceptedWorkers)) {
+            return j.acceptedWorkers.some(w => String(w?.paymentStatus || "").toLowerCase() === "paid");
+          }
+          return false;
+        })
+        .reduce((sum, j) => sum + (Number(j.amount) || 0), 0);
 
       let stats = await ContractorStats.findOne({ phone, date: today });
       if (stats) {
         stats.jobsPosted = jobsPosted;
         stats.jobsCompleted = jobsCompleted;
-        stats.workersEngaged = workersList.length;
+        stats.workersEngaged = [...new Set(workersList)].length; // Deduplicate workers
         stats.totalSpending = totalSpending;
-        stats.workersList = workersList;
+        stats.workersList = [...new Set(workersList)]; // Store deduplicated list
         stats.updatedAt = new Date();
       } else {
         stats = new ContractorStats({
@@ -38,9 +72,9 @@ function createUpdateContractorStats({ Job, ContractorStats }) {
           date: today,
           jobsPosted,
           jobsCompleted,
-          workersEngaged: workersList.length,
+          workersEngaged: [...new Set(workersList)].length, // Deduplicate workers
           totalSpending,
-          workersList,
+          workersList: [...new Set(workersList)], // Store deduplicated list
           jobDetails: [],
         });
       }

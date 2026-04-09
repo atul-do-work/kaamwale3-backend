@@ -43,6 +43,14 @@ const walletSchema = new mongoose.Schema(
         provider: { type: String, immutable: true }, // razorpay, internal
         providerEventId: { type: String, immutable: true }, // webhook/payment/payout id
         metadata: { type: mongoose.Schema.Types.Mixed, default: null },
+        audit: {
+          ipAddress: String,
+          userAgent: String,
+          performedBy: String, // admin user ID if manual
+          reason: String, // e.g., "job_post_fee", "refund"
+          sessionId: String,
+          deviceInfo: mongoose.Schema.Types.Mixed,
+        },
       },
     ],
     totalDeposited: { type: Number, default: 0 },

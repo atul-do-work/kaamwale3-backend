@@ -26,6 +26,7 @@ function mountAppRoutes({
   fileUpload,
   getPublicBaseUrl,
   getDistanceFromLatLonInKm,
+  sessionStore,
   connectedWorkers,
   trackingJobs,
   pendingJobTimeouts,
@@ -56,10 +57,11 @@ function mountAppRoutes({
       emitJobCancelledToUsers,
       logJobEvent,
       updateContractorStats,
+      offerJobToNextWorker,
     })
   );
   app.use("/", createNotificationsRouter({ io }));
-  app.use("/", createAuthSupportRouter({ JWT_SECRET: jwtSecret, sendNotificationToUserPhone }));
+  app.use("/", createAuthSupportRouter({ JWT_SECRET: jwtSecret, sendNotificationToUserPhone, sessionStore }));
   app.use(
     "/",
     createWorkersRouter({

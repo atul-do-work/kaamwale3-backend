@@ -17,6 +17,66 @@ function attachSocketConnectionHandlers(io, deps) {
     sendNotificationToUserPhone,
   } = deps;
 
+  // ✅ TTL cleanup for connectedWorkers Map to prevent memory leaks
+  const WORKER_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+  const CLEANUP_INTERVAL_MS = 60 * 60 * 1000; // Run cleanup every hour
+  
+  // Store connection timestamps
+  const workerConnectionTimes = new Map(); // socketId -> timestamp
+  
+  // Cleanup function
+  function cleanupExpiredWorkers() {
+    const now = Date.now();
+    const expiredSockets = [];
+    
+    for (const [socketId, timestamp] of workerConnectionTimes.entries()) {
+      if (now - timestamp > WORKER_TTL_MS) {
+        expiredSockets.push(socketId);
+      }
+    }
+    
+    for (const socketId of expiredSockets) {
+      const worker = connectedWorkers.get(socketId);
+      if (worker) {
+        console.log(`🧹 Cleaning up expired worker: ${worker.name} (${worker.phone})`);
+        connectedWorkers.delete(socketId);
+        workerConnectionTimes.delete(socketId);
+        
+        // Update database to mark worker as offline
+        try {
+          WorkerModel.findOneAndUpdate(
+            { socketId: socketId }, 
+            { $set: { socketId: "", isAvailable: false } }
+          ).catch(err => console.error("Error updating expired worker:", err));
+        } catch (e) {
+          console.error("Error cleaning up expired worker in DB:", e);
+        }
+      }
+    }
+    
+    if (expiredSockets.length > 0) {
+      console.log(`🧹 Cleaned up ${expiredSockets.length} expired workers. Total connected: ${connectedWorkers.size}`);
+    }
+  }
+  
+  // Start cleanup interval
+  const cleanupInterval = setInterval(cleanupExpiredWorkers, CLEANUP_INTERVAL_MS);
+  
+  // Cleanup on process exit
+  process.on('SIGINT', () => {
+    clearInterval(cleanupInterval);
+    console.log('🧹 Cleaning up all workers on shutdown...');
+    connectedWorkers.clear();
+    workerConnectionTimes.clear();
+  });
+  
+  process.on('SIGTERM', () => {
+    clearInterval(cleanupInterval);
+    console.log('🧹 Cleaning up all workers on shutdown...');
+    connectedWorkers.clear();
+    workerConnectionTimes.clear();
+  });
+
 io.on("connection", (socket) => {
   console.log("User Connected:", socket.id, "user:", socket.user?.phone || socket.user?.name || "unknown");
 
@@ -106,6 +166,9 @@ io.on("connection", (socket) => {
           socketId: socket.id,
           isAvailable: isAvailable, // ✅ Now fetches from USER model (source of truth)
         });
+
+        // ✅ Store connection timestamp for TTL cleanup
+        workerConnectionTimes.set(socket.id, Date.now());
 
         socket.workerName = name;
         socket.workerType = workerType;
@@ -415,6 +478,7 @@ io.on("connection", (socket) => {
     if (worker) {
       console.log(`❌ Worker disconnected: ${worker.name}`);
       connectedWorkers.delete(socket.id);
+      workerConnectionTimes.delete(socket.id); // ✅ Clean up timestamp
       console.log(`✅ Total connected workers now: ${connectedWorkers.size}`);
 
       // Clear socketId in DB for this worker
@@ -425,6 +489,7 @@ io.on("connection", (socket) => {
       }
     } else {
       console.log("Disconnected:", socket.id);
+      workerConnectionTimes.delete(socket.id); // ✅ Clean up timestamp even if worker not found
     }
   });
 });

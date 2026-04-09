@@ -93,8 +93,74 @@ async function uploadImagePathToCloudinary({
   });
 }
 
+async function uploadFileBufferToCloudinary({
+  buffer,
+  mimeType = "application/octet-stream",
+  folder = "kaamwale",
+  publicId,
+  resourceType = "auto", // auto, image, video, raw
+}) {
+  const cfg = getCloudinaryConfig();
+  if (!cfg.configured) {
+    throw new Error("Cloudinary is not configured");
+  }
+
+  if (!Buffer.isBuffer(buffer) || buffer.length === 0) {
+    throw new Error("Empty file buffer");
+  }
+
+  const timestamp = Math.floor(Date.now() / 1000);
+  const params = {
+    folder,
+    public_id: publicId,
+    timestamp,
+    resource_type: resourceType,
+  };
+  const signature = signUploadParams(params, cfg.apiSecret);
+
+  const form = new FormData();
+  form.append("file", `data:${mimeType};base64,${buffer.toString("base64")}`);
+  form.append("api_key", cfg.apiKey);
+  form.append("timestamp", String(timestamp));
+  form.append("signature", signature);
+  if (folder) form.append("folder", folder);
+  if (publicId) form.append("public_id", publicId);
+  if (resourceType !== "auto") form.append("resource_type", resourceType);
+
+  const endpoint = `https://api.cloudinary.com/v1_1/${cfg.cloudName}/${resourceType === "auto" ? "auto" : resourceType}/upload`;
+  const response = await fetch(endpoint, { method: "POST", body: form });
+  const payload = await response.json().catch(() => ({}));
+
+  if (!response.ok || !payload?.secure_url) {
+    const reason = payload?.error?.message || "Cloudinary upload failed";
+    throw new Error(reason);
+  }
+
+  return payload;
+}
+
+async function uploadFilePathToCloudinary({
+  filePath,
+  mimeType = "application/octet-stream",
+  folder = "kaamwale",
+  publicId,
+  resourceType = "auto",
+}) {
+  const fileBuffer = await fs.readFile(filePath);
+  return uploadFileBufferToCloudinary({
+    buffer: fileBuffer,
+    mimeType,
+    folder,
+    publicId,
+    resourceType,
+  });
+}
+
 module.exports = {
   getCloudinaryConfig,
+  signUploadParams,
   uploadImageBufferToCloudinary,
   uploadImagePathToCloudinary,
+  uploadFileBufferToCloudinary,
+  uploadFilePathToCloudinary,
 };

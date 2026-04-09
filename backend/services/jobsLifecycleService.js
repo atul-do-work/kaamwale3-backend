@@ -6,7 +6,7 @@ const WorkerEarnings = require("../models/WorkerEarnings");
 const NotificationHistory = require("../models/NotificationHistory");
 const CancellationLog = require("../models/CancellationLog");
 const ActivityLog = require("../models/ActivityLog");
-const { updateGigDataOnCompletion } = require("../utils/gigsDataTracker");
+const { updateGigDataOnCompletion, updateGigDataOnCancellation } = require("../utils/gigsDataTracker");
 const { createGigHistoryEvent } = require("./gigHistoryService");
 const { cancelDispatchState } = require("./dispatchStateService");
 
@@ -20,6 +20,10 @@ const PAYOUT_CYCLE_ANCHOR_ISO = process.env.PAYOUT_CYCLE_ANCHOR_ISO || "2025-02-
 const PAYOUT_CYCLE_MS = 7 * 24 * 60 * 60 * 1000;
 const CANCEL_REFUND_BEFORE_ACCEPT = Number(process.env.CANCEL_REFUND_BEFORE_ACCEPT || 25);
 const CANCEL_FEE_AFTER_ACCEPT = Number(process.env.CANCEL_FEE_AFTER_ACCEPT || 0);
+const WORKER_CANCEL_WINDOW_MINUTES = Number(process.env.WORKER_CANCEL_WINDOW_MINUTES || 10);
+const WORKER_CANCEL_LATE_FEE = Number(process.env.WORKER_CANCEL_LATE_FEE || 100);
+const WORKER_CANCEL_MAX_IN_WINDOW = Number(process.env.WORKER_CANCEL_MAX_IN_WINDOW || 3);
+const WORKER_CANCEL_WINDOW_HOURS = Number(process.env.WORKER_CANCEL_WINDOW_HOURS || 168);
 const ALLOWED_CANCELLATION_REASONS = new Set([
   "no_workers_available",
   "worker_not_responding",
@@ -170,6 +174,16 @@ async function markAttendance({ jobId, status, workerPhone, userPhone, deps }) {
     return { code: 200, body: { success: true, job } };
   }
 
+  // 🔐 CRITICAL: Validate that user marking attendance is actually the contractor
+  // and that a valid worker has accepted this job
+  if (userPhone !== job.contractorPhone) {
+    return { code: 403, body: { success: false, message: "Only the contractor can mark attendance" } };
+  }
+
+  if (!job.acceptedBy && (!job.acceptedWorkers || job.acceptedWorkers.length === 0)) {
+    return { code: 400, body: { success: false, message: "No worker has accepted this job yet" } };
+  }
+
   const oldState = { status: job.status, attendanceStatus: job.attendanceStatus, paymentStatus: job.paymentStatus };
   job.attendanceStatus = status;
   job.attendanceTime = new Date();
@@ -293,25 +307,49 @@ async function payJob({ jobId, mode, workerPhone, idempotencyKey, userPhone, use
 
     try {
       let workerWallet = await Wallet.findOne({ phone: workerPhone });
-      if (!workerWallet) workerWallet = new Wallet({ phone: workerPhone, balance: 0, availableBalance: 0, pocketBalance: 0 });
+      if (!workerWallet) {
+        // Create wallet if it doesn't exist
+        workerWallet = new Wallet({ phone: workerPhone, balance: 0, availableBalance: 0, pocketBalance: 0 });
+        await workerWallet.save();
+      }
+      
       const creditAmount = Number(job.amount) || 0;
-      workerWallet.availableBalance = Number(workerWallet.availableBalance ?? workerWallet.balance ?? 0) + creditAmount;
-      workerWallet.balance = Number(workerWallet.availableBalance || 0);
-      workerWallet.totalEarned = Number(workerWallet.totalEarned || 0) + creditAmount;
-      workerWallet.transactions.push({
-        type: "payment",
-        amount: creditAmount,
-        date: new Date(),
-        jobId: job._id,
-        source: "app",
-        provider: "internal",
-        status: "completed",
-        description: `Job payment credited to available balance (${job.title})`,
-        metadata: { balanceType: "available", workerPhone },
-      });
-      await workerWallet.save();
+      if (creditAmount <= 0) {
+        console.error("Invalid payment amount for job:", job._id);
+        throw new Error("Invalid payment amount");
+      }
+
+      // 🔐 ATOMIC WALLET UPDATE: Use $inc for atomicity (prevents race conditions)
+      const updatedWorkerWallet = await Wallet.findOneAndUpdate(
+        { phone: workerPhone },
+        {
+          $inc: {
+            balance: creditAmount,
+            availableBalance: creditAmount,
+            totalEarned: creditAmount
+          },
+          $push: {
+            transactions: {
+              type: "payment",
+              amount: creditAmount,
+              date: new Date(),
+              jobId: job._id,
+              source: "app",
+              provider: "internal",
+              status: "completed",
+              description: `Job payment credited to available balance (${job.title})`,
+              metadata: { balanceType: "available", workerPhone },
+            }
+          }
+        },
+        { new: true }
+      );
+
+      if (!updatedWorkerWallet) {
+        throw new Error("Failed to update worker wallet");
+      }
     } catch (walletErr) {
-      console.error("Error updating worker wallet after payment:", walletErr);
+      console.error("Error updating worker wallet after bulk payment:", walletErr);
     }
 
     try {
@@ -420,24 +458,47 @@ async function payJob({ jobId, mode, workerPhone, idempotencyKey, userPhone, use
   }
 
   try {
-    let workerWallet = await Wallet.findOne({ phone: job.acceptedBy });
-    if (!workerWallet) workerWallet = new Wallet({ phone: job.acceptedBy, balance: 0, availableBalance: 0, pocketBalance: 0 });
+    // 🔐 CRITICAL: Verify contractor has sufficient funds before crediting worker (phantom credit prevention)
+    const contractorWallet = await Wallet.findOne({ phone: job.contractorPhone });
+    if (!contractorWallet) {
+      console.warn(`Warning: Contractor wallet not found for ${job.contractorPhone}`);
+    }
+    
     const creditAmount = Number(job.amount) || 0;
-    workerWallet.availableBalance = Number(workerWallet.availableBalance ?? workerWallet.balance ?? 0) + creditAmount;
-    workerWallet.balance = Number(workerWallet.availableBalance || 0);
-    workerWallet.totalEarned = Number(workerWallet.totalEarned || 0) + creditAmount;
-    workerWallet.transactions.push({
-      type: "payment",
-      amount: creditAmount,
-      date: new Date(),
-      jobId: job._id,
-      source: "app",
-      provider: "internal",
-      status: "completed",
-      description: `Job payment credited to available balance (${job.title})`,
-      metadata: { balanceType: "available" },
-    });
-    await workerWallet.save();
+    if (creditAmount <= 0) {
+      console.error("Invalid payment amount for job:", job._id);
+      return finalize({ code: 400, body: { success: false, message: "Invalid payment amount" } });
+    }
+
+    // 🔐 ATOMIC WALLET UPDATE: Use $inc for atomicity (prevents race conditions)
+    const updatedWorkerWallet = await Wallet.findOneAndUpdate(
+      { phone: job.acceptedBy },
+      {
+        $inc: {
+          balance: creditAmount,
+          availableBalance: creditAmount,
+          totalEarned: creditAmount
+        },
+        $push: {
+          transactions: {
+            type: "payment",
+            amount: creditAmount,
+            date: new Date(),
+            jobId: job._id,
+            source: "app",
+            provider: "internal",
+            status: "completed",
+            description: `Job payment credited to available balance (${job.title})`,
+            metadata: { balanceType: "available" },
+          }
+        }
+      },
+      { new: true, upsert: true }
+    );
+
+    if (!updatedWorkerWallet) {
+      throw new Error("Failed to update worker wallet");
+    }
   } catch (walletErr) {
     console.error("Error updating worker wallet after payment:", walletErr);
   }
@@ -767,6 +828,90 @@ async function cancelJob({ jobId, reason, reasonDescription, idempotencyKey, use
     return finalize({ code: 404, body: { success: false, message: "Job not found" } });
   }
 
+  let cancellationFee = 0;
+  let cancelledBy = "admin";
+  if (userPhone === job.contractorPhone) cancelledBy = "contractor";
+  if (userPhone === job.acceptedBy) cancelledBy = "worker";
+  if (cancelledBy === "worker" && Array.isArray(job.acceptedWorkers)) {
+    const acceptedWorkerIndex = job.acceptedWorkers.findIndex((w) => String(w?.phone || "").trim() === String(userPhone || "").trim());
+    if (acceptedWorkerIndex !== -1) cancelledBy = "worker";
+  }
+
+  if (cancelledBy === "worker") {
+    const allowed = new Set(["accepted", "in_progress"]);
+    if (!allowed.has(job.status)) {
+      return finalize({
+        code: 403,
+        body: {
+          success: false,
+          message: "Worker cancel is only allowed for accepted or in_progress jobs.",
+        },
+      });
+    }
+
+    if (String(job.paymentStatus || "").toLowerCase() === "paid" || job.status === "completed") {
+      return finalize({
+        code: 403,
+        body: {
+          success: false,
+          message: "Cancellation is not allowed after payment or completion.",
+        },
+      });
+    }
+
+    const normalizedWorkerPhone = String(userPhone || "").replace(/\D/g, "").slice(-10);
+    const acceptedWorkerEntry = Array.isArray(job.acceptedWorkers)
+      ? job.acceptedWorkers.find((w) => String(w?.phone || "").replace(/\D/g, "").slice(-10) === normalizedWorkerPhone)
+      : null;
+    const acceptanceTime = acceptedWorkerEntry?.acceptedAt
+      ? new Date(acceptedWorkerEntry.acceptedAt)
+      : job.acceptedAt
+      ? new Date(job.acceptedAt)
+      : null;
+
+    if (!acceptanceTime || Number.isNaN(acceptanceTime.getTime())) {
+      return finalize({
+        code: 400,
+        body: {
+          success: false,
+          message: "Cannot determine accepted time for cancellation policy.",
+        },
+      });
+    }
+
+    const minutesSinceAcceptance = Math.round((Date.now() - acceptanceTime.getTime()) / 60000);
+    if (minutesSinceAcceptance > WORKER_CANCEL_WINDOW_MINUTES) {
+      cancellationFee = WORKER_CANCEL_LATE_FEE;
+    }
+
+    const worker = await WorkerModel.findOne({ phone: userPhone });
+    if (worker) {
+      const cutoff = new Date(Date.now() - WORKER_CANCEL_WINDOW_HOURS * 60 * 60 * 1000);
+      const recentCancellations = (worker.gigsData?.cancellationDates || []).filter((date) => date && new Date(date) >= cutoff);
+      if (recentCancellations.length >= WORKER_CANCEL_MAX_IN_WINDOW) {
+        worker.isBlocked = true;
+        worker.blockedReason = "Exceeded worker cancellation limit";
+        await worker.save();
+
+        return finalize({
+          code: 429,
+          body: {
+            success: false,
+            message: "Cancellation blocked because your cancellation rate is too high. Please contact support.",
+          },
+        });
+      }
+
+      if (minutesSinceAcceptance > WORKER_CANCEL_WINDOW_MINUTES) {
+        worker.riskFlags = Array.isArray(worker.riskFlags) ? worker.riskFlags : [];
+        if (!worker.riskFlags.includes("late_cancellation")) {
+          worker.riskFlags.push("late_cancellation");
+        }
+        await worker.save();
+      }
+    }
+  }
+
   if (job.status === "cancelled" || job.isCancelled === true) {
     const existingCancellation = await CancellationLog.findOne({ jobId: job._id }).sort({ cancelledAt: -1 }).lean();
     return finalize({
@@ -780,16 +925,11 @@ async function cancelJob({ jobId, reason, reasonDescription, idempotencyKey, use
     });
   }
 
-  let cancelledBy = "admin";
-  if (userPhone === job.contractorPhone) cancelledBy = "contractor";
-  if (userPhone === job.acceptedBy) cancelledBy = "worker";
-
   const hasAssignedWorker =
     Boolean(job.acceptedBy) ||
     (Array.isArray(job.acceptedWorkers) && job.acceptedWorkers.some((w) => Boolean(w?.phone)));
 
   let refundAmount = 0;
-  let cancellationFee = 0;
   if (cancelledBy === "contractor" && !hasAssignedWorker) {
     refundAmount = Number.isFinite(CANCEL_REFUND_BEFORE_ACCEPT) ? Math.max(0, CANCEL_REFUND_BEFORE_ACCEPT) : 25;
   }
@@ -834,12 +974,39 @@ async function cancelJob({ jobId, reason, reasonDescription, idempotencyKey, use
   await cancellation.save();
 
   const oldState = { status: job.status, paymentStatus: job.paymentStatus };
-  job.status = "cancelled";
-  job.isCancelled = true;
-  job.cancelledAt = cancellation.cancelledAt;
-  job.cancelledBy = cancelledBy;
-  job.cancellationReason = normalizedReason;
-  job.cancellationReasonDescription = normalizedReasonDescription || null;
+  let reopened = false;
+  if (cancelledBy === "worker") {
+    reopened = true;
+    if (job.bulkHiring) {
+      job.acceptedWorkers = (job.acceptedWorkers || []).filter(
+        (w) => String(w?.phone || "").replace(/\D/g, "").slice(-10) !== String(userPhone || "").replace(/\D/g, "").slice(-10)
+      );
+      const remaining = job.acceptedWorkers.length;
+      if (remaining < (job.requiredWorkers || 1)) {
+        job.status = "pending";
+      }
+    } else {
+      job.status = "pending";
+      job.acceptedBy = null;
+      job.acceptedWorker = null;
+      job.acceptedAt = null;
+    }
+    job.attendanceStatus = null;
+    job.attendanceTime = null;
+    job.isCancelled = false;
+    job.cancelledAt = null;
+    job.cancelledBy = null;
+    job.cancellationReason = null;
+    job.cancellationReasonDescription = null;
+  } else {
+    job.status = "cancelled";
+    job.isCancelled = true;
+    job.cancelledAt = cancellation.cancelledAt;
+    job.cancelledBy = cancelledBy;
+    job.cancellationReason = normalizedReason;
+    job.cancellationReasonDescription = normalizedReasonDescription || null;
+  }
+
   await job.save();
 
   try {
@@ -934,7 +1101,7 @@ async function cancelJob({ jobId, reason, reasonDescription, idempotencyKey, use
     ...job.toObject(),
     _id: job._id.toString(),
     id: job._id.toString(),
-    status: "cancelled",
+    status: job.status,
     cancelledBy,
     cancelledAt: cancellation.cancelledAt,
   };
@@ -943,15 +1110,31 @@ async function cancelJob({ jobId, reason, reasonDescription, idempotencyKey, use
     job.acceptedBy,
     ...(Array.isArray(job.acceptedWorkers) ? job.acceptedWorkers.map((w) => w?.phone).filter(Boolean) : []),
   ];
-  if (typeof emitJobCancelledToUsers === "function") {
-    await emitJobCancelledToUsers(cancellationPayload, targetUsers);
+
+  if (reopened) {
+    if (typeof emitJobUpdatedToUsers === "function") {
+      await emitJobUpdatedToUsers(cancellationPayload, targetUsers);
+    } else {
+      io.emit("jobUpdated", cancellationPayload);
+    }
+    if (typeof deps?.offerJobToNextWorker === "function") {
+      try {
+        await deps.offerJobToNextWorker(job);
+      } catch (err) {
+        console.error("Error auto reassigning job after worker cancellation:", err);
+      }
+    }
   } else {
-    io.emit("jobCancelled", cancellationPayload);
-  }
-  if (typeof emitJobUpdatedToUsers === "function") {
-    await emitJobUpdatedToUsers(cancellationPayload, targetUsers);
-  } else {
-    io.emit("jobUpdated", cancellationPayload);
+    if (typeof emitJobCancelledToUsers === "function") {
+      await emitJobCancelledToUsers(cancellationPayload, targetUsers);
+    } else {
+      io.emit("jobCancelled", cancellationPayload);
+    }
+    if (typeof emitJobUpdatedToUsers === "function") {
+      await emitJobUpdatedToUsers(cancellationPayload, targetUsers);
+    } else {
+      io.emit("jobUpdated", cancellationPayload);
+    }
   }
 
   if (pendingJobTimeouts.has(jobId)) {

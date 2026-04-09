@@ -50,46 +50,112 @@ async function checkJobMatchesForWorker(workerPhone) {
       console.log(`⚠️ Worker ${workerPhone} has no location data`);
       return;
     }
+
+    // ✅ CRITICAL: Check if worker has unpaid jobs before offering new ones
+    const hasUnpaidJob = await Job.findOne({
+      $and: [
+        {
+          $or: [
+            { acceptedBy: workerPhone, paymentStatus: { $ne: "paid" } }, // Single job
+            {
+              acceptedWorkers: {
+                $elemMatch: {
+                  phone: workerPhone,
+                  paymentStatus: { $ne: "paid" },
+                },
+              },
+            }, // Bulk job (per-worker)
+          ],
+        },
+        { status: { $nin: ["cancelled", "expired", "completed"] } },
+      ],
+    });
+
+    if (hasUnpaidJob) {
+      console.log(`⏭️ Worker ${workerPhone} has unpaid job, skipping job matching...`);
+      return; // Skip workers with unpaid jobs
+    }
+
+    // ✅ OPTIMIZATION: Use geospatial aggregation instead of N+1 queries
+    // Build wage range filter
+    const workerWage = userRecord.expectedWage;
+    const wageRanges = {
+      "0-400": { min: 0, max: 400 },
+      "400-550": { min: 400, max: 550 },
+      "550-700": { min: 550, max: 700 },
+      "700-max": { min: 700, max: 999999 }
+    };
+    const wageRange = wageRanges[workerWage];
     
-    // Fetch all pending jobs
-    const pendingJobs = await Job.find({ status: 'pending' }).limit(20);
-    console.log(`📋 [Availability] Checking ${pendingJobs.length} pending jobs for ${workerPhone}...`);
+    // Build aggregation pipeline for efficient geospatial matching
+    const pipeline = [
+      {
+        $geoNear: {
+          near: {
+            type: "Point",
+            coordinates: [workerLon, workerLat] // [longitude, latitude]
+          },
+          distanceField: "distanceKm",
+          maxDistance: 10000, // 10km in meters
+          spherical: true,
+          query: {
+            status: "pending",
+            declinedBy: { $ne: workerPhone }, // Worker hasn't declined this job
+            ...(userRecord.mainSkill && { workerType: userRecord.mainSkill }), // Skill match using workerType field
+            ...(wageRange && {
+              amount: {
+                $gte: wageRange.min,
+                $lte: wageRange.max
+              }
+            })
+          }
+        }
+      },
+      {
+        $lookup: {
+          from: "users",
+          let: { contractorPhone: "$contractorPhone" },
+          pipeline: [
+            {
+              $match: {
+                $expr: { $eq: ["$phone", "$$contractorPhone"] }
+              }
+            },
+            {
+              $project: {
+                premiumPlan: 1,
+                isAvailable: 1
+              }
+            }
+          ],
+          as: "contractor"
+        }
+      },
+      {
+        $match: {
+          "contractor.0.isAvailable": { $ne: false } // Contractor is available
+        }
+      },
+      {
+        $sort: {
+          distanceKm: 1, // Closest jobs first
+          createdAt: -1 // Most recent first
+        }
+      },
+      {
+        $limit: 10 // Limit results to prevent overload
+      }
+    ];
+
+    const matchingJobs = await Job.aggregate(pipeline);
+    console.log(`📋 [Availability] Found ${matchingJobs.length} matching jobs for ${workerPhone}...`);
     
     let matchCount = 0;
-    for (const job of pendingJobs) {
-      // Check if worker has declined this job (phone-only identity)
-      const declinedBy = Array.isArray(job.declinedBy) ? job.declinedBy : [];
-      if (declinedBy.includes(workerPhone)) {
-        continue;
-      }
+    for (const job of matchingJobs) {
+      // Additional validation (already filtered by aggregation, but double-check)
+      if (job.distanceKm > 10) continue; // Shouldn't happen due to maxDistance, but safety check
       
-      // Check skill match
-      if (job.description && job.description !== userRecord.mainSkill) {
-        continue;
-      }
-      
-      // Check wage match (same logic as in findNearbyWorkers)
-      const jobAmount = parseInt(job.amount);
-      const workerWage = userRecord.expectedWage;
-      const ranges = {
-        "0-400": { min: 0, max: 400 },
-        "400-550": { min: 400, max: 550 },
-        "550-700": { min: 550, max: 700 },
-        "700-max": { min: 700, max: 999999 }
-      };
-      const range = ranges[workerWage];
-      if (range && !(jobAmount >= range.min && jobAmount <= range.max)) {
-        continue;
-      }
-      
-      // Check distance (10km radius)
-      const distKm = getDistanceFromLatLonInKm(job.lat, job.lon, workerLat, workerLon);
-      if (distKm > 10) {
-        continue;
-      }
-      
-      // MATCH FOUND!
-      console.log(`✅ [Availability] Worker ${workerPhone} matches job ${job._id} (${job.title}, ₹${job.amount}, ${distKm.toFixed(2)}km away)`);
+      console.log(`✅ [Availability] Worker ${workerPhone} matches job ${job._id} (${job.title}, ₹${job.amount}, ${job.distanceKm.toFixed(2)}km away)`);
       matchCount++;
       
       // Offer the job  
@@ -143,52 +209,96 @@ async function offerJobToNextWorker(job) {
     // ✅ For bulk hiring, also skip workers already in acceptedWorkers
     const acceptedPhones = (job.bulkHiring && job.acceptedWorkers) ? job.acceptedWorkers.map(w => w.phone) : [];
     const candidates = [];
-    for (const worker of currentNearbyWorkers) {
-      // Canonical decline identity is phone.
-      if (declinedWorkerIds.includes(worker.phone)) {
-        continue; // Skip declined workers
-      }
+    
+    // ✅ BULK OPTIMIZATION: Fetch all user records and unpaid job checks in single queries
+    const candidatePhones = currentNearbyWorkers
+      .filter(worker => !declinedWorkerIds.includes(worker.phone) && 
+                       !(job.bulkHiring && acceptedPhones.includes(worker.phone)))
+      .map(worker => worker.phone);
+    
+    if (candidatePhones.length === 0) {
+      // No candidates after filtering
+      console.log(`⏳ No candidate workers for job ${job._id} after filtering declined/accepted`);
+      // ... existing retry logic ...
+      const RETRY_SECONDS = 30;
+      const retryTimeoutId = setTimeout(async () => {
+        try {
+          const jobCheck = await Job.findById(job._id);
+          if (jobCheck && jobCheck.status === 'pending') {
+            console.log(`🔄 Retrying search for job ${job._id}...`);
+            await offerJobToNextWorker(jobCheck);
+          }
+        } catch (e) {
+          console.error('Error in job retry timeout:', e);
+        }
+      }, RETRY_SECONDS * 1000);
       
-      // ✅ For bulk hiring, skip workers who already accepted
-      if (job.bulkHiring && acceptedPhones.includes(worker.phone)) {
-        console.log(`✅ Worker ${worker.name} (${worker.phone}) already accepted this bulk job, skipping...`);
+      pendingJobTimeouts.set(job._id.toString(), retryTimeoutId);
+      await scheduleDispatchState({
+        jobId: job._id,
+        type: "retry_offer",
+        runAt: new Date(Date.now() + RETRY_SECONDS * 1000),
+        metadata: { reason: "no_available_workers" },
+      });
+      return;
+    }
+    
+    // Bulk fetch user availability
+    const userRecords = await User.find({ 
+      phone: { $in: candidatePhones },
+      isAvailable: true 
+    }).select('phone isAvailable fcmToken');
+    
+    const availablePhones = new Set(userRecords.map(u => u.phone));
+    const userMap = new Map(userRecords.map(u => [u.phone, u]));
+    
+    // Bulk check for unpaid jobs
+    const unpaidJobs = await Job.find({
+      $and: [
+        {
+          $or: [
+            { acceptedBy: { $in: candidatePhones }, paymentStatus: { $ne: "paid" } },
+            {
+              acceptedWorkers: {
+                $elemMatch: {
+                  phone: { $in: candidatePhones },
+                  paymentStatus: { $ne: "paid" },
+                },
+              },
+            },
+          ],
+        },
+        { status: { $nin: ["cancelled", "expired", "completed"] } },
+      ],
+    }).select('acceptedBy acceptedWorkers');
+    
+    // Build set of phones with unpaid jobs
+    const phonesWithUnpaidJobs = new Set();
+    unpaidJobs.forEach(job => {
+      if (job.acceptedBy && candidatePhones.includes(job.acceptedBy)) {
+        phonesWithUnpaidJobs.add(job.acceptedBy);
+      }
+      if (job.acceptedWorkers) {
+        job.acceptedWorkers.forEach(worker => {
+          if (candidatePhones.includes(worker.phone) && worker.paymentStatus !== "paid") {
+            phonesWithUnpaidJobs.add(worker.phone);
+          }
+        });
+      }
+    });
+    
+    // Filter candidates based on availability and unpaid jobs
+    for (const worker of currentNearbyWorkers) {
+      if (!availablePhones.has(worker.phone)) {
+        console.log(`🔴 Worker ${worker.name} (${worker.phone}) is OFFLINE in User model, skipping...`);
         continue;
       }
       
-      // ✅ CHECK: Is worker online/available in USER model (primary source of truth)?
-      const userRecord = await User.findOne({ phone: worker.phone });
-      if (!userRecord || !userRecord.isAvailable) {
-        console.log(`🔴 Worker ${worker.name} (${worker.phone}) is OFFLINE in User model (isAvailable: ${userRecord?.isAvailable}), skipping...`);
-        continue; // Skip offline workers
-      }
-      
-      // ✅ CHECK: Does this worker have an unpaid job? (single or bulk)
-      // Bulk unpaid must be checked per worker entry (acceptedWorkers.$.paymentStatus), not job-level paymentStatus.
-      const hasUnpaidJob = await Job.findOne({
-        $and: [
-          {
-            $or: [
-              { acceptedBy: worker.phone, paymentStatus: { $ne: "paid" } }, // Single job
-              {
-                acceptedWorkers: {
-                  $elemMatch: {
-                    phone: worker.phone,
-                    paymentStatus: { $ne: "paid" },
-                  },
-                },
-              }, // Bulk job (per-worker)
-            ],
-          },
-          { status: { $nin: ["cancelled", "expired", "completed"] } },
-        ],
-      });
-      
-      if (hasUnpaidJob) {
+      if (phonesWithUnpaidJobs.has(worker.phone)) {
         console.log(`⏭️ Worker ${worker.name} (${worker.phone}) has unpaid job, skipping...`);
-        continue; // Skip workers with unpaid jobs
+        continue;
       }
       
-      // This worker is available - add to candidates
       candidates.push(worker);
     }
     
@@ -276,7 +386,7 @@ async function offerJobToNextWorker(job) {
 
           // Send push notification if available
           try {
-            const worker = await User.findOne({ phone: candidate.phone });
+            const worker = userMap.get(candidate.phone);
             if (worker && worker.fcmToken) {
               await sendNotificationToUserPhone(worker.phone, {
                 type: 'job_offer',
@@ -370,7 +480,7 @@ async function offerJobToNextWorker(job) {
       
       // ✅ ALSO SEND FIREBASE PUSH NOTIFICATION FOR FOREGROUND ALERT
       try {
-        const worker = await User.findOne({ phone: nextWorker.phone });
+        const worker = userMap.get(nextWorker.phone);
         if (worker && worker.fcmToken) {
           console.log(`📲 Sending Firebase push notification to ${nextWorker.name}...`);
           const pushResult = await sendNotificationToUserPhone(worker.phone, {
@@ -438,7 +548,57 @@ async function offerJobToNextWorker(job) {
   }
 }
 
-  return { checkJobMatchesForWorker, offerJobToNextWorker };
+  // Cleanup function for expired timeouts to prevent memory leaks
+  function cleanupExpiredTimeouts() {
+    const now = Date.now();
+    
+    // Cleanup pendingJobTimeouts
+    for (const [jobId, timeoutId] of pendingJobTimeouts.entries()) {
+      // Check if job still exists and is relevant
+      Job.findById(jobId).select('status').lean().then(job => {
+        if (!job || !['pending', 'offered', 'accepted'].includes(job.status)) {
+          clearTimeout(timeoutId);
+          pendingJobTimeouts.delete(jobId);
+        }
+      }).catch(err => {
+        console.warn(`Error checking job ${jobId} for cleanup:`, err.message);
+        // If job doesn't exist, clean up the timeout
+        clearTimeout(timeoutId);
+        pendingJobTimeouts.delete(jobId);
+      });
+    }
+    
+    // Cleanup recentOfferTargets
+    for (const [key, ts] of recentOfferTargets.entries()) {
+      if (now - ts > RECENT_OFFER_TTL_MS) {
+        recentOfferTargets.delete(key);
+      }
+    }
+  }
+  
+  // Run cleanup every 5 minutes
+  const cleanupInterval = setInterval(cleanupExpiredTimeouts, 5 * 60 * 1000);
+  
+  // Cleanup on process exit
+  process.on('SIGINT', () => {
+    clearInterval(cleanupInterval);
+    // Clear all pending timeouts
+    for (const timeoutId of pendingJobTimeouts.values()) {
+      clearTimeout(timeoutId);
+    }
+    pendingJobTimeouts.clear();
+  });
+  
+  process.on('SIGTERM', () => {
+    clearInterval(cleanupInterval);
+    // Clear all pending timeouts
+    for (const timeoutId of pendingJobTimeouts.values()) {
+      clearTimeout(timeoutId);
+    }
+    pendingJobTimeouts.clear();
+  });
+
+  return { checkJobMatchesForWorker, offerJobToNextWorker, cleanupExpiredTimeouts };
 }
 
 module.exports = {

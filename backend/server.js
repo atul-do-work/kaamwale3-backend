@@ -90,6 +90,7 @@ const emitJobUpdatedToUsers = createEmitJobUpdatedToUsers({ io, connectedWorkers
 const emitJobCancelledToUsers = createEmitJobCancelledToUsers({ io, connectedWorkers });
 
 const logJobEvent = createJobEventLogger({ JobEventLog });
+const sessionStore = null; // Session store for managing user sessions (optional)
 const { checkJobMatchesForWorker, offerJobToNextWorker } = createJobDispatchHelpers({
   Job,
   WorkerModel,
@@ -131,14 +132,10 @@ attachSocketConnectionHandlers(io, {
   sendNotificationToUserPhone,
 });
 
-// Multer for profile upload
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => cb(null, "uploads/"),
-  filename: (req, file, cb) => cb(null, Date.now() + "-" + file.originalname),
-});
-const upload = multer({ 
-  storage,
-    limits: { fileSize: 10 * 1024 * 1024 },
+// Multer for uploads using memory storage only
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024 },
 });
 mountAppRoutes({
   app,
@@ -168,6 +165,7 @@ mountAppRoutes({
   checkJobMatchesForWorker,
   offerJobToNextWorker,
   sendNotificationToUserPhone,
+  sessionStore,
   port: PORT,
 });
 

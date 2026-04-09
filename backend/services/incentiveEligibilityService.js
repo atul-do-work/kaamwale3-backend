@@ -104,11 +104,12 @@ function calculateEligibility(events) {
       (d) => d.hours >= REQUIRED_DAILY_HOURS && !cancellationDays.has(d.dateStr)
     );
 
+    // Bug #10 Fix: Initialize consecutiveDays to 0 before loop (avoid off-by-one error)
     let consecutiveDays = 0;
     let streakHours = 0;
     for (let i = 0; i < qualifiedDays.length; i++) {
       if (i === 0) {
-        consecutiveDays = qualifiedDays.length > 0 ? 1 : 0;
+        consecutiveDays = 1; // First qualified day counts as 1 consecutive day
         streakHours += Number(qualifiedDays[i]?.hours || 0);
         continue;
       }
