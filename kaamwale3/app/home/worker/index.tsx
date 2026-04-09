@@ -22,6 +22,7 @@ import * as Location from "expo-location";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { socket } from "../../../utils/socket"; // ✅ Use global socket instead
 import { API_BASE } from "../../../utils/config";
+import { availabilityCacheManager } from "../../../utils/availabilityCacheManager"; // ✅ BUG #4: Smart caching
 import { useLanguage } from "../../../context/LanguageContext";
 import { 
   triggerJobAlert,
@@ -81,6 +82,23 @@ const getGreeting = (t: any): string => {
   if (hour < 12) return t('goodMorning');
   if (hour < 18) return t('goodAfternoon');
   return t('goodEvening');
+};
+
+const normalizePhoneDigits = (value: any) => String(value || '').replace(/\D/g, '').slice(-10);
+const getWorkerEntryForPhone = (job: any, currentUserPhone?: string | null) => {
+  if (!currentUserPhone || !Array.isArray(job?.acceptedWorkers)) return null;
+  const targetDigits = normalizePhoneDigits(currentUserPhone);
+  if (!targetDigits) return null;
+  return job.acceptedWorkers.find((w: any) => {
+    const candidate = String(w?.phone || w?.workerPhone || w?.acceptedBy || '');
+    return normalizePhoneDigits(candidate) === targetDigits;
+  }) || null;
+};
+
+const isCurrentWorkerPaid = (job: any, currentUserPhone?: string | null) => {
+  const workerEntry = getWorkerEntryForPhone(job, currentUserPhone);
+  if (workerEntry) return String(workerEntry?.paymentStatus || '').toLowerCase() === 'paid';
+  return String(job?.paymentStatus || '').toLowerCase() === 'paid';
 };
 
 
@@ -146,19 +164,7 @@ const JobItem = memo(({ item, onAccept, onDecline, timer, t }: JobItemProps) => 
       </Text>
     )}
 
-    {String(item.paymentStatus || "").toLowerCase() === "paid" && (
-      <Text style={{ marginTop: 5, fontWeight: "700", color: "#3498db" }}>Paid</Text>
-    )}
-
-    {item.attendanceStatus === null && (
-      <View style={styles.buttonRow}>
-        <TouchableOpacity
-          style={[styles.button, { backgroundColor: "#2ecc71" }]}
-          onPress={() => onAccept(item._id)}
-        >
-          <Text style={styles.buttonText}>{t('accept')}</Text>
-        </TouchableOpacity>
-
+                {isCurrentWorkerPaid(item, currentUserPhone) && (
         <TouchableOpacity
           style={[styles.button, { backgroundColor: "#e74c3c" }]}
           onPress={() => onDecline(item._id)}
@@ -823,6 +829,13 @@ function WorkerHome() {
             console.error('Error fetching job on notification tap:', fetchErr);
           }
         }
+
+        // Handle job request notifications
+        if (data.type === 'job_request' && data.requestId) {
+          console.log("📱 Notification contains job request:", data.requestId);
+          // Job request will be shown when user clicks bell icon
+          // No need to show modal automatically here
+        }
       } catch (err) {
         console.error('Notification response handler error:', err);
       }
@@ -917,12 +930,12 @@ function WorkerHome() {
         console.log("📩 SOCKET: Job updated", data);
         
         // If job is paid OR attendance marked → stop location tracking
-        if (String(data.paymentStatus || "").toLowerCase() === "paid" || data.attendanceStatus) {
+        if (isCurrentWorkerPaid(data, currentUserPhone) || data.attendanceStatus) {
           stopLocationTracking();
           console.log("✅ Location tracking stopped: Job paid or attendance marked");
         }
         // If job accepted but not paid and no attendance → start tracking
-        else if (data.acceptedBy && !data.paymentStatus && !data.attendanceStatus) {
+        else if ((data.acceptedBy || getWorkerEntryForPhone(data, currentUserPhone)) && !isCurrentWorkerPaid(data, currentUserPhone) && !data.attendanceStatus) {
           startLocationTracking();
           console.log("📍 Location tracking started: Job accepted");
         }
@@ -978,6 +991,21 @@ function WorkerHome() {
         console.error("❌ Error handling job cancelled:", err);
         const errMsg = err instanceof Error ? err.message : String(err);
         setError(`Error handling job cancelled: ${errMsg}`);
+      }
+    };
+
+    const handleJobRequest = (data: any) => {
+      try {
+        console.log("📩 SOCKET: job request received", data);
+        
+        // Just update notification count - modal will be shown when bell is clicked
+        // The notification will appear in NotificationHistory
+        // No need to show modal automatically or trigger alert
+        
+      } catch (err) {
+        console.error("❌ Error handling job request:", err);
+        const errMsg = err instanceof Error ? err.message : String(err);
+        setError(`Error handling job request: ${errMsg}`);
       }
     };
 
@@ -1064,14 +1092,25 @@ function WorkerHome() {
       }
     };
 
+    // ✅ BUG #4: Real-time availability updates
+    const handleWorkerStatusUpdate = (data: any) => {
+      console.log("📡 workerStatusUpdate event received:", data);
+      availabilityCacheManager.invalidate();
+      if (data.isOnline !== undefined) {
+        setIsOnline(data.isOnline);
+      }
+    };
+
     socket.on("newJob", handleNewJob);
     socket.on("jobUpdated", handleJobUpdated);
     socket.on("jobAccepted", handleJobAccepted);
     socket.on("jobCancelled", handleJobCancelled);
     socket.on("walletUpdated", handleWalletUpdatedForStats);
     socket.on("notificationCountUpdated", handleNotificationCountUpdate);
+    socket.on("workerStatusUpdate", handleWorkerStatusUpdate); // ✅ BUG #4: Listen for status changes
     socket.on("profilePhotoUpdated", handleProfilePhotoUpdate);
     socket.on("workerControlUpdated", handleWorkerControlUpdated);
+    socket.on("jobRequest", handleJobRequest);
 
     return () => {
       stopLocationTracking();
@@ -1081,8 +1120,10 @@ function WorkerHome() {
       socket.off("jobCancelled", handleJobCancelled);
       socket.off("walletUpdated", handleWalletUpdatedForStats);
       socket.off("notificationCountUpdated", handleNotificationCountUpdate);
+      socket.off("workerStatusUpdate", handleWorkerStatusUpdate); // ✅ BUG #4
       socket.off("profilePhotoUpdated", handleProfilePhotoUpdate);
       socket.off("workerControlUpdated", handleWorkerControlUpdated);
+      socket.off("jobRequest", handleJobRequest);
       console.log("[WorkerHome] job listeners removed (unmounted)");
     };
   }, [currentLocation, workerName, currentUserPhone, workerType]); // ✅ REMOVED currentJob - use currentJobRef instead to prevent re-subscription
@@ -1520,6 +1561,7 @@ function WorkerHome() {
         throw new Error(backendMessage);
       }
       console.log(`✅ Availability updated to: ${newStatus}`);
+      availabilityCacheManager.invalidate(); // ✅ BUG #4: Invalidate cache on toggle
       
       // STEP 4: UPDATE LOCAL STATE & STORAGE
       setIsOnline(newStatus);
@@ -1720,8 +1762,8 @@ function WorkerHome() {
       if (!updatedJob) return;
 
       if (
-        String(updatedJob.paymentStatus || "").toLowerCase() === "paid" &&
-        String(job.paymentStatus || "").toLowerCase() !== "paid"
+        isCurrentWorkerPaid(updatedJob, currentUserPhone) &&
+        !isCurrentWorkerPaid(job, currentUserPhone)
       ) {
         Alert.alert("Payment Received", `You have received payment for ${updatedJob.title}`);
       }

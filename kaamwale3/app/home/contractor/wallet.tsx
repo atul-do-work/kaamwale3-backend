@@ -25,6 +25,7 @@ import { useLanguage } from "../../../context/LanguageContext";
 import { useAuth } from "../../../context/AuthContext";
 import api from "../../../utils/api";
 import ReferralModal from "../../../components/ReferralModal";
+import { useWalletBalance } from "../../../hooks/useWalletBalance"; // ✅ Smart caching hook
 
 // Wallet cards data
 const walletCards = [
@@ -77,10 +78,10 @@ export default function ContractorWalletAttendance() {
   const [activeTab, setActiveTab] = useState<"Wallet" | "Attendance">("Wallet");
   const { t } = useLanguage();
   const { accessToken, user: authUser } = useAuth();
+  const { balance: walletBalance, refresh: refreshWallet, loading: walletLoading } = useWalletBalance();
   const [jobs, setJobs] = useState<Job[]>([]);
   const [loading, setLoading] = useState(true);
   const [contractorName, setContractorName] = useState<string>("");
-  const [walletBalance, setWalletBalance] = useState<number>(0);
   const [availableBalance, setAvailableBalance] = useState<number>(0);
   const [pocketBalance, setPocketBalance] = useState<number>(0);
 
@@ -186,7 +187,7 @@ export default function ContractorWalletAttendance() {
         }
 
         if (accessToken) {
-          fetchWallet(accessToken);
+          // ✅ Wallet balance now auto-fetched by useWalletBalance hook
           fetchBankAccount();
           fetchUpiAccount();
         }
@@ -308,33 +309,15 @@ export default function ContractorWalletAttendance() {
     // ✅ Use named handlers for safe cleanup
     const handleJobUpdated = () => fetchJobs();
     const handleJobAccepted = () => fetchJobs();
-    const handleWalletUpdated = (data: number | any) => {
-      // 🔐 SECURITY: Only update wallet if this event is for the current user
-      if (data && typeof data === 'object') {
-        // If phone doesn't match current user, ignore the event
-        if (data.phone && data.phone !== authUser?.phone) {
-          console.warn(`⚠️ Ignoring walletUpdated for different user: ${data.phone} (current: ${authUser?.phone})`);
-          return;
-        }
-        // Safe to update - event is for current user
-        setWalletBalance(data.balance);
-        setAvailableBalance(Number(data.availableBalance ?? data.balance ?? 0));
-        setPocketBalance(Number(data.pocketBalance || 0));
-      } else if (typeof data === 'number') {
-        setWalletBalance(data);
-        setAvailableBalance(data);
-      }
-    };
 
     socket.on("jobUpdated", handleJobUpdated);
     socket.on("jobAccepted", handleJobAccepted);
-    socket.on("walletUpdated", handleWalletUpdated);
+    // ✅ walletUpdated now handled by useWalletBalance hook
 
     return () => {
       // ✅ Remove listeners with handler references (screen-safe cleanup)
       socket.off("jobUpdated", handleJobUpdated);
       socket.off("jobAccepted", handleJobAccepted);
-      socket.off("walletUpdated", handleWalletUpdated);
     };
   }, [fetchJobs, accessToken, authUser?.phone]);
 
@@ -499,7 +482,7 @@ export default function ContractorWalletAttendance() {
       } else if (data.type === 'payment_failed') {
         setRazorpayModalVisible(false);
         // Fallback sync in case gateway callback reports failure but webhook has already settled.
-        await Promise.allSettled([fetchJobs(), fetchWallet()]);
+        await Promise.allSettled([fetchJobs(), refreshWallet()]);
         const settledAsPaid = await checkJobPaidOnServer(currentPaymentJobId, currentPaymentWorkerPhone || undefined);
         if (settledAsPaid) {
           showAppModal("success", t('success'), "Payment was completed successfully. Status has been synced.");
@@ -626,26 +609,6 @@ export default function ContractorWalletAttendance() {
       console.error(error);
     } finally {
       setSubmittingRating(false);
-    }
-  };
-
-  // ✅ Fetch wallet on mount
-  const fetchWallet = async (accessTkn?: string) => {
-    const tkn = accessTkn || accessToken;
-    if (!tkn) return;
-    try {
-      const res = await api.get(`/wallet`);
-      const data = res.data;
-
-      if (data && data.success) {
-        const nextAvailable = Number(data.wallet.availableBalance ?? data.wallet.balance ?? 0);
-        const nextPocket = Number(data.wallet.pocketBalance || 0);
-        setWalletBalance(Number(data.wallet.balance || 0));
-        setAvailableBalance(nextAvailable);
-        setPocketBalance(nextPocket);
-      }
-    } catch (err) {
-      console.error("Wallet fetch failed:", err);
     }
   };
 

@@ -49,6 +49,9 @@ interface GigHistory {
   status: string;
   paymentStatus: string;
   attendanceStatus: string;
+  acceptedWorkers?: Array<{
+    paymentStatus?: string;
+  }>;
   contractorName: string;
   date: string;
   rating?: {
@@ -190,6 +193,13 @@ export default function GigHistory() {
     return `${hours}.${String(minutes).padStart(2, '0')}`;
   };
 
+  const getGigPaymentStatus = (gig: GigHistory): 'paid' | 'pending' => {
+    if (Array.isArray(gig.acceptedWorkers) && gig.acceptedWorkers.length > 0) {
+      return gig.acceptedWorkers.every((w) => String(w?.paymentStatus || '').toLowerCase() === 'paid') ? 'paid' : 'pending';
+    }
+    return String(gig.paymentStatus || '').toLowerCase() === 'paid' ? 'paid' : 'pending';
+  };
+
   const todayWorkedMinutes = React.useMemo(() => {
     const now = new Date();
     const y = now.getFullYear();
@@ -197,7 +207,7 @@ export default function GigHistory() {
     const d = now.getDate();
 
     return gigs.reduce((sum, gig) => {
-      const isPaid = String(gig.paymentStatus || '').toLowerCase() === 'paid';
+      const isPaid = getGigPaymentStatus(gig) === 'paid';
       const isCompleted = String(gig.status || '').toLowerCase() === 'completed';
       if (!isPaid && !isCompleted) return sum;
 
@@ -652,8 +662,8 @@ export default function GigHistory() {
 
   // ✅ Render single gig card
   const renderGigCard = ({ item: gig }: { item: GigHistory }) => {
-    const paymentStatus = gig.paymentStatus || 'Pending';
-    const displayStatus = String(paymentStatus).toLowerCase() === 'paid' ? t('completed') : t('pending');
+    const paymentStatus = getGigPaymentStatus(gig);
+    const displayStatus = paymentStatus === 'paid' ? t('completed') : t('pending');
     const workHours =
       Number(gig.hoursWorked || 0) > 0
         ? Number(gig.hoursWorked || 0)
@@ -720,8 +730,8 @@ export default function GigHistory() {
             </View>
           )}
           
-          {String(paymentStatus).toLowerCase() === 'paid' && !isCancelled && (
-            <View style={[styles.requirementBadge, { borderColor: '#27AE60', backgroundColor: '#E8F5E9' }]}>
+          {paymentStatus === 'paid' && !isCancelled && (
+            <View style={[styles.requirementBadge, { borderColor: '#27AE60', backgroundColor: '#E8F5E9' }]>
               <MaterialIcons name="check-circle" size={18} color="#27AE60" />
               <Text style={[styles.requirementText, { color: '#27AE60' }]}>{t('completed')} ✔</Text>
             </View>
@@ -747,7 +757,7 @@ export default function GigHistory() {
     gigs.forEach(g => {
       if (String(g.status || '').toLowerCase() === 'cancelled') {
         cancelled++;
-      } else if (String(g.paymentStatus || '').toLowerCase() === 'paid') {
+      } else if (getGigPaymentStatus(g) === 'paid') {
         completed++;
       } else {
         pending++;

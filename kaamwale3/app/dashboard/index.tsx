@@ -63,6 +63,8 @@ interface Job {
       type: string;
       coordinates: [number, number];
     };
+    attendanceStatus?: 'Present' | 'Absent' | null;
+    paymentStatus?: 'paid' | null;
   }>;
 }
 
@@ -186,6 +188,22 @@ export default function DashboardScreen() {
   };
 
   const isAdmin = authUser?.role === 'admin';
+
+  // Helper function to determine payment status for jobs (handles both single and bulk jobs)
+  const getJobPaymentStatus = (job: Job): 'paid' | 'pending' | 'partial' => {
+    // For bulk jobs, check if all workers are paid
+    if (Array.isArray(job.acceptedWorkers) && job.acceptedWorkers.length > 0) {
+      const paidWorkers = job.acceptedWorkers.filter(w => 
+        String(w?.paymentStatus || '').toLowerCase() === 'paid'
+      );
+      if (paidWorkers.length === 0) return 'pending';
+      if (paidWorkers.length === job.acceptedWorkers.length) return 'paid';
+      return 'partial'; // Some workers paid, some not
+    }
+    
+    // For single jobs, use the job-level payment status
+    return String(job.paymentStatus || '').toLowerCase() === 'paid' ? 'paid' : 'pending';
+  };
 
   const adminFetch = async (path: string, options: RequestInit = {}) => {
     if (!token) throw new Error('Missing auth token');
@@ -545,27 +563,42 @@ export default function DashboardScreen() {
     };
     const inRangeJobs = scopeJobs.filter((j) => isInRange(j));
     const jobsPosted = inRangeJobs.length;
-    const jobsCompleted = inRangeJobs.filter(
-      (j) => String(j.paymentStatus || '').toLowerCase() === 'paid'
-    ).length;
+    const jobsCompleted = inRangeJobs.filter((j) => getJobPaymentStatus(j) === 'paid').length;
     const workersEngaged = new Set(
       inRangeJobs
-        .flatMap((j) => [
-          ...(j.acceptedBy ? [j.acceptedBy] : []),
-          ...((Array.isArray((j as any).acceptedWorkers) ? (j as any).acceptedWorkers : [])
-            .map((w: any) => w?.phone)
-            .filter(Boolean)),
-        ])
+        .flatMap((j) => {
+          const workers = [];
+          // Handle single jobs
+          if (j.acceptedBy) {
+            workers.push(j.acceptedBy);
+          }
+          // Handle bulk jobs - only count workers who have been marked present or paid
+          if (Array.isArray(j.acceptedWorkers)) {
+            j.acceptedWorkers.forEach((w) => {
+              if (w?.phone && (w.attendanceStatus === 'Present' || w.paymentStatus === 'paid')) {
+                workers.push(w.phone);
+              }
+            });
+          }
+          return workers;
+        })
+        .filter(Boolean) // Remove null/undefined values
     ).size;
-    const totalSpending = inRangeJobs.reduce((sum, j) => sum + Number(j.amount || 0), 0);
+    const totalSpending = inRangeJobs
+      .filter((j) => getJobPaymentStatus(j) === 'paid')
+      .reduce((sum, j) => sum + Number(j.amount || 0), 0);
 
+    // Calculate actual averages based on date range
+    const daysInRange = dateRange === 'today' ? 1 : 
+                       dateRange === 'week' ? 7 : 30;
+    
     setStats({
       totalJobsPosted: jobsPosted,
       totalJobsCompleted: jobsCompleted,
       totalWorkersEngaged: workersEngaged,
       totalSpending,
-      avgJobsPerDay: jobsPosted,
-      avgCompletionPerDay: jobsCompleted,
+      avgJobsPerDay: jobsPosted > 0 ? Number((jobsPosted / daysInRange).toFixed(1)) : 0,
+      avgCompletionPerDay: jobsCompleted > 0 ? Number((jobsCompleted / daysInRange).toFixed(1)) : 0,
     });
   };
 
@@ -596,9 +629,16 @@ export default function DashboardScreen() {
 
   // Open worker details modal
   const handleJobCardClick = async (job: Job) => {
-    // Don't show modal if job is already paid
-    if (String(job.paymentStatus || '').toLowerCase() === 'paid') {
+    // Check if job is completed (paid)
+    const paymentStatus = getJobPaymentStatus(job);
+    if (paymentStatus === 'paid') {
       showModal('info', 'Job Completed', 'This job has already been paid.');
+      return;
+    }
+
+    // For bulk jobs, prevent modal opening until individual worker selection is implemented
+    if (Array.isArray(job.acceptedWorkers) && job.acceptedWorkers.length > 1) {
+      showModal('info', 'Bulk Job', 'Please use the web admin panel to manage individual workers in bulk jobs.');
       return;
     }
 
@@ -753,9 +793,10 @@ export default function DashboardScreen() {
   // ✅ Show jobs that were ACCEPTED today (not just jobs with attendance marked)
   const jobsWithAttendance = jobs.filter((j) => {
     const hasSingleAccepted = !!j.acceptedBy;
-    const hasBulkAccepted = Array.isArray(j.acceptedWorkers) && j.acceptedWorkers.length > 0;
-    if (!hasSingleAccepted && !hasBulkAccepted) return false;
-    if (String(j.paymentStatus || '').toLowerCase() === 'paid') return false;
+    const hasBulkAccepted = Array.isArray(j.acceptedWorkers) && j.acceptedWorkers.some(w => w?.phone);
+    const hasAnyAccepted = hasSingleAccepted || hasBulkAccepted;
+    if (!hasAnyAccepted) return false;
+    if (getJobPaymentStatus(j) === 'paid') return false;
     const bulkAcceptedAt =
       Array.isArray(j.acceptedWorkers)
         ? (j.acceptedWorkers.find((w: any) => !!w?.acceptedAt)?.acceptedAt || null)
@@ -865,10 +906,15 @@ export default function DashboardScreen() {
                 </View>
 
                 <View style={styles.paymentBadge}>
-                  {String(job.paymentStatus || '').toLowerCase() === 'paid' ? (
+                  {getJobPaymentStatus(job) === 'paid' ? (
                     <>
                       <MaterialIcons name="check-circle" size={20} color="#00b894" />
                       <Text style={{ color: '#00b894', fontWeight: '700' }}>Paid</Text>
+                    </>
+                  ) : getJobPaymentStatus(job) === 'partial' ? (
+                    <>
+                      <MaterialIcons name="pending" size={20} color="#f59e0b" />
+                      <Text style={{ color: '#f59e0b', fontWeight: '700' }}>Partial</Text>
                     </>
                   ) : (
                     <>
@@ -904,18 +950,30 @@ export default function DashboardScreen() {
               </View>
               <Text style={styles.jobDescription}>{job.description}</Text>
               <View style={styles.jobCardFooter}>
-                <Text style={styles.workerAccepted}>Worker: {job.acceptedBy || 'Not accepted yet'}</Text>
+                <Text style={styles.workerAccepted}>
+                  {Array.isArray(job.acceptedWorkers) && job.acceptedWorkers.length > 1
+                    ? `Workers: ${job.acceptedWorkers.length}`
+                    : `Worker: ${job.acceptedBy || 'Not accepted yet'}`}
+                </Text>
                 <View
                   style={[
                     styles.statusBadge,
                     {
                       backgroundColor:
-                        String(job.paymentStatus || '').toLowerCase() === 'paid' ? '#00b894' : '#f39c12',
+                        getJobPaymentStatus(job) === 'paid'
+                          ? '#00b894'
+                          : getJobPaymentStatus(job) === 'partial'
+                          ? '#f59e0b'
+                          : '#f39c12',
                     },
                   ]}
                 >
                   <Text style={styles.statusText}>
-                    {(String(job.paymentStatus || '').toLowerCase() === 'paid' ? 'paid' : 'pending')}
+                    {getJobPaymentStatus(job) === 'paid'
+                      ? 'Paid'
+                      : getJobPaymentStatus(job) === 'partial'
+                      ? 'Partial'
+                      : 'Pending'}
                   </Text>
                 </View>
               </View>

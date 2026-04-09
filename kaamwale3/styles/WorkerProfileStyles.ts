@@ -363,5 +363,19 @@ menuButton: {
   shadowRadius: 4,
   elevation: 3,
 },
+progressContainer: {
+  paddingHorizontal: 16,
+  paddingVertical: 12,
+  backgroundColor: '#f0f8ff',
+  borderBottomWidth: 1,
+  borderBottomColor: '#e0e0e0',
+},
+progressText: {
+  fontSize: 12,
+  color: '#3498db',
+  fontWeight: '600',
+  marginTop: 8,
+  textAlign: 'center',
+},
 
 });

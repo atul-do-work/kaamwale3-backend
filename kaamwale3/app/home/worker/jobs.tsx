@@ -12,6 +12,8 @@ import { API_BASE } from "../../../utils/config";
 import styles from "../../../styles/WorkerJobsStyles";
 import JobLocationMap from "../../../components/JobLocationMap";
 import { useLanguage } from "../../../context/LanguageContext";
+import { useJobStatus } from "../../../hooks/useJobStatus"; // ✅ Real-time job updates
+import { useAuth } from "../../../context/AuthContext"; // ✅ For auth context
 
 // Local construction image
 // import constructionImg from "@/assets/csite.png";
@@ -33,8 +35,14 @@ interface Job {
   lat: number;
   lon: number;
   date: string; // ✅ Job date from backend
-  status?: "pending" | "accepted" | "declined" | "cancelled" | "expired";
+  status?: "pending" | "accepted" | "in_progress" | "completed" | "declined" | "cancelled" | "expired";
   acceptedBy?: string;
+  acceptedWorkers?: Array<{
+    phone?: string;
+    workerPhone?: string;
+    acceptedBy?: string;
+    paymentStatus?: string;
+  }>;
   paymentStatus?: "paid" | null;
   rating?: {
     stars: number;
@@ -67,8 +75,21 @@ const getWeekWindow = () => {
   return { weekStart, weekEnd };
 };
 
-const isPaid = (job: Job): boolean => String(job?.paymentStatus || "").toLowerCase() === "paid";
-const isPaidStatus = (status?: string | null): boolean => String(status || "").toLowerCase() === "paid";
+const normalizePhoneDigits = (value: any) => String(value || "").replace(/\D/g, "").slice(-10);
+const getWorkerEntryForPhone = (job: Job, currentUserPhone?: string | null) => {
+  if (!currentUserPhone || !Array.isArray((job as any)?.acceptedWorkers)) return null;
+  const targetDigits = normalizePhoneDigits(currentUserPhone);
+  if (!targetDigits) return null;
+  return ((job as any).acceptedWorkers as any[]).find((w: any) =>
+    normalizePhoneDigits(w?.phone || w?.workerPhone || w?.acceptedBy || "") === targetDigits
+  ) || null;
+};
+const isPaid = (job: Job, currentUserPhone?: string | null): boolean => {
+  const workerEntry = getWorkerEntryForPhone(job, currentUserPhone);
+  if (workerEntry && String(workerEntry?.paymentStatus || "").toLowerCase() === "paid") return true;
+  return String(job?.paymentStatus || "").toLowerCase() === "paid";
+};
+const isPaidStatus = (status?: string | null | undefined): boolean => String(status || "").toLowerCase() === "paid";
 
 const isJobDayExpired = (job: Job): boolean => {
   const sourceDate = job?.date || job?.createdAt || job?.paymentTime;
@@ -85,10 +106,20 @@ const isJobDayExpired = (job: Job): boolean => {
 export default function Jobs(): React.ReactElement {
   const router = useRouter();
   const { t } = useLanguage();
+  const { accessToken } = useAuth();
   const [workerName, setWorkerName] = useState<string>("Test Worker");
+  
+  // ✅ Real-time job status with smart caching
+  const { jobs: hookJobs, loading, error: jobError, refresh: refreshJobs } = useJobStatus();
   const [acceptedJobs, setAcceptedJobs] = useState<Job[]>([]);
+
+  useEffect(() => {
+    if (Array.isArray(hookJobs)) {
+      setAcceptedJobs(hookJobs);
+    }
+  }, [hookJobs]);
+  
   const [seeAllModalVisible, setSeeAllModalVisible] = useState<boolean>(false);
-  const [loading, setLoading] = useState<boolean>(true);
   const [refreshing, setRefreshing] = useState<boolean>(false); // ✅ Pull-to-refresh state
   const [token, setToken] = useState<string>("");
   const [currentUserPhone, setCurrentUserPhone] = useState<string | null>(null);
@@ -102,9 +133,14 @@ export default function Jobs(): React.ReactElement {
   const [contractorRatingStars, setContractorRatingStars] = useState<number>(5);
   const [contractorRatingFeedback, setContractorRatingFeedback] = useState<string>("");
   const [submittingContractorRating, setSubmittingContractorRating] = useState<boolean>(false);
-  const previousPaymentState = useRef<Record<string, string | null>>({});
-  const previousUserPhoneRef = useRef<string | null>(null); // ✅ Track previous user to detect changes
-  const paymentNotifiedJobs = useRef<Set<string>>(new Set()); // ✅ Track jobs already notified
+  const [cancelModalVisible, setCancelModalVisible] = useState<boolean>(false);
+  const [selectedCancelJob, setSelectedCancelJob] = useState<Job | null>(null);
+  const [cancelReason, setCancelReason] = useState<string>("");
+  const [cancelReasonDescription, setCancelReasonDescription] = useState<string>("");
+  const [cancelProcessing, setCancelProcessing] = useState<boolean>(false);
+  const previousPaymentState = useRef<Record<string, string | null | undefined>>({});
+  const previousUserPhoneRef = useRef<string | null>(null); 
+  const paymentNotifiedJobs = useRef<Set<string>>(new Set()); 
 
   const dialNumber = async (number: string) => {
     const normalized = String(number || "").trim();
@@ -244,7 +280,7 @@ export default function Jobs(): React.ReactElement {
   // ✅ Handle pull-to-refresh (don't show full loading spinner, only refresh indicator)
   const handleRefresh = async () => {
     setRefreshing(true);
-    await fetchAcceptedJobs(workerName, token, true); // Pass true to indicate refresh
+    await refreshJobs(); // ✅ Hook handles the refresh
     setRefreshing(false);
   };
 
@@ -285,117 +321,6 @@ export default function Jobs(): React.ReactElement {
     }
   };
 
-  // Fetch accepted jobs from server
-  const fetchAcceptedJobs = async (name?: string, authToken?: string, isRefresh = false) => {
-    const worker = name || workerName;
-    const tkn = authToken || token;
-
-    if (!worker || !tkn) return;
-
-    if (!isRefresh) setLoading(true);
-    try {
-      console.log("🔄 [1] Starting fetch from:", `${API_BASE}/jobs/my-accepted`);
-      
-      const res = await fetch(`${API_BASE}/jobs/my-accepted`, {
-        method: "GET",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${tkn}` },
-      });
-
-      console.log("🔄 [2] Response status:", res.status, res.ok);
-      
-      if (!res.ok) throw new Error(`HTTP ${res.status}: Failed to fetch jobs`);
-
-      console.log("🔄 [3] Parsing JSON response...");
-      const response = await res.json();
-      console.log("🔄 [4] Response received:", JSON.stringify(response).substring(0, 200));
-      
-      console.log("🔄 [5] Extracting gigs array...");
-      const gigsArray = response.gigs || response || [];
-      console.log("🔄 [6] gigsArray type:", typeof gigsArray, "isArray:", Array.isArray(gigsArray));
-      
-      if (!Array.isArray(gigsArray)) {
-        console.error("❌ [7] Response is not an array:", JSON.stringify(gigsArray));
-        throw new Error("Invalid job response format");
-      }
-      
-      console.log("🔄 [8] Found", gigsArray.length, "jobs");
-      const jobs: Job[] = gigsArray.filter((j: Job) => j.status !== "cancelled" && j.status !== "expired");
-      
-      // Log rating data for debugging
-      console.log("🔄 [9] Iterating jobs for rating data...");
-      jobs.forEach((job) => {
-        if (job.rating) {
-          console.log(`   ⭐ Job ${job._id} has rating:`, job.rating);
-        }
-      });
-      
-      console.log("🔄 [10] Processing jobs with location data...");
-      // No need to filter by worker name anymore - the endpoint returns only this worker's jobs
-      const jobsWithLocation = await Promise.all(
-        jobs.map(async (job, index) => {
-          try {
-            console.log(`   🔄 [10.${index}] Processing job ${job._id}...`);
-            const location = job.location || (await getAddressFromCoords(job.lat, job.lon));
-            
-            // ✅ Type-safe substring for logging
-            const locationDisplay = typeof location === "string"
-              ? location.substring(0, 30)
-              : location;
-            
-            console.log(`   ✅ [10.${index}] Job processed with location:`, locationDisplay);
-            
-            return {
-              ...job,
-              location,
-              paymentStatus: job.paymentStatus || null,
-            };
-          } catch (mapErr) {
-            console.error(`⚠️ Error processing job ${job._id}:`, mapErr);
-            return {
-              ...job,
-              location: job.location || t('unknownLocation'),
-              paymentStatus: job.paymentStatus || null,
-            };
-          }
-        })
-      );
-
-      console.log("🔄 [11] All jobs processed, checking for payment updates...");
-      
-      // Alert for new payments - only show if not already notified
-      jobsWithLocation.forEach((job) => {
-        if (!isPaidStatus(previousPaymentState.current[job._id]) && isPaid(job)) {
-          // Only show notification if we haven't already notified for this job
-          if (!paymentNotifiedJobs.current.has(job._id)) {
-            paymentNotifiedJobs.current.add(job._id);
-            setPaymentJobData({
-              title: job.title,
-              amount: job.amount,
-              contractor: job.contractorName,
-            });
-            setPaymentModalVisible(true);
-          }
-        }
-        previousPaymentState.current[job._id] = job.paymentStatus || null;
-      });
-
-      console.log("✅ [12] Setting accepted jobs, count:", jobsWithLocation.length);
-      setAcceptedJobs(jobsWithLocation);
-    } catch (err) {
-      console.error("❌ Error fetching jobs:", err);
-      if (err instanceof Error) {
-        console.error("   Message:", err.message);
-        console.error("   Stack:", err.stack);
-      }
-      if (!isRefresh) {
-        const errorMsg = err instanceof Error ? err.message : 'Unknown error';
-        Alert.alert(t('error'), `${t('couldNotFetchJobs')}\n${errorMsg}`);
-      }
-    } finally {
-      if (!isRefresh) setLoading(false);
-    }
-  };
-
   // ---------------- SOCKET.IO LISTENERS ----------------
   useEffect(() => {
     if (!workerName || !token) return;
@@ -426,7 +351,7 @@ export default function Jobs(): React.ReactElement {
     // ✅ IIFE to handle async setup
     (async () => {
       await setupSocket();
-      fetchAcceptedJobs(workerName, token);
+      // Removed fetchAcceptedJobs call - using hook instead
     })();
 
     const handleJobUpdated = async (job: Job) => {
@@ -476,7 +401,7 @@ export default function Jobs(): React.ReactElement {
         return prev;
       });
 
-      if (!isPaidStatus(previousPaymentState.current[job._id]) && isPaid(job)) {
+      if (!isPaidStatus(previousPaymentState.current[job._id]) && isPaid(job, currentUserPhone)) {
         if (!paymentNotifiedJobs.current.has(job._id)) {
           paymentNotifiedJobs.current.add(job._id);
           setPaymentJobData({
@@ -487,7 +412,7 @@ export default function Jobs(): React.ReactElement {
           setPaymentModalVisible(true);
         }
       }
-      previousPaymentState.current[job._id] = job.paymentStatus || null;
+      previousPaymentState.current[job._id] = isPaid(job, currentUserPhone) ? 'paid' : null;
     };
 
     // Subscribe to socket events
@@ -503,6 +428,68 @@ export default function Jobs(): React.ReactElement {
   }, [workerName, token, currentUserPhone]); // ✅ Added currentUserPhone to deps
 
   // ✅ Render individual job card (optimized for FlatList virtualization)
+  const workerCancelOptions = [
+    { key: "worker_unavailable", label: "Worker unavailable" },
+    { key: "location_changed", label: "Location changed" },
+    { key: "safety_concern", label: "Safety concern" },
+    { key: "contractor_request", label: "Contractor requested cancellation" },
+    { key: "technical_issue", label: "Technical issue" },
+    { key: "other", label: "Other reason" },
+  ];
+
+  const openCancelModal = (job: Job) => {
+    setSelectedCancelJob(job);
+    setCancelReason("");
+    setCancelReasonDescription("");
+    setCancelModalVisible(true);
+  };
+
+  const closeCancelModal = () => {
+    setCancelModalVisible(false);
+    setSelectedCancelJob(null);
+    setCancelReason("");
+    setCancelReasonDescription("");
+  };
+
+  const submitJobCancellation = async () => {
+    if (!selectedCancelJob) return;
+    if (!cancelReason) {
+      return Alert.alert("Error", "Please select a cancellation reason.");
+    }
+    if (!token) {
+      return Alert.alert("Error", "You are not authenticated.");
+    }
+
+    setCancelProcessing(true);
+    try {
+      const response = await fetch(`${API_BASE}/jobs/cancel/${selectedCancelJob._id}`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          reason: cancelReason,
+          reasonDescription: cancelReasonDescription,
+        }),
+      });
+
+      const payload = await response.json();
+      if (!response.ok || !payload?.success) {
+        return Alert.alert("Error", payload?.message || "Cancellation failed. Please try again.");
+      }
+
+      setAcceptedJobs((prev) => prev.filter((job) => job._id !== selectedCancelJob._id));
+      Alert.alert("Success", payload?.message || "Job cancelled. A new candidate will be notified.");
+      closeCancelModal();
+    } catch (err) {
+      console.error("Cancel job error:", err);
+      Alert.alert("Error", "Cancellation failed. Please try again.");
+    } finally {
+      setCancelProcessing(false);
+    }
+  };
+
   const openRateContractorModal = (job: Job) => {
     setSelectedJobForContractorRating(job);
     setContractorRatingStars(5);
@@ -518,10 +505,9 @@ export default function Jobs(): React.ReactElement {
     let midnightInterval: ReturnType<typeof setInterval> | null = null;
 
     const resetAndReload = async () => {
-      setAcceptedJobs([]);
       previousPaymentState.current = {};
       paymentNotifiedJobs.current.clear();
-      await fetchAcceptedJobs(workerName, token, true);
+      await refreshJobs(); // ✅ Hook handles fetching
     };
 
     const scheduleMidnightReset = () => {
@@ -552,7 +538,7 @@ export default function Jobs(): React.ReactElement {
     let weekInterval: ReturnType<typeof setInterval> | null = null;
 
     const reloadWeekly = async () => {
-      await fetchAcceptedJobs(workerName, token, true);
+      await refreshJobs(); // ✅ Hook handles fetching
     };
 
     const scheduleWeeklyRefresh = () => {
@@ -637,7 +623,7 @@ export default function Jobs(): React.ReactElement {
             elevation: 4,
           }}
         >
-          {!isPaid(job) && (
+          {!isPaid(job, currentUserPhone) && (
             <View
               style={{
                 position: "absolute",
@@ -768,7 +754,7 @@ export default function Jobs(): React.ReactElement {
             {/* Bottom Row: [Paid] Badge & Rating */}
             <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
               {/* Paid Badge */}
-              {isPaid(job) ? (
+              {isPaid(job, currentUserPhone) ? (
                 <View style={{ 
                   flexDirection: "row", 
                   alignItems: "center",
@@ -836,7 +822,7 @@ export default function Jobs(): React.ReactElement {
               </View>
             )}
 
-            {isPaid(job) && (
+            {isPaid(job, currentUserPhone) && (
               <View style={{ marginTop: 12 }}>
                 {job.contractorRating?.stars ? (
                   <View style={{ backgroundColor: "#EEF6FF", borderRadius: 8, padding: 10 }}>
@@ -870,6 +856,28 @@ export default function Jobs(): React.ReactElement {
                 )}
               </View>
             )}
+
+            {!isPaid(job, currentUserPhone) && (job.status === "accepted" || job.status === "in_progress") && job.acceptedBy === currentUserPhone && (
+              <View style={{ marginTop: 14 }}>
+                <Text style={{ color: "#b91c1c", fontSize: 12, marginBottom: 8 }}>
+                  "Cancelling a job may affect your rating and can incur penalties if done after the allowed window."
+                </Text>
+                <TouchableOpacity
+                  style={{
+                    backgroundColor: "#dc2626",
+                    height: 42,
+                    borderRadius: 10,
+                    justifyContent: "center",
+                    alignItems: "center",
+                  }}
+                  onPress={() => openCancelModal(job)}
+                >
+                  <Text style={{ color: "#fff", fontSize: 14, fontWeight: "700" }}>
+                    "Cancel job"
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            )}
           </View>
         </View>
       </View>
@@ -878,7 +886,7 @@ export default function Jobs(): React.ReactElement {
 
   // Keep card in main list until BOTH conditions are true:
   // 1) payment completed, 2) day expired (past local midnight).
-  const pendingJobs = acceptedJobs.filter((job) => !(isPaid(job) && isJobDayExpired(job)));
+  const pendingJobs = acceptedJobs.filter((job) => !(isPaid(job, currentUserPhone) && isJobDayExpired(job)));
   const previewJobs = pendingJobs.slice(0, 3);
   const { weekStart, weekEnd } = getWeekWindow();
   const weeklyJobs = acceptedJobs.filter((job) => {
@@ -980,6 +988,111 @@ export default function Jobs(): React.ReactElement {
             renderItem={renderJobCard}
           />
         </SafeAreaView>
+      </Modal>
+
+      <Modal
+        visible={cancelModalVisible}
+        transparent
+        animationType="slide"
+        onRequestClose={closeCancelModal}
+      >
+        <View style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.55)", justifyContent: "center", padding: 18 }}>
+          <View style={{ backgroundColor: "#fff", borderRadius: 18, padding: 18, maxHeight: "90%" }}>
+            <Text style={{ fontSize: 18, fontWeight: "800", color: "#111827", marginBottom: 10 }}>
+              Cancel Job
+            </Text>
+            <Text style={{ color: "#374151", fontSize: 13, marginBottom: 18, lineHeight: 20 }}>
+              Select a reason and confirm to cancel the accepted job. This may reopen the job for other workers.
+            </Text>
+
+            <View style={{ marginBottom: 14 }}>
+              {workerCancelOptions.map((option) => (
+                <TouchableOpacity
+                  key={option.key}
+                  onPress={() => setCancelReason(option.key)}
+                  style={{
+                    paddingVertical: 12,
+                    paddingHorizontal: 14,
+                    borderRadius: 12,
+                    borderWidth: 1,
+                    borderColor: cancelReason === option.key ? "#2563eb" : "#d1d5db",
+                    backgroundColor: cancelReason === option.key ? "#eff6ff" : "#fff",
+                    marginBottom: 10,
+                  }}
+                >
+                  <Text style={{ color: cancelReason === option.key ? "#1d4ed8" : "#374151", fontWeight: cancelReason === option.key ? "700" : "500" }}>
+                    {option.label}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+
+            <View style={{ marginBottom: 16 }}>
+              <Text style={{ color: "#4b5563", fontSize: 13, marginBottom: 6 }}>{t('additionalDetails') || "Additional details (optional)"}</Text>
+              <TextInput
+                value={cancelReasonDescription}
+                onChangeText={setCancelReasonDescription}
+                placeholder="Describe why you need to cancel"
+                placeholderTextColor="#9ca3af"
+                multiline
+                numberOfLines={4}
+                style={{
+                  minHeight: 92,
+                  borderWidth: 1,
+                  borderColor: "#d1d5db",
+                  borderRadius: 12,
+                  padding: 12,
+                  textAlignVertical: "top",
+                  color: "#111827",
+                }}
+              />
+            </View>
+
+            <View style={{ backgroundColor: "#fef3c7", borderRadius: 12, padding: 12, marginBottom: 16 }}>
+              <Text style={{ color: "#92400e", fontSize: 12, fontWeight: "600", marginBottom: 6 }}>
+                Important
+              </Text>
+              <Text style={{ color: "#92400e", fontSize: 12, lineHeight: 18 }}>
+                Worker cancellation is only allowed for accepted or in-progress jobs. Cancelling late may affect your rating and trigger penalties.
+              </Text>
+            </View>
+
+            <View style={{ flexDirection: "row", justifyContent: "space-between" }}>
+              <TouchableOpacity
+                onPress={closeCancelModal}
+                disabled={cancelProcessing}
+                style={{
+                  flex: 1,
+                  marginRight: 8,
+                  backgroundColor: "#e5e7eb",
+                  paddingVertical: 14,
+                  borderRadius: 12,
+                  justifyContent: "center",
+                  alignItems: "center",
+                }}
+              >
+                <Text style={{ color: "#374151", fontWeight: "700" }}>{t('close') || "Close"}</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={submitJobCancellation}
+                disabled={cancelProcessing}
+                style={{
+                  flex: 1,
+                  backgroundColor: cancelReason ? "#dc2626" : "#fca5a5",
+                  paddingVertical: 14,
+                  borderRadius: 12,
+                  justifyContent: "center",
+                  alignItems: "center",
+                  opacity: cancelProcessing ? 0.8 : 1,
+                }}
+              >
+                <Text style={{ color: "#fff", fontWeight: "700" }}>
+                  {cancelProcessing ? "Processing..." : "Confirm Cancel"}
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
       </Modal>
 
       {/* Payment Received Modal */}

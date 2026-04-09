@@ -9,6 +9,7 @@ import {
   StyleSheet,
   ActivityIndicator,
   Platform,
+  ProgressBarAndroidProps,
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
@@ -17,6 +18,8 @@ import { useAuth } from '../context/AuthContext';
 import * as ImagePicker from 'expo-image-picker';
 import { API_BASE } from '../utils/config';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { uploadToCloudinaryDirect } from '../utils/cloudinaryDirectUpload';
+import * as Progress from 'react-native-progress';
 
 const logActivity = async (token: string | null, action: string, details: string) => {
   try {
@@ -43,6 +46,7 @@ export default function DocumentsAndPolicies() {
   const [documents, setDocuments] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
   
   // ✅ Modal state for alerts
   const [modalVisible, setModalVisible] = useState(false);
@@ -114,21 +118,42 @@ export default function DocumentsAndPolicies() {
 
   const uploadDocument = async (photo: any, documentType: string) => {
     try {
-      setUploading(true);
+      setUploadProgress(0);
       const token = accessToken;
-      
-      const formData = new FormData();
-      formData.append('documentType', documentType);
-      formData.append('photo', {
-        uri: photo.uri,
-        type: 'image/jpeg',
-        name: `${documentType}_${Date.now()}.jpg`,
-      } as any);
 
+      // Step 1: Upload directly to Cloudinary with progress tracking
+      const uploadResult = await uploadToCloudinaryDirect(
+        photo.uri,
+        'kaamwale/verification',
+        `${documentType}_${Date.now()}`,
+        {
+          onProgress: (progress) => {
+            const percent = Math.round((progress.loaded / progress.total) * 100);
+            setUploadProgress(percent);
+          },
+          uploadType: 'verification',
+          authToken: token,
+          maxRetries: 3,
+        }
+      );
+
+      if (!uploadResult.success) {
+        showModal('error', 'Upload Failed', uploadResult.error || 'Failed to upload document');
+        return;
+      }
+
+      // Step 2: Save the URL to backend
       const res = await fetch(`${API_BASE}/verification/upload`, {
         method: 'POST',
-        headers: { Authorization: `Bearer ${token}` },
-        body: formData,
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          documentType,
+          fileUrl: uploadResult.fileUrl || uploadResult.url,
+          cloudinaryPublicId: uploadResult.publicId
+        }),
       });
 
       if (res.ok) {
@@ -136,13 +161,14 @@ export default function DocumentsAndPolicies() {
         await logActivity(accessToken, 'DOCUMENT_UPLOAD', `Uploaded ${documentType} document`);
         fetchDocuments();
       } else {
-        showModal('error', 'Error', 'Failed to upload document');
+        showModal('error', 'Error', 'Failed to save document to backend');
       }
     } catch (err) {
-      showModal('error', 'Error', 'Upload failed. Please try again.');
+      showModal('error', 'Error', (err as any)?.message || 'Upload failed. Please try again.');
       console.error('Upload error:', err);
     } finally {
       setUploading(false);
+      setUploadProgress(0);
     }
   };
 
@@ -226,6 +252,21 @@ export default function DocumentsAndPolicies() {
         <Text style={styles.headerTitle}>Documents & Policies</Text>
         <View style={styles.headerSpacer} />
       </View>
+
+      {/* Upload Progress Bar */}
+      {uploading && (
+        <View style={styles.progressContainer}>
+          <Progress.Bar 
+            progress={uploadProgress / 100} 
+            width={null} 
+            height={6} 
+            color="#3498db" 
+            unfilledColor="#ecf0f1"
+            borderWidth={0}
+          />
+          <Text style={styles.progressText}>{uploadProgress}% uploaded</Text>
+        </View>
+      )}
 
       {loading ? (
         <View style={styles.centerContainer}>
@@ -502,6 +543,20 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     fontSize: 14,
     marginLeft: 8,
+  },
+  progressContainer: {
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    backgroundColor: '#f0f8ff',
+    borderBottomWidth: 1,
+    borderBottomColor: '#e0e0e0',
+  },
+  progressText: {
+    fontSize: 12,
+    color: '#3498db',
+    fontWeight: '600',
+    marginTop: 8,
+    textAlign: 'center',
   },
 
   // ✅ Modal Styles

@@ -60,8 +60,25 @@ export default function ContractorHome() {
 
     socket.on('premiumSubscriptionUpdate', handlePremiumSubscriptionUpdate);
 
+    const handleJobRequestResponse = (data: any) => {
+      console.log('Job request response received:', data);
+      // Show alert for job request response
+      const message = data.accepted
+        ? `Your job request was accepted by ${data.workerName || 'the worker'}!`
+        : `Your job request was declined by ${data.workerName || 'the worker'}.`;
+      
+      // You could also update local state here if needed
+      // For now, just show an alert
+      setTimeout(() => {
+        alert(message);
+      }, 100);
+    };
+
+    socket.on('jobRequestResponse', handleJobRequestResponse);
+
     return () => {
       socket.off('premiumSubscriptionUpdate', handlePremiumSubscriptionUpdate);
+      socket.off('jobRequestResponse', handleJobRequestResponse);
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [accessToken]);
@@ -218,12 +235,12 @@ export default function ContractorHome() {
       setPostedCount(myJobs.length);
 
       // Count active/unpaid workers for contractor jobs
-      const unpaidJobs = myJobs.filter((job: any) => String(job.paymentStatus || '').toLowerCase() !== 'paid' && (job.acceptedBy || (job.acceptedWorkers && job.acceptedWorkers.length > 0)));
-      const uniqueUnpaidWorkers = new Set(unpaidJobs.flatMap((job: any) => job.acceptedWorkers && job.acceptedWorkers.length ? job.acceptedWorkers.map((w: any) => w.phone || w) : (job.acceptedBy ? [job.acceptedBy] : [])));
+      const unpaidJobs = myJobs.filter((job: any) => !isJobFullyPaid(job) && (job.acceptedBy || (job.acceptedWorkers && job.acceptedWorkers.length > 0)));
+      const uniqueUnpaidWorkers = new Set(unpaidJobs.flatMap((job: any) => filterUnpaidWorkerPhones(job)));
       setWorkersEngaged(uniqueUnpaidWorkers.size);
 
       // Count jobs done (paid jobs for this contractor)
-      const paidJobs = myJobs.filter((job: any) => String(job.paymentStatus || '').toLowerCase() === 'paid');
+      const paidJobs = myJobs.filter((job: any) => isJobFullyPaid(job));
       setJobsDoneCount(paidJobs.length);
 
       // Total spending by contractor (sum of amounts for paid jobs)

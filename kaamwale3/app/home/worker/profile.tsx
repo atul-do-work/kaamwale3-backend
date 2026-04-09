@@ -18,10 +18,12 @@ import * as ImagePicker from "expo-image-picker";
 import { useRouter, useFocusEffect } from "expo-router";
 import axios from "axios";
 import { API_BASE } from "../../../utils/config";
+import { uploadToCloudinaryDirect } from '../../../utils/cloudinaryDirectUpload';
 import { clearAllUserData } from "../../../utils/socket";
 import ReferralModal from "../../../components/ReferralModal";
 import { useLanguage } from "../../../context/LanguageContext";
 import { useAuth } from "../../../context/AuthContext";
+import * as Progress from 'react-native-progress';
 
 const MAIN_SKILLS = ['Labour', 'Mason', 'Engineer', 'ITI/Technician'];
 const WAGE_RANGES = [
@@ -37,6 +39,7 @@ export default function Profile(): React.ReactElement {
   const [userName, setUserName] = useState<string>("Worker");
   const [workerId, setWorkerId] = useState<string>("0000");
   const [profilePhoto, setProfilePhoto] = useState<string | null>(null);
+  const [uploadProgress, setUploadProgress] = useState(0);
   const [referralModalVisible, setReferralModalVisible] = useState(false);
   const [earningsModalVisible, setEarningsModalVisible] = useState(false);
   const [workerName, setWorkerName] = useState<string>("");
@@ -177,6 +180,7 @@ export default function Profile(): React.ReactElement {
 
       // Show local image immediately
       setProfilePhoto(uri);
+      setUploadProgress(0);
 
       try {
         const userToken = await AsyncStorage.getItem("token");
@@ -185,21 +189,40 @@ export default function Profile(): React.ReactElement {
           return;
         }
 
-        const formData = new FormData();
-        formData.append("photo", {
-          uri: uri,
-          name: `profile-${workerId}-${Date.now()}.jpg`,
-          type: "image/jpeg",
-        } as any);
+        // Step 1: Upload directly to Cloudinary with progress tracking
+        const uploadResult = await uploadToCloudinaryDirect(
+          uri,
+          'kaamwale/profiles',
+          `worker-${workerId}-${Date.now()}`,
+          {
+            onProgress: (progress) => {
+              const percent = Math.round((progress.loaded / progress.total) * 100);
+              setUploadProgress(percent);
+            },
+            uploadType: 'profile',
+            authToken: userToken,
+            maxRetries: 3,
+          }
+        );
 
-        console.log("📤 Uploading profile photo to:", `${API_BASE}/users/photo`);
-        console.log("📤 Token present:", !!userToken);
-        
-        const response = await axios.post(`${API_BASE}/users/photo`, formData, {
+        if (!uploadResult.success) {
+          Alert.alert(t('error'), uploadResult.error || 'Failed to upload profile photo');
+          const savedPhoto = await AsyncStorage.getItem("profilePhoto");
+          if (savedPhoto) setProfilePhoto(savedPhoto);
+          return;
+        }
+
+        console.log("📤 Saving profile photo URL to backend:", uploadResult.fileUrl || uploadResult.url);
+
+        // Step 2: Save the URL to backend
+        const response = await axios.post(`${API_BASE}/users/photo`, {
+          fileUrl: uploadResult.fileUrl || uploadResult.url,
+          cloudinaryPublicId: uploadResult.publicId
+        }, {
           timeout: 30000, // 30 second timeout
           headers: {
             Authorization: `Bearer ${userToken}`,
-            "Content-Type": "multipart/form-data",
+            "Content-Type": "application/json",
           },
         });
 
@@ -330,6 +353,20 @@ export default function Profile(): React.ReactElement {
 
   return (
     <View style={{ flex: 1, backgroundColor: "#f5f5f5", paddingTop: insets.top }}>
+      {/* Upload Progress Bar */}
+      {uploadProgress > 0 && uploadProgress < 100 && (
+        <View style={styles.progressContainer}>
+          <Progress.Bar 
+            progress={uploadProgress / 100} 
+            width={null} 
+            height={6} 
+            color="#3498db" 
+            unfilledColor="#ecf0f1"
+            borderWidth={0}
+          />
+          <Text style={styles.progressText}>{uploadProgress}% uploading</Text>
+        </View>
+      )}
       <ScrollView style={styles.container}>
         {/* Header with Three-Dot Menu */}
         <View style={{ position: 'relative' }}>

@@ -1,7 +1,7 @@
 {
   "expo": {
     "name": "indianworker",
-    "slug": "indiwork",
+    "slug": "rking9579047919",
     "version": "1.0.0",
     "orientation": "portrait",
     "scheme": "kaamwale3",
@@ -53,9 +53,9 @@
     },
     "extra": {
       "eas": {
-        "projectId": "57b2869a-b170-4935-b24c-c70cca55690a"
+        "projectId": "7e5384a4-c1fb-4486-a268-6b243d91c1ce"
       }
     },
-    "owner": "indiworkin"
+    "owner": "rking9579047919"
   }
 }

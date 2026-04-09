@@ -14,7 +14,11 @@ import { MaterialIcons, Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import { useRouter, useFocusEffect } from "expo-router";
 import { useAuth } from "../context/AuthContext";
+import { useLanguage } from "../context/LanguageContext";
+import { useNotificationBadge } from "../hooks/useNotificationBadge"; // ✅ BUG #6: Real-time notification badge
+import { notificationCacheManager } from "../utils/notificationCacheManager"; // ✅ BUG #6: Cache invalidation
 import api from "../utils/api";
+import JobRequestNotificationModal from "../components/JobRequestNotificationModal";
 
 interface Notification {
   _id: string;
@@ -27,17 +31,20 @@ interface Notification {
   readAt?: string;
   createdAt: string;
   deepLink?: string;
+  metadata?: any;
 }
 
 export default function NotificationHistoryScreen(): React.ReactElement {
   const router = useRouter();
-  const { t } = require('../context/LanguageContext').useLanguage();
+  const { t } = useLanguage();
   const { accessToken } = useAuth();
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [unreadCount, setUnreadCount] = useState(0);
   const [filter, setFilter] = useState<"all" | "unread">("all");
+  const [jobRequestModalVisible, setJobRequestModalVisible] = useState(false);
+  const [currentJobRequest, setCurrentJobRequest] = useState<any>(null);
 
   // Fetch notifications
   const fetchNotifications = useCallback(async () => {
@@ -103,6 +110,7 @@ export default function NotificationHistoryScreen(): React.ReactElement {
         );
         // ✅ Use functional update to avoid stale state
         setUnreadCount(prev => Math.max(0, prev - 1));
+        notificationCacheManager.invalidate(); // ✅ BUG #6: Invalidate cache after read
         console.log(`✅ Marked notification ${notificationId} as read`);
       }
     } catch (error) {
@@ -131,6 +139,7 @@ export default function NotificationHistoryScreen(): React.ReactElement {
                 }))
               );
               setUnreadCount(0);
+              notificationCacheManager.invalidate(); // ✅ BUG #6: Invalidate cache
               
               // Then call API asynchronously
               try {
@@ -158,6 +167,9 @@ export default function NotificationHistoryScreen(): React.ReactElement {
   const getNotificationIcon = (type: string) => {
     const iconMap: Record<string, { icon: string; color: string }> = {
       job_offer: { icon: "work", color: "#3B82F6" },
+      job_request: { icon: "person-add", color: "#667eea" },
+      job_request_accepted: { icon: "check-circle", color: "#10B981" },
+      job_request_declined: { icon: "cancel", color: "#EF4444" },
       job_accepted: { icon: "check-circle", color: "#10B981" },
       payment_sent: { icon: "payment", color: "#8B5CF6" },
       rating_received: { icon: "star", color: "#F59E0B" },
@@ -178,10 +190,27 @@ export default function NotificationHistoryScreen(): React.ReactElement {
 
   // Handle notification click - mark as read only, no navigation
   const handleNotificationPress = (notification: Notification) => {
-    if (!notification.isRead) {
-      handleMarkAsRead(notification._id);
+    if (notification.type === 'job_request') {
+      // Show job request modal for job requests
+      const jobRequestData = {
+        requestId: notification.metadata?.requestId,
+        contractorPhone: notification.metadata?.contractorPhone,
+        contractorName: notification.metadata?.contractorName,
+        date: notification.metadata?.date,
+        startTime: notification.metadata?.startTime,
+        endTime: notification.metadata?.endTime,
+        location: notification.metadata?.location,
+        message: notification.metadata?.message,
+        timestamp: notification.createdAt,
+      };
+      setCurrentJobRequest(jobRequestData);
+      setJobRequestModalVisible(true);
+    } else {
+      // For other notifications, just mark as read
+      if (!notification.isRead) {
+        handleMarkAsRead(notification._id);
+      }
     }
-    // Removed deepLink navigation - notifications are display only
   };
 
   // ✅ Render notification item with useCallback for performance
@@ -337,6 +366,21 @@ export default function NotificationHistoryScreen(): React.ReactElement {
           </Text>
         </View>
       )}
+      
+      {/* Job Request Notification Modal */}
+      <JobRequestNotificationModal
+        visible={jobRequestModalVisible}
+        onClose={() => {
+          setJobRequestModalVisible(false);
+          setCurrentJobRequest(null);
+        }}
+        jobRequest={currentJobRequest}
+        onResponse={async (accepted, requestId) => {
+          console.log(`Job request ${accepted ? 'accepted' : 'declined'}: ${requestId}`);
+          // Refresh notifications after response
+          await fetchNotifications();
+        }}
+      />
     </View>
   );
 }

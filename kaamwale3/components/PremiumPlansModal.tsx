@@ -11,6 +11,7 @@ import { MaterialIcons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import { useAuth } from "../context/AuthContext";
 import api from "../utils/api";
+import { premiumCacheManager } from "../utils/premiumCacheManager";
 
 interface PremiumPlansModalProps {
   visible: boolean;
@@ -86,10 +87,14 @@ export default function PremiumPlansModal({
       const data = res.data;
 
       if (data.success) {
-        // Keep auth context in sync immediately after successful subscription.
+        // ✅ CLEAR CACHE IMMEDIATELY after successful purchase
+        premiumCacheManager.invalidate();
+        console.log('🗑️ Premium cache cleared after successful subscription');
+
+        // ✅ Keep auth context in sync immediately after successful subscription.
         if (data.premiumPlan) {
           await updateUserPremium(data.premiumPlan);
-          console.log("Premium activated instantly:", data.premiumPlan);
+          console.log("✅ Premium activated instantly:", data.premiumPlan);
         }
 
         await onPlanSelected(planId);

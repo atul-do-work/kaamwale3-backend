@@ -154,8 +154,10 @@ export default function RootLayout() {
             {/* Login/Auth screen is the entry point */}
             <Stack.Screen name="index" />
             
-            {/* Forgot Password screen */}
+            {/* Forgot Password screens */}
             <Stack.Screen name="forgot-password" />
+            <Stack.Screen name="forgot-password-otp" />
+            <Stack.Screen name="forgot-password-reset" />
             
             {/* Home with role-based routing */}
             <Stack.Screen name="home" />

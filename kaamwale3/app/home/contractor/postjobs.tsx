@@ -13,6 +13,7 @@ import { useFocusEffect } from '@react-navigation/native';
 import { useRouter } from "expo-router";  // ⭐ ADDED
 import { useLanguage } from "../../../context/LanguageContext";
 import { useAuth } from "../../../context/AuthContext";
+import { useJobStatus } from "../../../hooks/useJobStatus"; // ✅ Real-time job status
 
 interface JobPayload {
   title: string;

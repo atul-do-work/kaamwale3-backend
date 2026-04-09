@@ -15,6 +15,7 @@ import { MaterialIcons } from '@expo/vector-icons';
 import * as Location from 'expo-location';
 import { useAuth } from '../context/AuthContext';
 import { SERVER_URL } from '../utils/config';
+import JobRequestModal from './JobRequestModal';
 
 interface Worker {
   phone: string;
@@ -56,6 +57,11 @@ export default function ViewWorkersModal({
   const [page, setPage] = useState(1);
   const [hasMore, setHasMore] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
+
+  // Job request modal states
+  const [jobRequestModalVisible, setJobRequestModalVisible] = useState(false);
+  const [selectedWorker, setSelectedWorker] = useState<Worker | null>(null);
+  const [pendingRequests, setPendingRequests] = useState<{ [phone: string]: { requestId: string; timestamp: Date } }>({});
 
   // ✅ STEP 1: Get location ONCE when modal opens (not on every filter change)
   useEffect(() => {
@@ -99,6 +105,9 @@ export default function ViewWorkersModal({
       setPage(1);
       setHasMore(true);
       setLoadingMore(false);
+      setJobRequestModalVisible(false);
+      setSelectedWorker(null);
+      setPendingRequests({});
     }
   }, [visible]);
 
@@ -177,9 +186,15 @@ export default function ViewWorkersModal({
   };
 
   const handleRequestWorker = (worker: Worker) => {
-    if (onRequestWorker) {
-      onRequestWorker(worker);
-    }
+    setSelectedWorker(worker);
+    setJobRequestModalVisible(true);
+  };
+
+  const handleRequestSent = (workerPhone: string, requestId: string) => {
+    setPendingRequests(prev => ({
+      ...prev,
+      [workerPhone]: { requestId, timestamp: new Date() }
+    }));
   };
 
   // ✅ Get unique skills from fetched workers (for dropdown options)
@@ -356,12 +371,25 @@ export default function ViewWorkersModal({
                 </View>
 
                 {/* Action Button */}
-                <TouchableOpacity
-                  style={styles.requestButton}
-                  onPress={() => handleRequestWorker(worker)}
-                >
-                  <MaterialIcons name="person-add" size={20} color="#fff" />
-                </TouchableOpacity>
+                {pendingRequests[worker.phone] ? (
+                  <View style={styles.requestSentContainer}>
+                    <MaterialIcons name="check-circle" size={20} color="#2ECC71" />
+                    <Text style={styles.requestSentText}>Request Sent</Text>
+                    <Text style={styles.requestSentTime}>
+                      {pendingRequests[worker.phone].timestamp.toLocaleTimeString('en-IN', {
+                        hour: '2-digit',
+                        minute: '2-digit',
+                      })}
+                    </Text>
+                  </View>
+                ) : (
+                  <TouchableOpacity
+                    style={styles.requestButton}
+                    onPress={() => handleRequestWorker(worker)}
+                  >
+                    <MaterialIcons name="person-add" size={20} color="#fff" />
+                  </TouchableOpacity>
+                )}
               </View>
             )}
             contentContainerStyle={styles.flatListContainer}
@@ -386,6 +414,14 @@ export default function ViewWorkersModal({
           />
         )}
       </SafeAreaView>
+
+      {/* Job Request Modal */}
+      <JobRequestModal
+        visible={jobRequestModalVisible}
+        onClose={() => setJobRequestModalVisible(false)}
+        worker={selectedWorker}
+        onRequestSent={handleRequestSent}
+      />
     </Modal>
   );
 }
@@ -636,5 +672,26 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     marginLeft: 8,
+  },
+  requestSentContainer: {
+    width: 80,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: '#f0f9f0',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginLeft: 8,
+    paddingHorizontal: 8,
+  },
+  requestSentText: {
+    fontSize: 10,
+    color: '#2ECC71',
+    fontWeight: '600',
+    textAlign: 'center',
+  },
+  requestSentTime: {
+    fontSize: 8,
+    color: '#666',
+    textAlign: 'center',
   },
 });

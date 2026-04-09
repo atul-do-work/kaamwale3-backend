@@ -13,6 +13,11 @@ import { useLanguage } from '../../../context/LanguageContext';
 import api from '../../../utils/api';
 import { StyleSheet } from "react-native";
 import ViewWorkersModal from "../../../components/ViewWorkersModal";
+import { useContractorStats } from '../../../hooks/useContractorStats'; // ✅ Real-time earnings/stats
+import { useLeaderboard } from '../../../hooks/useLeaderboard'; // ✅ Real-time rank
+import { statsCacheManager } from '../../../utils/statsCacheManager'; // ✅ BUG #5: Invalidate contractor profile cache
+import { uploadToCloudinaryDirect } from '../../../utils/cloudinaryDirectUpload';
+import * as Progress from 'react-native-progress';
 
 // ✅ Decorative Bubble Component
 const Bubble = ({
@@ -92,6 +97,20 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: "rgba(255,255,255,0.8)",
     marginBottom: 20,
+  },
+  progressContainer: {
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    backgroundColor: "#f0f8ff",
+    borderBottomWidth: 1,
+    borderBottomColor: "#e0e0e0",
+  },
+  progressText: {
+    fontSize: 12,
+    color: "#3498db",
+    fontWeight: "600",
+    marginTop: 8,
+    textAlign: "center",
   },
   walletCard: {
     flexDirection: "row",
@@ -304,9 +323,12 @@ export default function ContractorProfile(): React.ReactElement {
   const [userName, setUserName] = useState<string>("Contractor");
   const [contractorId, setContractorId] = useState<string>("0000");
   const [profilePhoto, setProfilePhoto] = useState<string | null>(null);
-  const [postedCount, setPostedCount] = useState(0);
-  const [completedCount, setCompletedCount] = useState(0);
-  const [inProgressCount, setInProgressCount] = useState(0);
+  const [uploadProgress, setUploadProgress] = useState(0);
+  
+  // ✅ Real-time stats with smart caching
+  const { jobsCompleted, totalJobs, earnings, loading: statsLoading } = useContractorStats();
+  const { userRank, userPoints, loading: leaderboardLoading } = useLeaderboard();
+  
   const [viewWorkersModalVisible, setViewWorkersModalVisible] = useState(false);
   
   // ✅ Custom modal state with explicit type definition
@@ -321,23 +343,8 @@ export default function ContractorProfile(): React.ReactElement {
 
   // Use configured API base
 
-  // ✅ OPTIMIZED: Fetch stats from dedicated endpoint instead of all jobs
-  const fetchJobStats = async (authToken: string) => {
-    try {
-      const res = await api.get(`/contractor/stats?range=all`);
-      const data = res.data;
-      
-      if (data && data.success && data.aggregated) {
-        // ✅ Backend returns pre-calculated stats - no frontend guessing
-        setPostedCount(data.aggregated.totalJobsPosted || 0);
-        setCompletedCount(data.aggregated.totalJobsCompleted || 0);
-        // ✅ Use backend in-progress count (accounts for cancelled, rejected, etc.)
-        setInProgressCount(data.aggregated.totalJobsInProgress || 0);
-      }
-    } catch (err) {
-      console.error("Failed to fetch job stats", err);
-    }
-  };
+  // ✅ Stats are auto-fetched by useContractorStats hook on screen focus
+  // No need for fetchJobStats anymore - hook handles caching + socket invalidation
 
   useEffect(() => {
     (async () => {
@@ -350,29 +357,14 @@ export default function ContractorProfile(): React.ReactElement {
             setProfilePhoto(authUser.profilePhoto);
           }
         }
-
-        // ✅ Removed: Wallet fetch is not needed since wallet UI is hidden
-        // If wallet is not shown → don't fetch it
-        if (accessToken) {
-          // Fetch job stats
-          await fetchJobStats(accessToken);
-        }
       } catch (err) {
         console.error("Failed to load contractor info", err);
       }
     })();
-  }, [authUser, accessToken]);
+  }, [authUser]);
 
-  // Refresh stats on focus
-  useFocusEffect(
-    React.useCallback(() => {
-      (async () => {
-        if (accessToken) {
-          await fetchJobStats(accessToken);
-        }
-      })();
-    }, [accessToken])
-  );
+  // ✅ Refresh stats on focus (hook handles this automatically)
+  // Just using the stats values from useContractorStats hook
 
   // ✅ Show custom logout confirmation modal
   const handleLogout = () => {
@@ -421,23 +413,46 @@ export default function ContractorProfile(): React.ReactElement {
       
       // Show temporary local preview
       setProfilePhoto(uri);
+      setUploadProgress(0);
 
       // Upload to backend
       if (accessToken) {
         try {
-          const formData = new FormData();
-          formData.append("photo", {
+          // Step 1: Upload directly to Cloudinary with progress tracking
+          const uploadResult = await uploadToCloudinaryDirect(
             uri,
-            type: "image/jpeg",
-            name: `profile-${Date.now()}.jpg`,
-          } as any);
+            'kaamwale/profiles',
+            `contractor-${authUser?.phone}-${Date.now()}`,
+            {
+              onProgress: (progress) => {
+                const percent = Math.round((progress.loaded / progress.total) * 100);
+                setUploadProgress(percent);
+              },
+              uploadType: 'profile',
+              authToken: accessToken,
+              maxRetries: 3,
+            }
+          );
 
+          if (!uploadResult.success) {
+            setModalType("error");
+            setModalTitle("Upload Failed");
+            setModalMessage(uploadResult.error || "Failed to upload profile photo");
+            setLogoutModalVisible(true);
+            return;
+          }
+
+          // Step 2: Save the URL to backend
           const response = await fetch(`${API_BASE}/users/photo`, {
             method: "POST",
             headers: {
+              "Content-Type": "application/json",
               Authorization: `Bearer ${accessToken}`,
             },
-            body: formData,
+            body: JSON.stringify({
+              fileUrl: uploadResult.fileUrl || uploadResult.url,
+              cloudinaryPublicId: uploadResult.publicId
+            }),
           });
 
           const data = await response.json();
@@ -447,6 +462,8 @@ export default function ContractorProfile(): React.ReactElement {
             
             // ✅ Update AuthContext so changes persist across navigation
             await updateUserField('profilePhoto', data.profilePhoto);
+            
+            statsCacheManager.invalidate(); // ✅ BUG #5: Invalidate cache on photo upload
             
             // Update user object in AsyncStorage if needed for other uses
             const userStr = await AsyncStorage.getItem("user");
@@ -516,6 +533,20 @@ export default function ContractorProfile(): React.ReactElement {
 
   return (
     <SafeAreaView edges={['top', 'left', 'right']} style={styles.container}>
+      {/* Upload Progress Bar */}
+      {uploadProgress > 0 && uploadProgress < 100 && (
+        <View style={styles.progressContainer}>
+          <Progress.Bar 
+            progress={uploadProgress / 100} 
+            width={null} 
+            height={6} 
+            color="#3498db" 
+            unfilledColor="#ecf0f1"
+            borderWidth={0}
+          />
+          <Text style={styles.progressText}>{uploadProgress}% uploading</Text>
+        </View>
+      )}
       <ScrollView contentContainerStyle={{ paddingBottom: 16 }}>
       {/* Premium Header with Decorative Bubbles */}
       <LinearGradient colors={["#1a2f4d", "#2d5a8c"]} style={styles.headerGradient}>
@@ -548,9 +579,9 @@ export default function ContractorProfile(): React.ReactElement {
       {/* Quick Stats */}
       <View style={styles.statsContainer}>
         {[
-          { label: "Posted", value: postedCount.toString(), icon: "work", color: "#667eea" },
-          { label: "Completed", value: completedCount.toString(), icon: "check-circle", color: "#2ECC71" },
-          { label: "In Progress", value: inProgressCount.toString(), icon: "hourglass-empty", color: "#F39C12" },
+          { label: "Posted", value: (totalJobs || 0).toString(), icon: "work", color: "#667eea" },
+          { label: "Completed", value: (jobsCompleted || 0).toString(), icon: "check-circle", color: "#2ECC71" },
+          { label: "Earnings", value: `₹${earnings || 0}`, icon: "attach-money", color: "#F39C12" },
         ].map((stat, idx) => (
           <View key={idx} style={styles.statCard}>
             <View style={[styles.statIcon, { backgroundColor: stat.color + "20" }]}>
