@@ -48,6 +48,30 @@ function createPremiumWalletRouter({ io }) {
     return `ptx_${userPhone}_${Date.now()}_${suffix}`;
   }
 
+  function normalizePremiumPlan(user) {
+    if (!user?.premiumPlan) {
+      return { type: "free", status: "free", entitlements: getPlanEntitlements("free") };
+    }
+
+    const now = new Date();
+    const plan = { ...user.premiumPlan };
+    const expiryDate = plan.expiryDate ? new Date(plan.expiryDate) : null;
+    const graceUntil = plan.graceUntil ? new Date(plan.graceUntil) : null;
+
+    if (expiryDate && expiryDate > now) {
+      plan.status = "active";
+    } else if (graceUntil && graceUntil > now) {
+      plan.status = "grace";
+    } else {
+      plan.status = "expired";
+    }
+
+    plan.expiryDate = expiryDate;
+    plan.graceUntil = graceUntil;
+    plan.entitlements = plan.entitlements || getPlanEntitlements(plan.type || "free");
+    return plan;
+  }
+
   router.post("/premium/subscribe", authenticateToken, async (req, res) => {
     const session = await mongoose.startSession();
     try {
@@ -346,6 +370,15 @@ function createPremiumWalletRouter({ io }) {
         return res.status(404).json({ success: false, message: "User not found" });
       }
 
+      const normalizedPlan = normalizePremiumPlan(user);
+      const isActive = isPremiumEntitled({ ...user.toObject(), premiumPlan: normalizedPlan });
+
+      if (user.premiumPlan && normalizedPlan.status !== user.premiumPlan.status) {
+        user.premiumPlan.status = normalizedPlan.status;
+        user.premiumPlan.graceUntil = normalizedPlan.graceUntil || null;
+        await user.save();
+      }
+
       const currentSubscription = await PremiumSubscription.findOne({
         userPhone: req.user.phone,
         isCurrent: true,
@@ -353,14 +386,13 @@ function createPremiumWalletRouter({ io }) {
         .sort({ createdAt: -1 })
         .lean();
 
-      const isActive = isPremiumEntitled(user);
       return res.json({
         success: true,
-        premiumPlan: user.premiumPlan?.type || "free",
+        premiumPlan: normalizedPlan.type || "free",
         isActive,
-        premiumDetails: user.premiumPlan,
+        premiumDetails: normalizedPlan,
         subscription: currentSubscription || null,
-        entitlements: getPlanEntitlements(user.premiumPlan?.type || "free"),
+        entitlements: normalizedPlan.entitlements,
       });
     } catch (err) {
       return res.status(500).json({ success: false, message: "Failed to check status" });
