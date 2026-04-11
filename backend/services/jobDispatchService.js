@@ -95,6 +95,7 @@ async function checkJobMatchesForWorker(workerPhone) {
             type: "Point",
             coordinates: [workerLon, workerLat] // [longitude, latitude]
           },
+          key: "jobLocation",
           distanceField: "distanceKm",
           maxDistance: 10000, // 10km in meters
           spherical: true,

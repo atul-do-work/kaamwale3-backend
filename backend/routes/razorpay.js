@@ -24,6 +24,42 @@ function computeFinalJobStatusForPaid(currentStatus) {
   return "completed";
 }
 
+function isBulkWorkerAlreadyPaid(job, workerPhone) {
+  if (!job || !workerPhone || !Array.isArray(job.acceptedWorkers)) return false;
+  const target = job.acceptedWorkers.find((w) => String(w?.phone || "") === String(workerPhone));
+  return String(target?.paymentStatus || "").toLowerCase() === "paid";
+}
+
+function buildJobPaymentUpdate(job, workerPhone, paymentTime) {
+  const update = {
+    paymentTime,
+  };
+
+  if (job.bulkHiring && workerPhone && Array.isArray(job.acceptedWorkers)) {
+    const normalizedWorkerPhone = String(workerPhone || "");
+    const allPaidAfter = job.acceptedWorkers.length > 0 &&
+      job.acceptedWorkers.every((w) =>
+        String(w?.phone || "") === normalizedWorkerPhone ||
+        String(w?.paymentStatus || "").toLowerCase() === "paid"
+      );
+
+    update.paymentStatus = allPaidAfter ? "paid" : (job.paymentStatus || "pending");
+    update.status = allPaidAfter ? computeFinalJobStatusForPaid(job.status) : job.status;
+    update["acceptedWorkers.$[worker].paymentStatus"] = "paid";
+    update["acceptedWorkers.$[worker].paymentMode"] = "razorpay";
+    update["acceptedWorkers.$[worker].paymentTime"] = paymentTime;
+
+    return {
+      update,
+      arrayFilters: [{ "worker.phone": normalizedWorkerPhone }],
+    };
+  }
+
+  update.paymentStatus = "paid";
+  update.status = computeFinalJobStatusForPaid(job.status);
+  return { update, arrayFilters: undefined };
+}
+
 // 🔐 ENFORCE Razorpay keys - fail fast if missing (no fallback to test keys)
 if (!process.env.RAZORPAY_KEY_ID || !process.env.RAZORPAY_KEY_SECRET) {
   console.error('🚨 FATAL: RAZORPAY_KEY_ID or RAZORPAY_KEY_SECRET not configured');
@@ -209,8 +245,12 @@ router.post('/verify-payment', authenticateToken, async (req, res) => {
 
     info('✅ Contractor identity verified', buildLogContext(req, { orderId, paymentId, jobId, workerPhone, contractorPhone: req.user.phone }));
 
-    // 🔐 Idempotent success: if webhook/client already marked job paid, return success
-    if (job.paymentStatus === 'paid') {
+    // 🔐 Idempotent success: if the same bulk worker payment has already been marked as paid, return success
+    const duplicatePayment = job.bulkHiring && workerPhone
+      ? isBulkWorkerAlreadyPaid(job, workerPhone)
+      : String(job.paymentStatus || "").toLowerCase() === 'paid';
+
+    if (duplicatePayment) {
       const existingWallet = await Wallet.findOne({ phone: workerPhone }).session(session);
       await session.commitTransaction();
       return res.status(200).json({
@@ -341,17 +381,14 @@ router.post('/verify-payment', authenticateToken, async (req, res) => {
         : Number(job.timeSpentMinutes || 0);
     const computedHoursWorked = Math.round(((computedTimeSpentMinutes || 0) / 60) * 10) / 10;
 
-    const nextJobStatus = computeFinalJobStatusForPaid(job.status);
+    const { update: paymentUpdate, arrayFilters } = buildJobPaymentUpdate(job, workerPhone, paymentTime);
+    paymentUpdate.timeSpentMinutes = computedTimeSpentMinutes;
+    paymentUpdate.hoursWorked = computedHoursWorked;
+
     const updatedJobFromWebhook = await Job.findByIdAndUpdate(
       jobId,
-      {
-        paymentStatus: 'paid',
-        paymentTime,
-        status: nextJobStatus,
-        timeSpentMinutes: computedTimeSpentMinutes,
-        hoursWorked: computedHoursWorked,
-      },
-      { new: true, session }
+      paymentUpdate,
+      { new: true, session, arrayFilters }
     );
 
 
@@ -528,8 +565,12 @@ router.post('/webhook', async (req, res) => {
       return res.status(200).json({ received: true, message: 'Job not found' });
     }
 
-    // Check if job already paid
-    if (job.paymentStatus === 'paid') {
+    // Check if job already paid for this worker in bulk flow
+    const duplicatePayment = job.bulkHiring && workerPhone
+      ? isBulkWorkerAlreadyPaid(job, workerPhone)
+      : String(job.paymentStatus || "").toLowerCase() === 'paid';
+
+    if (duplicatePayment) {
       info('⚠️ Job already paid (idempotency)', buildLogContext(req, { paymentId, orderId, jobId, workerPhone, idempotencyKey: paymentId }));
       await session.commitTransaction();
       return res.status(200).json({ received: true, message: 'Job already paid' });
@@ -642,17 +683,14 @@ router.post('/webhook', async (req, res) => {
         : Number(job.timeSpentMinutes || 0);
     const webhookHoursWorked = Math.round(((webhookTimeSpentMinutes || 0) / 60) * 10) / 10;
 
-    const nextJobStatus = computeFinalJobStatusForPaid(job.status);
+    const { update: paymentUpdate, arrayFilters } = buildJobPaymentUpdate(job, workerPhone, webhookPaymentTime);
+    paymentUpdate.timeSpentMinutes = webhookTimeSpentMinutes;
+    paymentUpdate.hoursWorked = webhookHoursWorked;
+
     const updatedJobFromWebhook = await Job.findByIdAndUpdate(
       jobId,
-      {
-        paymentStatus: 'paid',
-        paymentTime: webhookPaymentTime,
-        status: nextJobStatus,
-        timeSpentMinutes: webhookTimeSpentMinutes,
-        hoursWorked: webhookHoursWorked,
-      },
-      { new: true, session }
+      paymentUpdate,
+      { new: true, session, arrayFilters }
     );
 
 
