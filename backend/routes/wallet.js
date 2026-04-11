@@ -993,9 +993,12 @@ router.post("/deposit/webhook", async (req, res) => {
     }
 
     const signature = req.headers["x-razorpay-signature"];
+    const rawBody = req.rawBody || (req.body && typeof req.body === "object"
+      ? JSON.stringify(req.body)
+      : String(req.body || ""));
     const expected = crypto
       .createHmac("sha256", webhookSecret)
-      .update(JSON.stringify(req.body))
+      .update(rawBody)
       .digest("hex");
 
     if (expected !== signature) {
@@ -1082,6 +1085,19 @@ router.post("/deposit/webhook", async (req, res) => {
       return res.status(200).json({ success: true, duplicate: true });
     }
 
+    const io = req.app?.get('io');
+    if (io) {
+      io.to(phone).emit('walletUpdated', {
+        phone,
+        balance: updatedWallet.balance,
+        availableBalance: Number(updatedWallet.availableBalance || updatedWallet.balance || 0),
+        pocketBalance: Number(updatedWallet.pocketBalance || 0),
+        type: 'deposit',
+        amount,
+        message: `Wallet deposit successful: ₹${amount}`
+      });
+    }
+
     return res.status(200).json({
       success: true,
       walletBalance: updatedWallet.balance,
@@ -1104,9 +1120,12 @@ router.post("/payout/webhook", async (req, res) => {
     }
 
     const signature = req.headers["x-razorpay-signature"];
+    const rawBody = req.rawBody || (req.body && typeof req.body === "object"
+      ? JSON.stringify(req.body)
+      : String(req.body || ""));
     const expected = crypto
       .createHmac("sha256", webhookSecret)
-      .update(JSON.stringify(req.body))
+      .update(rawBody)
       .digest("hex");
 
     if (expected !== signature) {

@@ -520,8 +520,13 @@ function createPremiumWalletRouter({ io }) {
       }
 
       const isContractor = String(req.user?.role || "").toLowerCase() === "contractor";
-      const displayBalance = isContractor ? Number(wallet.pocketBalance || 0) : Number(wallet.balance || 0);
-      return res.json({ success: true, balance: displayBalance });
+      const displayBalance = isContractor ? Number(wallet.pocketBalance || 0) : Number(wallet.availableBalance ?? wallet.balance ?? 0);
+      return res.json({
+        success: true,
+        balance: displayBalance,
+        availableBalance: Number(wallet.availableBalance ?? wallet.balance ?? 0),
+        pocketBalance: Number(wallet.pocketBalance || 0),
+      });
     } catch (err) {
       return res.status(500).json({ success: false, message: "Failed to get balance" });
     }
