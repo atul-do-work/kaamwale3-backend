@@ -21,7 +21,7 @@ const ALLOWED_JOB_STATUS_TRANSITIONS = {
   pending: ['offered', 'accepted', 'cancelled', 'expired', 'posted', 'completed'],
   posted: ['offered', 'accepted', 'cancelled', 'expired', 'completed'],
   offered: ['accepted', 'cancelled', 'expired', 'completed'],
-  accepted: ['in_progress', 'cancelled'],
+  accepted: ['in_progress', 'cancelled', 'pending'],
   in_progress: ['completed', 'cancelled'],
   completed: [],
   cancelled: [],

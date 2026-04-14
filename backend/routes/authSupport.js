@@ -129,9 +129,8 @@ function createAuthSupportRouter({ JWT_SECRET, sendNotificationToUserPhone, sess
         return res.status(400).json({ success: false, message: GENERIC_ERROR });
       }
 
-      // ✅ SECURITY: Clear OTP immediately after successful verification
-      user.otpCode = null;
-      user.otpExpiry = null;
+      // ✅ SECURITY: Reset failed-attempt counters but keep the OTP available
+      // for the password reset endpoint, which still requires the same OTP.
       user.otpAttempts = 0;
       user.otpAttemptLockoutUntil = null;
       await user.save();
