@@ -114,9 +114,7 @@ export default function Jobs(): React.ReactElement {
   const [acceptedJobs, setAcceptedJobs] = useState<Job[]>([]);
 
   useEffect(() => {
-    if (Array.isArray(hookJobs)) {
-      setAcceptedJobs(hookJobs);
-    }
+    setAcceptedJobs(Array.isArray(hookJobs) ? hookJobs : []);
   }, [hookJobs]);
   
   const [seeAllModalVisible, setSeeAllModalVisible] = useState<boolean>(false);

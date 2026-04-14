@@ -80,14 +80,16 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         if (a) {
           console.log('🚀 App started: Fetching fresh premium status...');
           const freshStatus = await premiumCacheManager.forceFresh(a);
-          if (freshStatus?.user?.premiumPlan) {
-            // Update user with fresh premium data
-            const parsedUser = u ? JSON.parse(u) : null;
-            if (parsedUser) {
-              parsedUser.premiumPlan = freshStatus.user.premiumPlan;
+          const freshPremiumDetails = freshStatus?.premiumDetails;
+          if (freshPremiumDetails) {
+            if (u) {
+              const parsedUser = JSON.parse(u);
+              parsedUser.premiumPlan = freshPremiumDetails;
               setUser(parsedUser);
               await AsyncStorage.setItem('user', JSON.stringify(parsedUser));
               console.log('✅ User updated with fresh premium status on startup');
+            } else {
+              console.log('⚠️ No cached user found on startup. Premium status refreshed in cache only.');
             }
           }
         }

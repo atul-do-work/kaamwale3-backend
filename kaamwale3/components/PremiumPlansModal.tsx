@@ -81,7 +81,7 @@ export default function PremiumPlansModal({
       setError("");
       setSubscribing(true);
       setSubscribingPlanId(planId);
-      const idempotencyKey = `premium:${planId}:${Date.now()}:${Math.random().toString(36).slice(2, 10)}`;
+      const idempotencyKey = `premium_${planId}_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
 
       const res = await api.post(`/premium/subscribe`, { planId, autoRenew: false, idempotencyKey });
       const data = res.data;

@@ -240,14 +240,19 @@ export default function Profile(): React.ReactElement {
           if (savedPhoto) setProfilePhoto(savedPhoto);
         }
       } catch (err: any) {
-        console.error("❌ Profile photo upload error:", err);
-        console.error("❌ Error response:", err.response?.data);
-        console.error("❌ Error status:", err.response?.status);
-        console.error("❌ Error message:", err.message);
+        const safeError = err || {};
+        const responseData = safeError.response?.data;
+        const responseStatus = safeError.response?.status;
+        const errorMessage = responseData?.message || safeError.message || 'Unknown upload error';
+
+        console.error("❌ Profile photo upload error:", safeError);
+        console.error("❌ Error response:", responseData);
+        console.error("❌ Error status:", responseStatus);
+        console.error("❌ Error message:", errorMessage);
         
         Alert.alert(
           t('error'),
-          err?.response?.data?.message || err.message || t('photoUploadError')
+          errorMessage
         );
         
         // Revert to previously saved photo

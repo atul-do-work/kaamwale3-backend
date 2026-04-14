@@ -19,7 +19,6 @@ import * as ImagePicker from 'expo-image-picker';
 import { API_BASE } from '../utils/config';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { uploadToCloudinaryDirect } from '../utils/cloudinaryDirectUpload';
-import * as Progress from 'react-native-progress';
 
 const logActivity = async (token: string | null, action: string, details: string) => {
   try {
@@ -119,6 +118,7 @@ export default function DocumentsAndPolicies() {
   const uploadDocument = async (photo: any, documentType: string) => {
     try {
       setUploadProgress(0);
+      setUploading(true);
       const token = accessToken;
 
       // Step 1: Upload directly to Cloudinary with progress tracking
@@ -127,12 +127,12 @@ export default function DocumentsAndPolicies() {
         'kaamwale/verification',
         `${documentType}_${Date.now()}`,
         {
-          onProgress: (progress) => {
+          onProgress: (progress: { loaded: number; total: number; percent?: number }) => {
             const percent = Math.round((progress.loaded / progress.total) * 100);
             setUploadProgress(percent);
           },
           uploadType: 'verification',
-          authToken: token,
+          authToken: token ?? undefined,
           maxRetries: 3,
         }
       );
@@ -256,14 +256,9 @@ export default function DocumentsAndPolicies() {
       {/* Upload Progress Bar */}
       {uploading && (
         <View style={styles.progressContainer}>
-          <Progress.Bar 
-            progress={uploadProgress / 100} 
-            width={null} 
-            height={6} 
-            color="#3498db" 
-            unfilledColor="#ecf0f1"
-            borderWidth={0}
-          />
+          <View style={styles.progressTrack}>
+            <View style={[styles.progressFill, { width: `${uploadProgress}%` }]} />
+          </View>
           <Text style={styles.progressText}>{uploadProgress}% uploaded</Text>
         </View>
       )}
@@ -550,6 +545,18 @@ const styles = StyleSheet.create({
     backgroundColor: '#f0f8ff',
     borderBottomWidth: 1,
     borderBottomColor: '#e0e0e0',
+  },
+  progressTrack: {
+    width: '100%',
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: '#ecf0f1',
+    overflow: 'hidden',
+  },
+  progressFill: {
+    height: '100%',
+    backgroundColor: '#3498db',
+    borderRadius: 3,
   },
   progressText: {
     fontSize: 12,

@@ -64,7 +64,7 @@ class LeaderboardCacheManager {
     this.isFetching = true;
     this.fetchPromise = (async () => {
       try {
-        const response = await fetch(`${API_BASE}/leaderboard`, {
+const response = await fetch(`${API_BASE}/leaderboard/my-city`, {
           headers: { Authorization: `Bearer ${accessToken}` },
         });
 

@@ -165,14 +165,13 @@ const JobItem = memo(({ item, onAccept, onDecline, timer, t }: JobItemProps) => 
     )}
 
                 {isCurrentWorkerPaid(item, currentUserPhone) && (
-        <TouchableOpacity
-          style={[styles.button, { backgroundColor: "#e74c3c" }]}
-          onPress={() => onDecline(item._id)}
-        >
-          <Text style={styles.buttonText}>{t('decline')}</Text>
-        </TouchableOpacity>
-      </View>
-    )}
+                  <TouchableOpacity
+                    style={[styles.button, { backgroundColor: "#e74c3c" }]}
+                    onPress={() => onDecline(item._id)}
+                  >
+                    <Text style={styles.buttonText}>{t('decline')}</Text>
+                  </TouchableOpacity>
+                )}
   </View>
 ));
 
@@ -1701,12 +1700,12 @@ function WorkerHome() {
 
   const fetchJobById = async (jobId: string): Promise<Job | null> => {
     try {
-      const res = await fetch(`${API_BASE}/jobs`, {
+      const res = await fetch(`${API_BASE}/jobs/by-id/${jobId}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       if (!res.ok) return null;
-      const jobs: Job[] = await res.json();
-      return jobs.find(j => j._id === jobId) || null;
+      const data = await res.json();
+      return data?.job || null;
     } catch {
       return null;
     }

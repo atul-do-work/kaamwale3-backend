@@ -172,17 +172,19 @@ export default function PostJobScreen() {
     }, [accessToken])
   );
 
-  // Fetch wallet balance
+  // Fetch wallet balance using the balance endpoint to get contractor pocket balance directly.
   const fetchWallet = React.useCallback(async () => {
     if (!token) return;
     try {
-      const res = await fetch(`${SERVER_URL}/wallet`, {
+      const res = await fetch(`${SERVER_URL}/wallet/balance`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       const raw = await res.text();
       let data: any = undefined;
       try { data = raw ? JSON.parse(raw) : undefined; } catch { console.warn('fetchWallet: non-JSON response', raw); }
-      if (res.ok && data && data.success) setWalletBalance(toSafeBalance(data));
+      if (res.ok && data && data.success) {
+        setWalletBalance(Number(data.balance ?? data.pocketBalance ?? 0));
+      }
     } catch (err) {
       console.error("Failed to fetch wallet", err);
     }
@@ -348,10 +350,9 @@ export default function PostJobScreen() {
   useEffect(() => {
     if (!token) return;
 
-    // ✅ FIX: Socket now sends full object, extract balance property
     socket.on("walletUpdated", (data: any) => {
       console.log("💰 Wallet updated via socket:", data);
-      setWalletBalance(toSafeBalance(data));
+      setWalletBalance(Number(data.pocketBalance ?? data.balance ?? 0));
     });
 
     socket.on("newJob", (job) => {

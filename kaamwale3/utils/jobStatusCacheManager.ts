@@ -16,55 +16,74 @@ interface CachedJobStatus {
 }
 
 class JobStatusCacheManager {
-  private cache: CachedJobStatus | null = null;
-  private isFetching = false;
-  private fetchPromise: Promise<any> | null = null;
+  private cache = new Map<string, CachedJobStatus>();
+  private fetchPromises = new Map<string, Promise<any>>();
 
-  private isCacheValid(): boolean {
-    if (!this.cache || !this.cache.isValid) return false;
-    const age = Date.now() - this.cache.timestamp;
+  private buildCacheKey(jobId?: string): string {
+    return jobId ? `job:${jobId}` : 'jobs:my-accepted';
+  }
+
+  private isCacheValid(key: string): boolean {
+    const cached = this.cache.get(key);
+    if (!cached || !cached.isValid) return false;
+    const age = Date.now() - cached.timestamp;
     return age < CACHE_TTL;
   }
 
-  getCached(): any | null {
-    if (this.isCacheValid()) {
-      console.log('✅ Using cached job status');
-      return this.cache!.data;
+  getCached(jobId?: string): any | null {
+    const key = this.buildCacheKey(jobId);
+    if (this.isCacheValid(key)) {
+      console.log('✅ Using cached job status', key);
+      return this.cache.get(key)!.data;
     }
     return null;
   }
 
-  setCache(data: any): void {
-    this.cache = {
+  setCache(data: any, jobId?: string): void {
+    const key = this.buildCacheKey(jobId);
+    this.cache.set(key, {
       data,
       timestamp: Date.now(),
       isValid: true,
-    };
-    console.log('💾 Job status cached');
+    });
+    console.log('💾 Job status cached', key);
   }
 
-  invalidate(): void {
-    if (this.cache) {
-      this.cache.isValid = false;
+  invalidate(jobId?: string): void {
+    if (jobId) {
+      const key = this.buildCacheKey(jobId);
+      const cached = this.cache.get(key);
+      if (cached) cached.isValid = false;
+    } else {
+      this.cache.forEach((cached) => {
+        cached.isValid = false;
+      });
     }
-    console.log('🔄 Job status cache invalidated (socket event)');
+    console.log('🔄 Job status cache invalidated (socket event)', jobId || 'all');
   }
 
-  clear(): void {
-    this.cache = null;
+  clear(jobId?: string): void {
+    if (jobId) {
+      this.cache.delete(this.buildCacheKey(jobId));
+    } else {
+      this.cache.clear();
+    }
   }
 
   async fetchFresh(accessToken: string | null, jobId?: string): Promise<any> {
     if (!accessToken) return null;
 
-    if (this.isFetching && this.fetchPromise) {
-      return this.fetchPromise;
+    const key = this.buildCacheKey(jobId);
+    const existingPromise = this.fetchPromises.get(key);
+    if (existingPromise) {
+      return existingPromise;
     }
 
-    this.isFetching = true;
-    this.fetchPromise = (async () => {
+    const promise = (async () => {
       try {
-        const endpoint = jobId ? `${API_BASE}/jobs/${jobId}` : `${API_BASE}/jobs/list`;
+        const endpoint = jobId
+          ? `${API_BASE}/jobs/by-id/${jobId}`
+          : `${API_BASE}/jobs/my-accepted?limit=100`;
         const response = await fetch(endpoint, {
           headers: { Authorization: `Bearer ${accessToken}` },
         });
@@ -75,31 +94,31 @@ class JobStatusCacheManager {
         }
 
         const data = await response.json();
-        this.setCache(data);
-        console.log('✅ Fresh job status fetched');
+        this.setCache(data, jobId);
+        console.log('✅ Fresh job status fetched', key);
         return data;
       } catch (err) {
         console.error('❌ Job status fetch error:', err);
         return null;
       } finally {
-        this.isFetching = false;
-        this.fetchPromise = null;
+        this.fetchPromises.delete(key);
       }
     })();
 
-    return this.fetchPromise;
+    this.fetchPromises.set(key, promise);
+    return promise;
   }
 
   async getStatus(accessToken: string | null, jobId?: string): Promise<any> {
-    const cached = this.getCached();
+    const cached = this.getCached(jobId);
     if (cached) return cached;
 
-    console.log('📡 Job status cache expired, fetching fresh...');
+    console.log('📡 Job status cache expired, fetching fresh...', jobId || 'my-accepted');
     return this.fetchFresh(accessToken, jobId);
   }
 
   async forceFresh(accessToken: string | null, jobId?: string): Promise<any> {
-    this.invalidate();
+    this.invalidate(jobId);
     return this.fetchFresh(accessToken, jobId);
   }
 }

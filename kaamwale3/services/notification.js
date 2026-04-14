@@ -3,6 +3,8 @@ import { Platform, Alert } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 let pushTokenSubscription = null;
+const FCM_TOKEN_RETRY_COUNT = 3;
+const FCM_TOKEN_RETRY_DELAY_MS = 1200;
 
 function extractPushToken(payload) {
   if (!payload) return null;
@@ -10,6 +12,39 @@ function extractPushToken(payload) {
   if (typeof payload?.data === 'string' && payload.data) return payload.data;
   if (typeof payload?.pushToken?.data === 'string' && payload.pushToken.data) return payload.pushToken.data;
   return null;
+}
+
+async function getAndroidPushTokenWithRetry(retries = FCM_TOKEN_RETRY_COUNT, delayMs = FCM_TOKEN_RETRY_DELAY_MS) {
+  let lastError = null;
+
+  for (let attempt = 1; attempt <= retries; attempt += 1) {
+    try {
+      const tokenResponse = await Notifications.getDevicePushTokenAsync();
+      const token = extractPushToken(tokenResponse);
+      if (token) {
+        return { token, tokenResponse };
+      }
+      console.warn('⚠️ Empty FCM token response on attempt', attempt, tokenResponse);
+      lastError = new Error('Empty FCM token response');
+    } catch (err) {
+      lastError = err;
+      const message = String(err?.message || err);
+      const isServiceUnavailable = message.includes('SERVICE_NOT_AVAILABLE') || String(err?.code || '').toUpperCase().includes('E_REGISTRATION_FAILED');
+      if (isServiceUnavailable) {
+        console.warn(`⚠️ FCM service unavailable on attempt ${attempt}/${retries}:`, message);
+      } else {
+        console.error(`❌ FCM token fetch error on attempt ${attempt}/${retries}:`, err);
+      }
+    }
+
+    if (attempt < retries) {
+      const backoff = delayMs * attempt;
+      console.log(`⏳ Retrying FCM token fetch in ${backoff}ms...`);
+      await new Promise((resolve) => setTimeout(resolve, backoff));
+    }
+  }
+
+  throw lastError;
 }
 
 export async function registerForPushNotificationsAsync() {
@@ -65,11 +100,17 @@ export async function registerForPushNotificationsAsync() {
     
     // Get the Android FCM token (not Expo token)
     console.log('🔑 Getting Android FCM token...');
-    const tokenResponse = await Notifications.getDevicePushTokenAsync();
-    token = extractPushToken(tokenResponse);
-    
+    let tokenResponse;
+    try {
+      const result = await getAndroidPushTokenWithRetry();
+      tokenResponse = result?.tokenResponse;
+      token = result?.token;
+    } catch (err) {
+      console.warn('⚠️ Failed to obtain FCM token after retries:', err?.message || err);
+    }
+
     if (!token) {
-      console.error('❌ Token response is empty:', tokenResponse);
+      console.error('❌ Token response is empty or unavailable:', tokenResponse);
       return null;
     }
     

@@ -59,7 +59,7 @@ export default function ViewWorkersModal({
   const [loadingMore, setLoadingMore] = useState(false);
 
   // Job request modal states
-  const [jobRequestModalVisible, setJobRequestModalVisible] = useState(false);
+  const [jobRequestPanelVisible, setJobRequestPanelVisible] = useState(false);
   const [selectedWorker, setSelectedWorker] = useState<Worker | null>(null);
   const [pendingRequests, setPendingRequests] = useState<{ [phone: string]: { requestId: string; timestamp: Date } }>({});
 
@@ -105,7 +105,7 @@ export default function ViewWorkersModal({
       setPage(1);
       setHasMore(true);
       setLoadingMore(false);
-      setJobRequestModalVisible(false);
+      setJobRequestPanelVisible(false);
       setSelectedWorker(null);
       setPendingRequests({});
     }
@@ -187,7 +187,15 @@ export default function ViewWorkersModal({
 
   const handleRequestWorker = (worker: Worker) => {
     setSelectedWorker(worker);
-    setJobRequestModalVisible(true);
+    setJobRequestPanelVisible(true);
+    if (onRequestWorker) {
+      onRequestWorker(worker);
+    }
+  };
+
+  const closeJobRequestPanel = () => {
+    setJobRequestPanelVisible(false);
+    setSelectedWorker(null);
   };
 
   const handleRequestSent = (workerPhone: string, requestId: string) => {
@@ -416,12 +424,18 @@ export default function ViewWorkersModal({
       </SafeAreaView>
 
       {/* Job Request Modal */}
-      <JobRequestModal
-        visible={jobRequestModalVisible}
-        onClose={() => setJobRequestModalVisible(false)}
-        worker={selectedWorker}
-        onRequestSent={handleRequestSent}
-      />
+      {jobRequestPanelVisible && selectedWorker ? (
+        <JobRequestModal
+          visible={true}
+          renderAsPanel={true}
+          onClose={closeJobRequestPanel}
+          worker={selectedWorker}
+          onRequestSent={(workerPhone, requestId) => {
+            handleRequestSent(workerPhone, requestId);
+            closeJobRequestPanel();
+          }}
+        />
+      ) : null}
     </Modal>
   );
 }

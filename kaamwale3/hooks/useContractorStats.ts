@@ -43,11 +43,29 @@ export const useContractorStats = (): UseContractorStatsReturn => {
     try {
       const data = await statsCacheManager.getStatus(accessToken);
       if (data?.success) {
-        setEarnings(data.earnings || data.totalEarnings || 0);
-        setJobsCompleted(data.jobsCompleted || data.completedJobs || 0);
-        setRating(data.rating || data.avgRating || 0);
-        setTotalJobs(data.totalJobs || 0);
-        console.log(`✅ Stats loaded - Earnings: ${data.earnings}, Completed: ${data.jobsCompleted}`);
+        const earningsValue =
+          data?.aggregated?.totalSpending ??
+          data?.totalSpending ??
+          data?.earnings ??
+          data?.totalEarnings ??
+          0;
+        const jobsCompletedValue =
+          data?.aggregated?.totalJobsCompleted ??
+          data?.jobsCompleted ??
+          data?.completedJobs ??
+          0;
+        const totalJobsValue =
+          data?.aggregated?.totalJobsPosted ??
+          data?.totalJobs ??
+          0;
+        const ratingValue = data?.rating ?? data?.avgRating ?? 0;
+
+        setEarnings(earningsValue);
+        setJobsCompleted(jobsCompletedValue);
+        setRating(ratingValue);
+        setTotalJobs(totalJobsValue);
+
+        console.log(`✅ Stats loaded - Earnings: ${earningsValue}, Completed: ${jobsCompletedValue}`);
       } else {
         setError('Failed to load stats');
       }
@@ -79,6 +97,10 @@ export const useContractorStats = (): UseContractorStatsReturn => {
       if (data.jobsCompleted !== undefined) setJobsCompleted(data.jobsCompleted);
       if (data.rating !== undefined) setRating(data.rating);
       if (data.totalJobs !== undefined) setTotalJobs(data.totalJobs);
+
+      if (data?.aggregated?.totalSpending !== undefined) setEarnings(data.aggregated.totalSpending);
+      if (data?.aggregated?.totalJobsCompleted !== undefined) setJobsCompleted(data.aggregated.totalJobsCompleted);
+      if (data?.aggregated?.totalJobsPosted !== undefined) setTotalJobs(data.aggregated.totalJobsPosted);
     };
 
     socket.on('statsUpdated', handleStatsUpdate);

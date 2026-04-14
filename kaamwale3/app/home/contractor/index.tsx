@@ -15,6 +15,28 @@ import { useAuth } from '../../../context/AuthContext';
 import styles from '../../../styles/ContractorHomeStyles';
 const profile = require('../../../assets/oip2.jpg');
 
+const normalizePhoneDigits = (value: any) => String(value || '').replace(/\D/g, '').slice(-10);
+
+const isJobFullyPaid = (job: any): boolean => {
+  const paymentStatus = String(job?.paymentStatus || '').toLowerCase();
+  if (paymentStatus === 'paid') return true;
+  if (Array.isArray(job?.acceptedWorkers)) {
+    return job.acceptedWorkers.some((worker: any) =>
+      String(worker?.paymentStatus || '').toLowerCase() === 'paid'
+    );
+  }
+  return false;
+};
+
+const filterUnpaidWorkerPhones = (job: any): string[] => {
+  if (!Array.isArray(job?.acceptedWorkers)) return [];
+  return job.acceptedWorkers
+    .filter((worker: any) => String(worker?.paymentStatus || '').toLowerCase() !== 'paid')
+    .map((worker: any) => worker?.phone || worker?.workerPhone || worker?.acceptedBy)
+    .filter(Boolean)
+    .map((phone: any) => String(phone).trim());
+};
+
 export default function ContractorHome() {
   const router = useRouter();
   const { t } = useLanguage();
@@ -23,6 +45,7 @@ export default function ContractorHome() {
   const [premiumModalVisible, setPremiumModalVisible] = React.useState(false);
   const [hasPremium, setHasPremium] = React.useState(false);
   const [premiumStatusLoading, setPremiumStatusLoading] = React.useState(true);
+  const [premiumDetails, setPremiumDetails] = React.useState<any | null>(null);
   const [userProfilePhoto, setUserProfilePhoto] = React.useState(profile);
   const [leaderboard, setLeaderboard] = React.useState<any[]>([]);
   const [leaderboardExpanded, setLeaderboardExpanded] = React.useState(false);
@@ -76,9 +99,30 @@ export default function ContractorHome() {
 
     socket.on('jobRequestResponse', handleJobRequestResponse);
 
+    const handleProfilePhotoUpdated = async (data: any) => {
+      try {
+        if (data.phone !== currentUserPhone) return;
+
+        console.log('📸 Contractor profilePhotoUpdated event:', data.profilePhoto);
+        setUserProfilePhoto({ uri: data.profilePhoto });
+
+        const userStr = await AsyncStorage.getItem('user');
+        if (userStr) {
+          const user = JSON.parse(userStr);
+          user.profilePhoto = data.profilePhoto;
+          await AsyncStorage.setItem('user', JSON.stringify(user));
+        }
+      } catch (err) {
+        console.warn('Error handling profile photo update:', err);
+      }
+    };
+
+    socket.on('profilePhotoUpdated', handleProfilePhotoUpdated);
+
     return () => {
       socket.off('premiumSubscriptionUpdate', handlePremiumSubscriptionUpdate);
       socket.off('jobRequestResponse', handleJobRequestResponse);
+      socket.off('profilePhotoUpdated', handleProfilePhotoUpdated);
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [accessToken]);
@@ -101,6 +145,35 @@ export default function ContractorHome() {
     const num = Number(value);
     return Number.isFinite(num) ? num : 0;
   }, []);
+
+  const formatPremiumDate = React.useCallback((value: string | Date | null) => {
+    if (!value) return '';
+    const date = new Date(value);
+    if (!date || Number.isNaN(date.getTime())) return '';
+    return date.toLocaleDateString('en-IN', {
+      day: 'numeric',
+      month: 'short',
+      year: 'numeric',
+    });
+  }, []);
+
+  const getPremiumStatusMessage = React.useCallback(() => {
+    if (!premiumDetails?.type || premiumDetails?.type === 'free') {
+      return 'Upgrade to Premium to see full rankings';
+    }
+
+    const status = String(premiumDetails.status || '').toLowerCase();
+    switch (status) {
+      case 'expired':
+        return `Your ${premiumDetails.type} plan expired on ${formatPremiumDate(premiumDetails.expiryDate)}.`;
+      case 'grace':
+        return `Your ${premiumDetails.type} plan is in a grace period until ${formatPremiumDate(premiumDetails.graceUntil)}.`;
+      case 'active':
+        return `Your ${premiumDetails.type} plan is active, but leaderboard access is still loading.`;
+      default:
+        return `Your ${premiumDetails.type} plan has status '${premiumDetails.status || 'unknown'}'. Please refresh or contact support.`;
+    }
+  }, [premiumDetails, formatPremiumDate]);
 
   const mapLeaderboardRows = React.useCallback((rows: any[] = []) => {
     return rows.map((contractor: any) => ({
@@ -166,6 +239,7 @@ export default function ContractorHome() {
   const fetchPremiumStatus = React.useCallback(async (): Promise<boolean> => {
     if (!accessToken) {
       setHasPremium(false);
+      setPremiumDetails(null);
       setPremiumStatusLoading(false);
       return false;
     }
@@ -177,10 +251,12 @@ export default function ContractorHome() {
       const data = await response.json();
       const isActive = Boolean(data?.success && data?.isActive);
       setHasPremium(isActive);
+      setPremiumDetails(data?.premiumDetails || null);
       return isActive;
     } catch (err) {
       console.warn('Could not fetch premium status:', (err as Error).message);
       setHasPremium(false);
+      setPremiumDetails(null);
       return false;
     } finally {
       setPremiumStatusLoading(false);
@@ -191,6 +267,7 @@ export default function ContractorHome() {
     if (!accessToken) {
       setPremiumStatusLoading(false);
       setHasPremium(false);
+      setPremiumDetails(null);
       setLeaderboard([]);
       return;
     }
@@ -649,7 +726,7 @@ export default function ContractorHome() {
             <View style={styles.premiumBanner}>
               <MaterialIcons name="lock" size={32} color="#1f3a5f" />
               <Text style={styles.premiumBannerTitle}>Unlock Leadership Board</Text>
-              <Text style={styles.premiumBannerSubtitle}>Upgrade to Premium to see full rankings</Text>
+              <Text style={styles.premiumBannerSubtitle}>{getPremiumStatusMessage()}</Text>
               <TouchableOpacity style={styles.premiumBannerButton} onPress={handleUpgrade}>
                 <Text style={styles.premiumBannerButtonText}>Upgrade Now</Text>
               </TouchableOpacity>

@@ -419,7 +419,10 @@ export default function Wallet(): React.ReactElement {
       // setDepositModalVisible(false);
 
       if (res.data.success) {
-        Alert.alert(t('success'), t('depositSuccessDetailed').replace('{amount}', String(currentDepositAmount)));
+        const message = res.data.isDuplicate
+          ? 'Deposit already processed successfully.'
+          : t('depositSuccessDetailed').replace('{amount}', String(currentDepositAmount));
+        Alert.alert(t('success'), message);
         setDepositAmount('');
         setShowDeposit(false);
         // ✅ Fallback: Fetch wallet if socket fails

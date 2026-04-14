@@ -23,9 +23,31 @@ import {
   UPLOAD_ERROR_CODES,
   ERROR_MESSAGES,
   IMAGE_CONSTRAINTS,
+  LogLevel,
 } from './uploadConfig';
-import { uploadTelemetry, LogLevel } from './uploadTelemetry';
+import { uploadTelemetry } from './uploadTelemetry';
 import { uploadRateLimiter } from './uploadRateLimiter';
+
+/**
+ * @typedef {{ loaded: number; total: number; percent?: number }} CloudinaryUploadProgress
+ * @typedef {{
+ *   onProgress?: (progress: CloudinaryUploadProgress) => void;
+ *   maxRetries?: number;
+ *   timeout?: number;
+ *   mimeType?: string | null;
+ *   authToken?: string | null;
+ *   uploadType?: string;
+ * }} UploadOptions
+ * @typedef {{
+ *   success: boolean;
+ *   url?: string;
+ *   fileUrl?: string;
+ *   publicId?: string;
+ *   duration?: number;
+ *   error?: string;
+ *   errorCode?: string;
+ * }} UploadResult
+ */
 
 /**
  * Get file mime type from URI
@@ -123,6 +145,11 @@ async function validateFile(fileUri, uploadType = 'other', mimeType = null) {
 /**
  * Get upload signature from backend
  */
+/**
+ * @param {string | null | undefined} authToken
+ * @param {string} folder
+ * @param {string} publicId
+ */
 async function getUploadSignature(authToken, folder, publicId) {
   const response = await fetch(`${API_BASE}/upload/cloudinary-signature`, {
     method: 'POST',
@@ -151,6 +178,13 @@ function getBackoffDelay(attemptNumber) {
 /**
  * Main upload function with all production features
  */
+/**
+ * @param {string} fileUri
+ * @param {string} [folder]
+ * @param {string | null} [publicId]
+ * @param {UploadOptions} [options]
+ * @returns {Promise<UploadResult>}
+ */
 export async function uploadToCloudinaryDirect(fileUri, folder = 'kaamwale/uploads/images', publicId = null, options = {}) {
   const uploadId = `upload-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
   uploadTelemetry.recordStart(uploadId);
@@ -161,7 +195,7 @@ export async function uploadToCloudinaryDirect(fileUri, folder = 'kaamwale/uploa
     maxRetries = RETRY_CONFIG.MAX_RETRIES,
     timeout = UPLOAD_TIMEOUT,
     mimeType = null,
-    authToken = '',
+    authToken = null,
     uploadType = 'other',
   } = options;
 

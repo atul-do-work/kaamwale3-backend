@@ -731,7 +731,7 @@ export default function GigHistory() {
           )}
           
           {paymentStatus === 'paid' && !isCancelled && (
-            <View style={[styles.requirementBadge, { borderColor: '#27AE60', backgroundColor: '#E8F5E9' }]>
+            <View style={[styles.requirementBadge, { borderColor: '#27AE60', backgroundColor: '#E8F5E9' }]}> 
               <MaterialIcons name="check-circle" size={18} color="#27AE60" />
               <Text style={[styles.requirementText, { color: '#27AE60' }]}>{t('completed')} ✔</Text>
             </View>

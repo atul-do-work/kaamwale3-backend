@@ -96,6 +96,12 @@ export default function RootLayout() {
     const sub = AppState.addEventListener('change', async (state) => {
       if (state !== 'active') return;
       try {
+        const existingToken = await AsyncStorage.getItem('appFcmToken');
+        if (existingToken) {
+          console.log('ℹ️ FCM token already available, skipping foreground refresh');
+          return;
+        }
+
         const latestToken = await registerForPushNotificationsAsync();
         if (latestToken) {
           await AsyncStorage.setItem('appFcmToken', latestToken);

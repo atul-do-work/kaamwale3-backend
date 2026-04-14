@@ -309,15 +309,18 @@ export default function ContractorWalletAttendance() {
     // ✅ Use named handlers for safe cleanup
     const handleJobUpdated = () => fetchJobs();
     const handleJobAccepted = () => fetchJobs();
+    const handleJobCancelled = () => fetchJobs();
 
     socket.on("jobUpdated", handleJobUpdated);
     socket.on("jobAccepted", handleJobAccepted);
+    socket.on("jobCancelled", handleJobCancelled);
     // ✅ walletUpdated now handled by useWalletBalance hook
 
     return () => {
       // ✅ Remove listeners with handler references (screen-safe cleanup)
       socket.off("jobUpdated", handleJobUpdated);
       socket.off("jobAccepted", handleJobAccepted);
+      socket.off("jobCancelled", handleJobCancelled);
     };
   }, [fetchJobs, accessToken, authUser?.phone]);
 
@@ -541,7 +544,7 @@ export default function ContractorWalletAttendance() {
       // Check response success flag
       if (verifyData.success) {
         const successMessage = verifyData?.isDuplicate
-          ? 'Payment confirmed. Latest status has been synced.'
+          ? 'Deposit already processed successfully.'
           : `${t('paymentSuccessful')}!`;
         showAppModal("success", t('success'), successMessage);
         // Keep UI responsive even if socket update is delayed.

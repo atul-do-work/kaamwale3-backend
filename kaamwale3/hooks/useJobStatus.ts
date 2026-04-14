@@ -24,9 +24,17 @@ export const useJobStatus = (jobId?: string): UseJobStatusReturn => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const filterWorkerJobs = (items: any[]): any[] => {
+    return items.filter((job) => {
+      const status = String(job?.status || '').toLowerCase();
+      return status !== 'cancelled' && status !== 'expired';
+    });
+  };
+
   const fetchJobStatus = async () => {
     if (!accessToken) {
       console.warn('⚠️ useJobStatus: No access token');
+      setJobs([]);
       setLoading(false);
       return;
     }
@@ -36,15 +44,32 @@ export const useJobStatus = (jobId?: string): UseJobStatusReturn => {
 
     try {
       const data = await jobStatusCacheManager.getStatus(accessToken, jobId);
-      if (data?.success) {
-        const jobsList = data.jobs || (jobId ? [data] : []);
-        setJobs(jobsList);
-        console.log(`✅ Job status loaded: ${jobsList.length} jobs`);
+      let jobsList: any[] = [];
+
+      if (Array.isArray(data)) {
+        jobsList = data;
+      } else if (Array.isArray(data?.gigs)) {
+        jobsList = data.gigs;
+      } else if (Array.isArray(data?.jobs)) {
+        jobsList = data.jobs;
+      } else if (jobId && data?.job) {
+        jobsList = [data.job];
+      } else if (data?.success && data?.job) {
+        jobsList = [data.job];
+      }
+
+      const validJobs = filterWorkerJobs(jobsList);
+      if (validJobs.length === 0) {
+        setJobs([]);
+        setError(null);
+        console.log('ℹ️ useJobStatus: no active worker jobs found');
       } else {
-        setError('Failed to load job status');
+        setJobs(validJobs);
+        console.log(`✅ Job status loaded: ${validJobs.length} jobs`);
       }
     } catch (err) {
       console.error('❌ Job status fetch error:', err);
+      setJobs([]);
       setError(err instanceof Error ? err.message : 'Unknown error');
     } finally {
       setLoading(false);

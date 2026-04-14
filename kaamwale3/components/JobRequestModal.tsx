@@ -35,6 +35,7 @@ interface Worker {
 
 interface JobRequestModalProps {
   visible: boolean;
+  renderAsPanel?: boolean;
   onClose: () => void;
   worker: Worker | null;
   onRequestSent: (workerPhone: string, requestId: string) => void;
@@ -42,6 +43,7 @@ interface JobRequestModalProps {
 
 export default function JobRequestModal({
   visible,
+  renderAsPanel,
   onClose,
   worker,
   onRequestSent,
@@ -158,19 +160,13 @@ export default function JobRequestModal({
 
   if (!worker) return null;
 
-  return (
-    <Modal visible={visible} animationType="slide" transparent={true}>
-      <KeyboardAvoidingView
-        style={styles.overlay}
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-      >
-        <SafeAreaView style={styles.container}>
-          <TouchableOpacity
-            style={styles.overlay}
-            activeOpacity={1}
-            onPress={() => Keyboard.dismiss()}
-          >
-            <View style={styles.modalContent}>
+  const content = (
+    <KeyboardAvoidingView
+      style={[styles.overlay, renderAsPanel && styles.centerOverlay]}
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+    >
+      <SafeAreaView style={renderAsPanel ? [styles.panelContainer, styles.centerPanel] : styles.container}>
+            <View style={styles.modalContent} pointerEvents="box-none">
               <View style={styles.header}>
                 <TouchableOpacity onPress={onClose} accessibilityLabel="Close modal">
                   <MaterialIcons name="close" size={28} color="#333" />
@@ -179,7 +175,14 @@ export default function JobRequestModal({
                 <View style={{ width: 28 }} />
               </View>
 
-              <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
+              <ScrollView
+                style={styles.content}
+                contentContainerStyle={styles.scrollContentContainer}
+                showsVerticalScrollIndicator={false}
+                nestedScrollEnabled={true}
+                keyboardShouldPersistTaps="handled"
+                keyboardDismissMode="on-drag"
+              >
                 {/* Worker Info */}
                 <View style={styles.workerInfo}>
                   <Text style={styles.workerName}>{worker.name || 'Unknown Worker'}</Text>
@@ -233,7 +236,7 @@ export default function JobRequestModal({
                     style={styles.textInput}
                     placeholder="Enter job location"
                     value={location}
-                    onChangeText={(text) => setLocation(text.slice(0, 200))} // Limit to 200 chars
+                    onChangeText={(text) => setLocation(text.slice(0, 200))}
                     multiline
                     numberOfLines={2}
                     accessibilityLabel="Job location"
@@ -308,9 +311,21 @@ export default function JobRequestModal({
                 />
               )}
             </View>
-          </TouchableOpacity>
-        </SafeAreaView>
+      </SafeAreaView>
       </KeyboardAvoidingView>
+    );
+
+  if (renderAsPanel) {
+    return (
+      <View style={styles.panelOverlay}>
+        {content}
+      </View>
+    );
+  }
+
+  return (
+    <Modal visible={visible} animationType="slide" transparent={true} onRequestClose={onClose}>
+      {content}
     </Modal>
   );
 }
@@ -323,13 +338,31 @@ const styles = StyleSheet.create({
   },
   modalContent: {
     flex: 1,
-    justifyContent: 'flex-end',
   },
   container: {
     backgroundColor: '#fff',
     borderTopLeftRadius: 20,
     borderTopRightRadius: 20,
     maxHeight: '80%',
+  },
+  centerOverlay: {
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  centerPanel: {
+    width: '92%',
+    borderRadius: 20,
+    maxHeight: '90%',
+    alignSelf: 'center',
+    overflow: 'hidden',
+  },
+  content: {
+    flex: 1,
+    padding: 20,
+  },
+  scrollContentContainer: {
+    flexGrow: 1,
+    paddingBottom: 24,
   },
   header: {
     flexDirection: 'row',
@@ -344,9 +377,6 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: '600',
     color: '#333',
-  },
-  content: {
-    padding: 20,
   },
   workerInfo: {
     backgroundColor: '#f8f9fa',
@@ -411,6 +441,17 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: '#f0f0f0',
     gap: 12,
+  },
+  panelOverlay: {
+    flex: 1,
+    backgroundColor: 'transparent',
+  },
+  panelContainer: {
+    backgroundColor: '#fff',
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    minHeight: '80%',
+    maxHeight: '100%',
   },
   cancelButton: {
     flex: 1,
