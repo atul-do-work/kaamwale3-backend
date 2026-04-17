@@ -37,9 +37,10 @@ export const useWorkerAvailability = (): UseWorkerAvailabilityReturn => {
 
     try {
       const data = await availabilityCacheManager.getStatus(accessToken);
-      if (data?.success) {
-        setIsOnline(data.isOnline || data.status === 'online' || false);
-        console.log(`✅ Availability loaded - Online: ${data.isOnline}`);
+      const fetchedStatus = data?.worker?.isAvailable ?? data?.isAvailable ?? data?.isOnline ?? data?.status === 'online';
+      if (data?.success || typeof fetchedStatus === 'boolean') {
+        setIsOnline(Boolean(fetchedStatus));
+        console.log(`✅ Availability loaded - Online: ${Boolean(fetchedStatus)}`);
       } else {
         setError('Failed to load availability');
       }
@@ -66,7 +67,8 @@ export const useWorkerAvailability = (): UseWorkerAvailabilityReturn => {
     const handleStatusUpdate = (data: any) => {
       console.log('📡 workerStatusUpdate event received:', data);
       availabilityCacheManager.invalidate();
-      setIsOnline(data.isOnline || data.status === 'online' || false);
+      const status = data?.isAvailable ?? data?.worker?.isAvailable ?? data?.isOnline ?? data?.status === 'online';
+      setIsOnline(Boolean(status));
     };
 
     socket.on('workerStatusUpdate', handleStatusUpdate);
@@ -82,14 +84,14 @@ export const useWorkerAvailability = (): UseWorkerAvailabilityReturn => {
 
     try {
       const response = await fetch(
-        `${process.env.REACT_APP_API_BASE}/worker/availability`,
+        `${process.env.REACT_APP_API_BASE}/workers/availability`,
         {
           method: 'PUT',
           headers: {
             'Content-Type': 'application/json',
             Authorization: `Bearer ${accessToken}`,
           },
-          body: JSON.stringify({ isOnline: status }),
+          body: JSON.stringify({ isAvailable: status }),
         }
       );
 

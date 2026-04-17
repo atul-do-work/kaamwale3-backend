@@ -34,7 +34,7 @@ const WAGE_RANGES = [
 
 export default function Profile(): React.ReactElement {
   const { t } = useLanguage();
-  const { logout } = useAuth();
+  const { logout, accessToken } = useAuth();
   const insets = useSafeAreaInsets();
   const [userName, setUserName] = useState<string>("Worker");
   const [workerId, setWorkerId] = useState<string>("0000");
@@ -159,6 +159,13 @@ export default function Profile(): React.ReactElement {
     }
   };
 
+  const isValidImageDimension = (width?: number, height?: number) => {
+    if (!width || !height) return false;
+    const minDimension = 300;
+    const ratio = width / height;
+    return width >= minDimension && height >= minDimension && ratio >= 0.75 && ratio <= 1.33;
+  };
+
   const pickImage = async () => {
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (status !== "granted") {
@@ -176,15 +183,24 @@ export default function Profile(): React.ReactElement {
     });
 
     if (!result.canceled && result.assets?.length > 0) {
-      const uri = result.assets[0].uri;
+      const asset = result.assets[0];
+      if (!isValidImageDimension(asset.width, asset.height)) {
+        Alert.alert(
+          t('error'),
+          'Invalid image dimensions. Please choose a different image.'
+        );
+        return;
+      }
+
+      const uri = asset.uri;
 
       // Show local image immediately
       setProfilePhoto(uri);
       setUploadProgress(0);
 
       try {
-        const userToken = await AsyncStorage.getItem("token");
-        if (!userToken) {
+        const authToken = accessToken || userToken || await AsyncStorage.getItem("token") || await AsyncStorage.getItem("accessToken");
+        if (!authToken) {
           Alert.alert(t('error'), t('photoUploadError'));
           return;
         }
@@ -200,7 +216,7 @@ export default function Profile(): React.ReactElement {
               setUploadProgress(percent);
             },
             uploadType: 'profile',
-            authToken: userToken,
+            authToken,
             maxRetries: 3,
           }
         );
@@ -297,6 +313,7 @@ export default function Profile(): React.ReactElement {
     }
 
     try {
+      const authToken = accessToken || userToken || await AsyncStorage.getItem("token") || await AsyncStorage.getItem("accessToken");
       const response = await axios.post(
         `${API_BASE}/users/update-profile`,
         {
@@ -305,7 +322,7 @@ export default function Profile(): React.ReactElement {
         },
         {
           headers: {
-            Authorization: `Bearer ${userToken}`,
+            Authorization: `Bearer ${authToken}`,
             "Content-Type": "application/json",
           },
         }

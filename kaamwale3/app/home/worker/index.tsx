@@ -133,10 +133,11 @@ interface JobItemProps {
   onDecline: (id: string, auto?: boolean) => void; // ✅ Changed from number to string
   timer: number;
   t: (key: string) => string; // ✅ Translation function
+  currentUserPhone?: string | null;
 }
 
 // ---------------- JOB CARD COMPONENT ----------------
-const JobItem = memo(({ item, onAccept, onDecline, timer, t }: JobItemProps) => (
+const JobItem = memo(({ item, onAccept, onDecline, timer, t, currentUserPhone }: JobItemProps) => (
   <View style={styles.jobCard}>
     <Text style={styles.title}>{item.title}</Text>
 
@@ -216,6 +217,13 @@ function WorkerHome() {
   const [setupModalWage, setSetupModalWage] = useState<string>("");
   const [showSetupSkillMenu, setShowSetupSkillMenu] = useState<boolean>(false);
   const [showSetupWageMenu, setShowSetupWageMenu] = useState<boolean>(false);
+  const [pendingJobAction, setPendingJobAction] = useState<boolean>(false);
+
+  const isValidLocation = (coords: { lat: number; lon: number } | null) =>
+    coords?.lat !== undefined && coords?.lon !== undefined &&
+    Number.isFinite(coords.lat) && Number.isFinite(coords.lon) &&
+    coords.lat >= -90 && coords.lat <= 90 &&
+    coords.lon >= -180 && coords.lon <= 180;
 
   const router = useRouter();
 
@@ -1095,8 +1103,9 @@ function WorkerHome() {
     const handleWorkerStatusUpdate = (data: any) => {
       console.log("📡 workerStatusUpdate event received:", data);
       availabilityCacheManager.invalidate();
-      if (data.isOnline !== undefined) {
-        setIsOnline(data.isOnline);
+      const status = data?.isAvailable ?? data?.worker?.isAvailable ?? data?.isOnline ?? data?.status === 'online';
+      if (status !== undefined) {
+        setIsOnline(Boolean(status));
       }
     };
 
@@ -1447,6 +1456,8 @@ function WorkerHome() {
   const toggleOnlineStatus = async () => {
     if (togglingStatus) return; // Prevent multiple clicks
     
+    let authToken = token || (await AsyncStorage.getItem("accessToken")) || (await AsyncStorage.getItem("token"));
+    
     // Check if user is trying to go online
     if (!isOnline) {
       // STEP 1: QUICK LOCAL CHECK (instant feedback) - Just verify cache hasn't become stale
@@ -1466,12 +1477,18 @@ function WorkerHome() {
       console.log("🔍 Starting backend profile verification...");
       setTogglingStatus(true);
       
+      if (!authToken) {
+        setTogglingStatus(false);
+        Alert.alert("Authentication Error", "Unable to verify your profile because your session token is missing. Please log in again.");
+        return;
+      }
+      
       try {
         const verifyRes = await fetch(`${API_BASE}/workers/verify-profile`, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            Authorization: `Bearer ${token}`,
+            Authorization: `Bearer ${authToken}`,
           },
         });
 
@@ -1520,7 +1537,23 @@ function WorkerHome() {
           console.log(`✅ Got location for toggle: lat=${locationForToggle.latitude}, lon=${locationForToggle.longitude}`);
         } catch (locErr) {
           console.warn('⚠️ Could not get location for toggle:', locErr);
-          // Continue without location - backend will accept it
+        }
+
+        if (!locationForToggle && isValidLocation(currentLocation)) {
+          locationForToggle = {
+            latitude: currentLocation!.lat,
+            longitude: currentLocation!.lon,
+          };
+          console.log('⚠️ Using cached currentLocation because GPS lookup failed');
+        }
+
+        if (!locationForToggle) {
+          setTogglingStatus(false);
+          Alert.alert(
+            'Location required',
+            'Unable to determine your current location. Please enable location services and try again before going online.'
+          );
+          return;
         }
       }
 
@@ -1536,7 +1569,7 @@ function WorkerHome() {
         method: "PUT",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
+          Authorization: `Bearer ${authToken}`,
         },
         body: JSON.stringify(body),
       });
@@ -1671,7 +1704,9 @@ function WorkerHome() {
       
       // ✅ DUPLICATE PREVENTION: Only show jobs not already displayed or handled
       const newJobs = data.filter(j => !handledJobs.has(j._id) && !displayedJobIds.current.has(j._id));
-      if (newJobs.length === 0) return;
+      if (newJobs.length === 0) {
+        return;
+      }
 
       const first = newJobs[0];
       const location = await getAddressFromCoords(first.lat, first.lon);
@@ -1788,7 +1823,25 @@ function WorkerHome() {
   };
 
   // ---------------- HANDLE ACCEPT ----------------
+  const reconcileAcceptedJob = async (jobId: string) => {
+    try {
+      const confirmedJob = await fetchJobById(jobId);
+      if (!confirmedJob) return null;
+      console.log("🔍 Reconciled accepted job from backend:", confirmedJob);
+      return confirmedJob;
+    } catch (err) {
+      console.warn("Could not reconcile accepted job:", err);
+      return null;
+    }
+  };
+
   const handleAccept = async (jobId: string) => {
+    if (pendingJobAction) {
+      console.log("⚠️ Accept already in progress, ignoring duplicate tap");
+      return;
+    }
+
+    setPendingJobAction(true);
     await cleanupJobAlert();
     if (timerRef.current) clearInterval(timerRef.current);
 
@@ -1808,25 +1861,47 @@ function WorkerHome() {
       console.log("Response:", data);
 
       if (!res.ok) {
-        console.log("❌ Accept failed:", data.message);
+        console.log("❌ Accept failed:", data.message, "status", res.status);
+        if (res.status === 409) {
+          throw new Error(data.message || "Job was already accepted by another worker.");
+        }
         throw new Error(data.message || "Failed to accept job");
       }
 
       console.log("✅ Job accepted successfully");
-      
       setHandledJobs(p => new Set(p).add(jobId));
-      clearCurrentJobAndDedup(jobId);
-      Alert.alert("✅ Job Accepted", "You accepted this job!");
+
+      const confirmedJob = await reconcileAcceptedJob(jobId);
+      const acceptedByThisWorker = confirmedJob && (
+        String(confirmedJob.acceptedBy || "").trim() === String(currentUserPhone || "").trim() ||
+        !!getWorkerEntryForPhone(confirmedJob, currentUserPhone)
+      );
+
+      if (confirmedJob && !acceptedByThisWorker) {
+        Alert.alert("Notice", "This job is no longer available. Refreshing available jobs.");
+        if (currentLocation) await fetchNearbyJobs(currentLocation.lat, currentLocation.lon);
+      } else {
+        clearCurrentJobAndDedup(jobId);
+        Alert.alert("✅ Job Accepted", "You accepted this job!");
+      }
 
       socket.emit("jobAccepted", { jobId, workerName, workerType });
     } catch (err) {
       console.error("❌ Accept error:", err);
       Alert.alert("Error", err instanceof Error ? err.message : "Could not accept job.");
+    } finally {
+      setPendingJobAction(false);
     }
   };
 
   // ---------------- HANDLE DECLINE ----------------
   const handleDecline = async (jobId: string, auto = false) => {
+    if (pendingJobAction) {
+      console.log("⚠️ Decline already in progress, ignoring duplicate tap");
+      return;
+    }
+
+    setPendingJobAction(true);
     await cleanupJobAlert();
     if (timerRef.current) clearInterval(timerRef.current);
 
@@ -1846,12 +1921,14 @@ function WorkerHome() {
       console.log("Response:", data);
 
       if (!res.ok) {
-        console.log("❌ Decline failed:", data.message);
+        console.log("❌ Decline failed:", data.message, "status", res.status);
+        if (res.status === 409) {
+          throw new Error(data.message || "This job is no longer available.");
+        }
         throw new Error(data.message || "Failed to decline job");
       }
 
       console.log("✅ Job declined successfully");
-      
       setHandledJobs(prev => new Set(prev).add(jobId));
       clearCurrentJobAndDedup(jobId);
 
@@ -1861,6 +1938,8 @@ function WorkerHome() {
     } catch (err) {
       console.error("❌ Decline error:", err);
       Alert.alert("Error", err instanceof Error ? err.message : "Could not decline job.");
+    } finally {
+      setPendingJobAction(false);
     }
   };
 
@@ -2076,25 +2155,21 @@ function WorkerHome() {
               {/* Action Buttons */}
               <View style={styles.buttonRow}>
                 <TouchableOpacity
-                  style={styles.declineButton}
-                  onPress={() => {
-                    handleDecline(currentJob._id);
-                    clearCurrentJobAndDedup(currentJob._id);
-                  }}
+                  style={[styles.declineButton, pendingJobAction ? { opacity: 0.5 } : {}]}
+                  onPress={() => handleDecline(currentJob._id)}
+                  disabled={pendingJobAction}
                 >
                   <MaterialIcons name="close" size={20} color="#fff" />
-                  <Text style={styles.buttonText}>Decline</Text>
+                  <Text style={styles.buttonText}>{pendingJobAction ? 'Processing...' : 'Decline'}</Text>
                 </TouchableOpacity>
 
                 <TouchableOpacity
-                  style={styles.acceptButton}
-                  onPress={() => {
-                    handleAccept(currentJob._id);
-                    clearCurrentJobAndDedup(currentJob._id);
-                  }}
+                  style={[styles.acceptButton, pendingJobAction ? { opacity: 0.5 } : {}]}
+                  onPress={() => handleAccept(currentJob._id)}
+                  disabled={pendingJobAction}
                 >
                   <MaterialIcons name="check" size={20} color="#fff" />
-                  <Text style={styles.buttonText}>Accept</Text>
+                  <Text style={styles.buttonText}>{pendingJobAction ? 'Processing...' : 'Accept'}</Text>
                 </TouchableOpacity>
               </View>
             </View>

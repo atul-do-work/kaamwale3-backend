@@ -99,6 +99,12 @@ async function getImageDimensions(fileUri) {
   }
 }
 
+async function getExtensionFromUri(fileUri) {
+  const match = /(?:\.)([a-zA-Z0-9]+)(?:\?.*)?$/.exec(fileUri);
+  const extension = match ? `.${match[1].toLowerCase()}` : '.jpg';
+  return extension;
+}
+
 /**
  * Validate file before upload
  */
@@ -151,15 +157,24 @@ async function validateFile(fileUri, uploadType = 'other', mimeType = null) {
  * @param {string} publicId
  */
 async function getUploadSignature(authToken, folder, publicId) {
+  if (!authToken) {
+    throw new Error('Missing authentication token');
+  }
+
   const response = await fetch(`${API_BASE}/upload/cloudinary-signature`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
     body: JSON.stringify({ folder, publicId, resourceType: 'image' }),
   });
 
-  if (!response.ok) throw new Error('Failed to get upload signature');
-  const data = await response.json();
-  if (!data.success) throw new Error(data.message || 'Signature request failed');
+  const data = await response.json().catch(() => null);
+  if (!response.ok) {
+    const message = data?.message || 'Failed to get upload signature';
+    throw new Error(message);
+  }
+  if (!data?.success) {
+    throw new Error(data.message || 'Signature request failed');
+  }
 
   return { signature: data, expiresAt: Date.now() + (data.signatureExpiry || 3600) * 1000 };
 }
@@ -200,6 +215,7 @@ export async function uploadToCloudinaryDirect(fileUri, folder = 'kaamwale/uploa
   } = options;
 
   const finalPublicId = publicId || `upload-${Date.now()}`;
+  let currentFileUri = fileUri;
 
   try {
     // Step 1: Check rate limit
@@ -212,14 +228,33 @@ export async function uploadToCloudinaryDirect(fileUri, folder = 'kaamwale/uploa
 
     // Step 2: Validate file
     uploadTelemetry.log(uploadId, LogLevel.DEBUG, 'Validating file');
-    const validation = await validateFile(fileUri, uploadType, mimeType);
+    const detectedMimeType = mimeType || (await getMimeType(currentFileUri));
+    let validation = await validateFile(currentFileUri, uploadType, detectedMimeType);
     if (!validation.valid) {
       uploadTelemetry.log(uploadId, LogLevel.WARN, 'File validation failed', validation);
-      return { success: false, error: validation.error, errorCode: validation.errorCode };
+      if (validation.errorCode === UPLOAD_ERROR_CODES.FILE_TOO_LARGE && detectedMimeType.startsWith('image/')) {
+        uploadTelemetry.log(uploadId, LogLevel.INFO, 'Attempting compression for oversized image');
+        try {
+          const compressed = await ImageManipulator.manipulateAsync(currentFileUri, [{ resize: { width: 1200 } }], {
+            compress: 0.7,
+            format: ImageManipulator.SaveFormat.JPEG,
+          });
+          currentFileUri = compressed.uri;
+          validation = await validateFile(currentFileUri, uploadType, detectedMimeType);
+          if (!validation.valid) {
+            uploadTelemetry.log(uploadId, LogLevel.WARN, 'Compressed file validation failed', validation);
+            return { success: false, error: validation.error, errorCode: validation.errorCode };
+          }
+        } catch (compressionError) {
+          uploadTelemetry.log(uploadId, LogLevel.WARN, 'Image compression failed', { error: compressionError });
+          return { success: false, error: validation.error, errorCode: validation.errorCode };
+        }
+      } else {
+        return { success: false, error: validation.error, errorCode: validation.errorCode };
+      }
     }
 
-    const fileSize = await getFileSize(fileUri);
-    const detectedMimeType = mimeType || (await getMimeType(fileUri));
+    const fileSize = await getFileSize(currentFileUri);
     uploadTelemetry.log(uploadId, LogLevel.INFO, 'File validated', { fileSize, mimeType: detectedMimeType });
 
     // Step 3: Get signature from backend with retry
@@ -250,13 +285,13 @@ export async function uploadToCloudinaryDirect(fileUri, folder = 'kaamwale/uploa
 
     // Step 4: Prepare form data
     const formData = new FormData();
-    const file = { uri: fileUri, type: detectedMimeType, name: finalPublicId };
+    const file = { uri: currentFileUri, type: detectedMimeType, name: `${finalPublicId}${await getExtensionFromUri(currentFileUri)}` };
     formData.append('file', file);
     formData.append('api_key', signature.signature.apiKey);
     formData.append('timestamp', signature.signature.timestamp.toString());
     formData.append('signature', signature.signature.signature);
     if (signature.signature.folder) formData.append('folder', signature.signature.folder);
-    if (signature.signature.publicId) formData.append('public_id', signature.signature.publicId);
+    formData.append('public_id', signature.signature.publicId || finalPublicId);
 
     // Step 5: Upload with retry logic
     uploadTelemetry.log(uploadId, LogLevel.INFO, 'Starting upload to Cloudinary', { totalSize: fileSize });
@@ -274,7 +309,13 @@ export async function uploadToCloudinaryDirect(fileUri, folder = 'kaamwale/uploa
         const uploadPromise = fetch(`https://api.cloudinary.com/v1_1/${signature.signature.cloudName}/image/upload`, {
           method: 'POST',
           body: formData,
-        }).then((r) => r.json());
+        }).then(async (r) => {
+          const payload = await r.json().catch(() => null);
+          if (!r.ok) {
+            throw new Error(payload?.error?.message || `Cloudinary HTTP ${r.status}`);
+          }
+          return payload;
+        });
 
         uploadResult = await Promise.race([uploadPromise, timeoutPromise]);
 

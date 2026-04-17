@@ -5,7 +5,7 @@
 
 // File size limits (in bytes)
 export const UPLOAD_LIMITS = {
-  PROFILE_PHOTO: 1.5 * 1024 * 1024, // 1.5 MB
+  PROFILE_PHOTO: 5 * 1024 * 1024, // 5 MB
   VERIFICATION_DOCUMENT: 2 * 1024 * 1024, // 2 MB
   DEFAULT: 5 * 1024 * 1024, // 5 MB
 };

@@ -99,6 +99,21 @@ export default function ContractorHome() {
 
     socket.on('jobRequestResponse', handleJobRequestResponse);
 
+    const handleJobCancelled = async (data: any) => {
+      try {
+        const contractorPhone = String(data?.contractorPhone || "").trim();
+        if (!currentUserPhone || !contractorPhone) return;
+        if (normalizePhoneDigits(contractorPhone) !== normalizePhoneDigits(currentUserPhone)) return;
+
+        console.log('🔔 jobCancelled received for contractor, refreshing notification count');
+        await fetchNotificationCount();
+      } catch (err) {
+        console.warn('Failed to refresh notifications on jobCancelled:', err);
+      }
+    };
+
+    socket.on('jobCancelled', handleJobCancelled);
+
     const handleProfilePhotoUpdated = async (data: any) => {
       try {
         if (data.phone !== currentUserPhone) return;
@@ -122,6 +137,7 @@ export default function ContractorHome() {
     return () => {
       socket.off('premiumSubscriptionUpdate', handlePremiumSubscriptionUpdate);
       socket.off('jobRequestResponse', handleJobRequestResponse);
+      socket.off('jobCancelled', handleJobCancelled);
       socket.off('profilePhotoUpdated', handleProfilePhotoUpdated);
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps

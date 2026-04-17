@@ -46,9 +46,8 @@ export default function PremiumPlansModal({
     try {
       const res = await api.get(`/wallet/balance`);
       const data = res.data;
-      if (data.balance !== undefined) {
-        setWalletBalance(data.balance);
-      }
+      const resolvedBalance = Number(data.balance ?? data.pocketBalance ?? 0);
+      setWalletBalance(resolvedBalance);
     } catch (err) {
       console.log("Could not fetch wallet balance:", err);
     }

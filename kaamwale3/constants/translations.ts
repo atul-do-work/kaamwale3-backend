@@ -346,6 +346,8 @@ export const translations = {
     // Missing keys from jobs.tsx
     supportNumberUnavailable: "Support number unavailable",
     callNotAvailable: "Call not available",
+    acceptedJobs: "Accepted Jobs",
+    pastJobs: "Past Jobs",
     callingNotSupportedMessage: "Calling not supported on this device. Please use SMS instead.",
     sendSms: "Send SMS",
     pleaseContactSupportAt: "Please contact support at",
@@ -1059,6 +1061,8 @@ export const translations = {
     yourRatingForContractor: "ठेकेदारसाठी आपली रेटिंग",
     rateContractor: "ठेकेदारला रेट करा",
     seeAllJobs: "सर्व नोकऱ्या पहा",
+    acceptedJobs: "मंजूर केलेल्या नोकऱ्या",
+    pastJobs: "मागील नोकऱ्या",
     loadingJobs: "नोकऱ्या लोड होत आहेत...",
     noPendingJobs: "कोणत्याही प्रलंबित नोकऱ्या नाहीत",
     thisWeeksJobs: "या आठवड्याच्या नोकऱ्या",

@@ -15,8 +15,10 @@ import { LinearGradient } from "expo-linear-gradient";
 import { useRouter, useFocusEffect } from "expo-router";
 import { useAuth } from "../context/AuthContext";
 import * as ImagePicker from "expo-image-picker";
+import * as FileSystem from "expo-file-system";
 import { SERVER_URL } from "../utils/config";
 import api from "../utils/api";
+import { uploadToCloudinaryDirect } from "../utils/cloudinaryDirectUpload";
 
 interface VerificationDocument {
   type: string;
@@ -46,6 +48,39 @@ const DOCUMENT_TYPES = [
   { id: "bank_account", label: "Bank Account", icon: "account-balance" },
   { id: "gst", label: "GST Certificate", icon: "business" },
 ];
+
+const VERIFICATION_FILE_SIZE_LIMIT = 2 * 1024 * 1024; // 2MB
+
+async function getFileSize(uri: string) {
+  try {
+    const info = await FileSystem.getInfoAsync(uri);
+    return typeof (info as any).size === 'number' ? (info as any).size : 0;
+  } catch (err) {
+    console.warn("Failed to read file size", err);
+    return 0;
+  }
+}
+
+async function validateVerificationFile(uri: string) {
+  const size = await getFileSize(uri);
+  if (!size) {
+    return { valid: false, message: "Unable to read selected file. Please choose another image." };
+  }
+  if (size > VERIFICATION_FILE_SIZE_LIMIT) {
+    return {
+      valid: false,
+      message: "Selected file is too large. Please choose an image smaller than 2MB.",
+    };
+  }
+  return { valid: true, size };
+}
+
+function isValidImageDimension(width?: number, height?: number) {
+  if (!width || !height) return false;
+  const minDimension = 300;
+  const ratio = width / height;
+  return width >= minDimension && height >= minDimension && ratio >= 0.75 && ratio <= 1.33;
+}
 
 export default function VerificationScreen(): React.ReactElement {
   const router = useRouter();
@@ -108,6 +143,15 @@ export default function VerificationScreen(): React.ReactElement {
 
       if (!result.canceled && result.assets[0]) {
         const asset = result.assets[0];
+        const validation = await validateVerificationFile(asset.uri);
+        if (!validation.valid) {
+          Alert.alert("Error", validation.message);
+          return;
+        }
+        if (!isValidImageDimension(asset.width, asset.height)) {
+          Alert.alert("Error", "Invalid image dimensions. Please choose a different image.");
+          return;
+        }
         setSelectedFile({
           uri: asset.uri,
           type: "image/jpeg",
@@ -138,6 +182,15 @@ export default function VerificationScreen(): React.ReactElement {
 
       if (!result.canceled && result.assets[0]) {
         const asset = result.assets[0];
+        const validation = await validateVerificationFile(asset.uri);
+        if (!validation.valid) {
+          Alert.alert("Error", validation.message);
+          return;
+        }
+        if (!isValidImageDimension(asset.width, asset.height)) {
+          Alert.alert("Error", "Invalid image dimensions. Please choose a different image.");
+          return;
+        }
         setSelectedFile({
           uri: asset.uri,
           type: "image/jpeg",
@@ -151,7 +204,7 @@ export default function VerificationScreen(): React.ReactElement {
     }
   };
 
-  // Upload document using multipart/form-data (preferred for mobile)
+  // Upload document using direct Cloudinary storage
   const uploadDocument = async () => {
     if (!selectedDocType || !selectedFile || !accessToken) {
       Alert.alert("Error", "Please select document type and file");
@@ -161,29 +214,37 @@ export default function VerificationScreen(): React.ReactElement {
     setUploading(true);
 
     try {
-      const form = new FormData();
-      form.append('type', selectedDocType);
-      form.append('documentNumber', `DOC-${Date.now()}`);
-      form.append('expiryDate', new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString());
+      const uploadResult = await uploadToCloudinaryDirect(
+        selectedFile.uri,
+        'kaamwale/verification',
+        `${selectedDocType}_${Date.now()}`,
+        {
+          uploadType: 'verification',
+          authToken: accessToken,
+          maxRetries: 3,
+        }
+      );
 
-      // For React Native / Expo, append the file object with uri, name, type
-      form.append('file' as any, {
-        uri: selectedFile.uri,
-        name: selectedFile.name || `doc_${Date.now()}.jpg`,
-        type: selectedFile.type || 'image/jpeg',
-      } as any);
+      if (!uploadResult.success) {
+        throw new Error(uploadResult.error || 'Failed to upload document');
+      }
 
       const response = await fetch(`${SERVER_URL}/verification/upload`, {
         method: 'POST',
         headers: {
           Authorization: `Bearer ${accessToken}`,
-          // Do NOT set Content-Type; fetch will set multipart boundary
+          'Content-Type': 'application/json',
         },
-        body: form as any,
+        body: JSON.stringify({
+          type: selectedDocType,
+          documentNumber: `DOC-${Date.now()}`,
+          expiryDate: new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString(),
+          fileUrl: uploadResult.fileUrl || uploadResult.url,
+          cloudinaryPublicId: uploadResult.publicId,
+        }),
       });
 
       const data = await response.json().catch(() => ({ success: false, message: 'Invalid response' }));
-      setUploading(false);
 
       if (response.ok && data.success) {
         Alert.alert('Success', 'Document uploaded for verification!');
@@ -194,9 +255,10 @@ export default function VerificationScreen(): React.ReactElement {
         Alert.alert('Error', data.message || 'Failed to upload document');
       }
     } catch (error) {
-      setUploading(false);
       console.error('Upload document error:', error);
-      Alert.alert('Error', 'Failed to upload document');
+      Alert.alert('Error', (error as any)?.message || 'Failed to upload document');
+    } finally {
+      setUploading(false);
     }
   };
 

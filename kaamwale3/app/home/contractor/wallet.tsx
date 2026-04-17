@@ -80,10 +80,20 @@ export default function ContractorWalletAttendance() {
   const { accessToken, user: authUser } = useAuth();
   const { balance: walletBalance, refresh: refreshWallet, loading: walletLoading } = useWalletBalance();
   const [jobs, setJobs] = useState<Job[]>([]);
+
+  const fetchWallet = async () => {
+    await refreshWallet();
+  };
   const [loading, setLoading] = useState(true);
   const [contractorName, setContractorName] = useState<string>("");
   const [availableBalance, setAvailableBalance] = useState<number>(0);
   const [pocketBalance, setPocketBalance] = useState<number>(0);
+
+  useEffect(() => {
+    if (typeof walletBalance === "number") {
+      setPocketBalance(walletBalance);
+    }
+  }, [walletBalance]);
 
   const [depositAmount, setDepositAmount] = useState<string>("");
   const [withdrawAmount, setWithdrawAmount] = useState<string>("");
@@ -1200,12 +1210,25 @@ export default function ContractorWalletAttendance() {
                   justifyContent: "space-between",
                   alignItems: "center",
                 }}
-                onPress={() => setShowPayoutMethodModal(true)}
+                onPress={() => {
+                  if (payoutMethod === "upi" && upiAccount) {
+                    setShowAddUpi(true);
+                    return;
+                  }
+                  setShowPayoutMethodModal(true);
+                }}
               >
                 <Text style={{ color: "#111827", fontWeight: "600" }}>
                   Payout Method: {payoutMethod === "bank" ? "Bank Account" : "UPI"}
                 </Text>
-                <Text style={{ color: "#1a2f4d", fontWeight: "700" }}>Change</Text>
+                <View style={{ flexDirection: "row", alignItems: "center" }}>
+                  {payoutMethod === "upi" && upiAccount ? (
+                    <MaterialIcons name="edit" size={20} color="#1a2f4d" />
+                  ) : null}
+                  <Text style={{ color: "#1a2f4d", fontWeight: "700", marginLeft: 6 }}>
+                    {payoutMethod === "upi" && upiAccount ? "Edit" : "Change"}
+                  </Text>
+                </View>
               </TouchableOpacity>
               <View style={styles.buttonRow}>
                 <TextInput

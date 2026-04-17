@@ -65,7 +65,7 @@ class AvailabilityCacheManager {
     this.isFetching = true;
     this.fetchPromise = (async () => {
       try {
-        const response = await fetch(`${API_BASE}/worker/availability`, {
+        const response = await fetch(`${API_BASE}/worker/profile`, {
           headers: { Authorization: `Bearer ${accessToken}` },
         });
 

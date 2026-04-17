@@ -21,14 +21,16 @@ export const socket = io(SOCKET_URL, {
 // ✅ CRITICAL: Re-apply auth token on reconnection
 socket.on("disconnect", async () => {
   console.log("🔌 Socket disconnected, will auto-reconnect with auth token");
-  // Retrieve token for next reconnection
-  let token = await AsyncStorage.getItem("token");
+  // Retrieve current auth token from the shared accessToken storage key
+  let authToken = await AsyncStorage.getItem("accessToken");
+  if (!authToken) {
+    authToken = await AsyncStorage.getItem("token");
+  }
 
-  // If we have a refresh token and regular token might be expired, try refreshing
+  // If we have a refresh token, attempt refresh regardless of current token state
   const refreshToken = await AsyncStorage.getItem("refreshToken");
-  if (refreshToken && token) {
+  if (refreshToken) {
     try {
-      // Try to refresh the token proactively
       const config = await import("./config");
       const SERVER_URL = config.SERVER_URL;
       const response = await fetch(`${SERVER_URL}/auth/refresh`, {
@@ -40,8 +42,8 @@ socket.on("disconnect", async () => {
       if (response.ok) {
         const data = await response.json();
         if (data.accessToken && typeof data.accessToken === "string") {
-          token = data.accessToken;
-          await AsyncStorage.setItem("token", data.accessToken);
+          authToken = data.accessToken;
+          await AsyncStorage.setItem("accessToken", data.accessToken);
           console.log("🔄 Token refreshed on disconnect");
         }
       }
@@ -52,8 +54,8 @@ socket.on("disconnect", async () => {
     }
   }
 
-  if (token) {
-    (socket.auth as any) = { token };
+  if (authToken) {
+    (socket.auth as any) = { token: authToken };
     console.log("🔐 Auth token prepared for reconnection");
   }
 });

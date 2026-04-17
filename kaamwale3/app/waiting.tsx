@@ -198,7 +198,7 @@ export default function WaitingScreen() {
       (async () => {
         try {
           const last = await AsyncStorage.getItem("lastJobId");
-          const storedToken = await AsyncStorage.getItem("token");
+          const storedToken = (await AsyncStorage.getItem("accessToken")) || (await AsyncStorage.getItem("token"));
           const userStr = await AsyncStorage.getItem("user");
           const user = userStr ? JSON.parse(userStr) : null;
           setJobId(last);

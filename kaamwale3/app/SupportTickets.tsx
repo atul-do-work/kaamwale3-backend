@@ -19,6 +19,7 @@ import { LinearGradient } from "expo-linear-gradient";
 import { useRouter, useFocusEffect } from "expo-router";
 import { useAuth } from "../context/AuthContext";
 import * as ImagePicker from "expo-image-picker";
+import { uploadToCloudinaryDirect } from "../utils/cloudinaryDirectUpload";
 import api from "../utils/api";
 
 interface SupportTicket {
@@ -158,28 +159,83 @@ export default function SupportTicketsScreen(): React.ReactElement {
     }
   };
 
+  const uploadSupportScreenshot = async (uri: string) => {
+    if (!uri) throw new Error('Invalid screenshot');
+    if (uri.startsWith('http://') || uri.startsWith('https://')) return uri;
+
+    const uploadResult = await uploadToCloudinaryDirect(
+      uri,
+      'kaamwale/support',
+      `support-screenshot-${Date.now()}`,
+      {
+        uploadType: 'support',
+        authToken: accessToken || undefined,
+        maxRetries: 3,
+      }
+    );
+
+    if (!uploadResult.success) {
+      throw new Error(uploadResult.error || 'Failed to upload screenshot');
+    }
+
+    const screenshotUrl = uploadResult.fileUrl || uploadResult.url;
+    if (!screenshotUrl) {
+      throw new Error('Failed to upload screenshot');
+    }
+    return screenshotUrl;
+  };
+
   // Create support ticket
   const handleCreateTicket = async () => {
     // ✅ Prevent double submission
     if (creating) return;
 
-    if (!newTicket.type || !newTicket.subject || !newTicket.description) {
-      Alert.alert(t('support_error_title'), t('support_error_fill_fields'));
+    const subjectText = newTicket.subject?.trim?.() || "";
+    const descriptionText = newTicket.description?.trim?.() || "";
+
+    if (!newTicket.type || !subjectText || !descriptionText) {
+      Alert.alert(
+        t('support_error_title'),
+        `Please select an issue type and fill in the subject and description.`
+      );
       return;
     }
 
+    if (subjectText.length < 5 || descriptionText.length < 15) {
+      Alert.alert(
+        t('support_error_title'),
+        `Subject must be at least 5 characters and description at least 15 characters.`
+      );
+      return;
+    }
+
+    if (newTicket.reportedPhone && !/^[0-9]{10}$/.test(newTicket.reportedPhone.trim())) {
+        Alert.alert(t('support_error_title'), 'Reported phone must be 10 digits');
+        return;
+      }
     setCreating(true);
 
     try {
-      if (!accessToken) return;
+      if (!accessToken) {
+        throw new Error(t('support_error_no_token') || 'Authentication required');
+      }
+
+      const screenshots = [] as string[];
+      for (const uri of newTicket.screenshots) {
+        const screenshotUrl = await uploadSupportScreenshot(uri);
+        if (!screenshotUrl) {
+          throw new Error('Screenshot upload failed');
+        }
+        screenshots.push(screenshotUrl);
+      }
 
       const res = await api.post(`/support/create`, {
         type: newTicket.type,
-        subject: newTicket.subject,
-        description: newTicket.description,
-        jobId: newTicket.jobId || undefined,
-        reportedPhone: newTicket.reportedPhone || undefined,
-        screenshots: newTicket.screenshots,
+        subject: newTicket.subject.trim(),
+        description: newTicket.description.trim(),
+        jobId: newTicket.jobId?.trim() || undefined,
+        reportedPhone: newTicket.reportedPhone?.trim() || undefined,
+        screenshots,
       });
 
       const data = res.data;
@@ -201,9 +257,10 @@ export default function SupportTicketsScreen(): React.ReactElement {
         Alert.alert(t('support_error_title'), data.message || t('support_error_create'));
       }
     } catch (error) {
-      setCreating(false);
       console.error("Create ticket error:", error);
-      Alert.alert(t('support_error_title'), t('support_error_create'));
+      Alert.alert(t('support_error_title'), (error as any)?.message || t('support_error_create'));
+    } finally {
+      setCreating(false);
     }
   };
 

@@ -117,7 +117,6 @@ export default function Jobs(): React.ReactElement {
     setAcceptedJobs(Array.isArray(hookJobs) ? hookJobs : []);
   }, [hookJobs]);
   
-  const [seeAllModalVisible, setSeeAllModalVisible] = useState<boolean>(false);
   const [refreshing, setRefreshing] = useState<boolean>(false); // ✅ Pull-to-refresh state
   const [token, setToken] = useState<string>("");
   const [currentUserPhone, setCurrentUserPhone] = useState<string | null>(null);
@@ -236,7 +235,7 @@ export default function Jobs(): React.ReactElement {
     (async () => {
       try {
         const userStr = await AsyncStorage.getItem("user");
-        const storedToken = await AsyncStorage.getItem("token");
+        const storedToken = (await AsyncStorage.getItem("accessToken")) || (await AsyncStorage.getItem("token"));
 
         if (userStr) {
           const user = JSON.parse(userStr);
@@ -897,22 +896,14 @@ export default function Jobs(): React.ReactElement {
 
   return (
     <SafeAreaView edges={['top', 'left', 'right', 'bottom']} style={{ flex: 1 }}>
-      <View style={{ paddingHorizontal: 14, paddingTop: 4, paddingBottom: 8 }}>
+      <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 12 }}>
+        <Text style={{ fontSize: 20, fontWeight: '800', color: '#111827' }}>{t('acceptedJobs') || 'Accepted Jobs'}</Text>
         <TouchableOpacity
-          style={{
-            height: 42,
-            borderRadius: 10,
-            backgroundColor: "#1d4ed8",
-            justifyContent: "center",
-            alignItems: "center",
-            opacity: weeklyJobs.length ? 1 : 0.5,
-          }}
-          disabled={!weeklyJobs.length}
-          onPress={() => setSeeAllModalVisible(true)}
+          style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}
+          onPress={() => router.push('/GigHistory' as any)}
         >
-          <Text style={{ color: "#fff", fontSize: 14, fontWeight: "700" }}>
-            {t('seeAllJobs')}
-          </Text>
+          <MaterialIcons name="history" size={22} color="#1d4ed8" />
+          <Text style={{ color: '#1d4ed8', fontWeight: '700' }}>{t('pastJobs') || 'Past Jobs'}</Text>
         </TouchableOpacity>
       </View>
       <FlatList
@@ -934,59 +925,6 @@ export default function Jobs(): React.ReactElement {
         }
         renderItem={renderJobCard}
       />
-
-      <Modal
-        visible={seeAllModalVisible}
-        animationType="slide"
-        onRequestClose={() => setSeeAllModalVisible(false)}
-      >
-        <SafeAreaView edges={['top', 'left', 'right', 'bottom']} style={{ flex: 1, backgroundColor: "#f7f9fc" }}>
-          <View
-            style={{
-              paddingHorizontal: 14,
-              paddingVertical: 12,
-              borderBottomWidth: 1,
-              borderBottomColor: "#e5e7eb",
-              flexDirection: "row",
-              justifyContent: "space-between",
-              alignItems: "center",
-            }}
-          >
-            <Text style={{ fontSize: 18, fontWeight: "800", color: "#111827" }}>{t('thisWeeksJobs')}</Text>
-            <TouchableOpacity
-              onPress={() => setSeeAllModalVisible(false)}
-              style={{
-                backgroundColor: "#e5e7eb",
-                paddingHorizontal: 12,
-                paddingVertical: 8,
-                borderRadius: 8,
-              }}
-            >
-              <Text style={{ fontWeight: "700", color: "#111827" }}>{t('close')}</Text>
-            </TouchableOpacity>
-          </View>
-
-          <FlatList
-            data={weeklyJobs}
-            keyExtractor={(item) => item._id}
-            style={styles.container}
-            contentContainerStyle={{ paddingVertical: 12 }}
-            refreshControl={
-              <RefreshControl refreshing={refreshing} onRefresh={handleRefresh} tintColor="#667eea" />
-            }
-            ListEmptyComponent={
-              <View style={{ flex: 1, justifyContent: "center", alignItems: "center", paddingVertical: 40 }}>
-                {loading ? (
-                  <Text style={styles.loadingText}>{t('loadingJobs')}</Text>
-                ) : (
-                  <Text style={styles.noJobsText}>{t('noJobsThisWeek')}</Text>
-                )}
-              </View>
-            }
-            renderItem={renderJobCard}
-          />
-        </SafeAreaView>
-      </Modal>
 
       <Modal
         visible={cancelModalVisible}

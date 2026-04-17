@@ -1,7 +1,7 @@
 {
   "expo": {
     "name": "indianworker",
-    "slug": "anjitest23",
+    "slug": "kaamwale3",
     "version": "1.0.0",
     "orientation": "portrait",
     "scheme": "kaamwale3",
@@ -53,9 +53,9 @@
     },
     "extra": {
       "eas": {
-        "projectId": "d9d9d366-ae7d-48af-8966-096448c89c9c"
+        "projectId": "8a6c9f14-6f97-4d37-8daf-a8e8a86487cb"
       }
     },
-    "owner": "anjitest23"
+    "owner": "atul-dowork"
   }
 }

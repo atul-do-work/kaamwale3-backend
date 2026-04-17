@@ -38,8 +38,9 @@ export const useWalletBalance = (): UseWalletBalanceReturn => {
     try {
       const data = await walletCacheManager.getStatus(accessToken);
       if (data?.success) {
-        setBalance(data.balance || data.amount || 0);
-        console.log(`✅ Wallet balance loaded: ${data.balance || data.amount}`);
+        const resolvedBalance = data.balance ?? data.amount ?? data.pocketBalance ?? 0;
+        setBalance(resolvedBalance);
+        console.log(`✅ Wallet balance loaded: ${resolvedBalance}`);
       } else {
         setError('Failed to load wallet balance');
       }
@@ -66,7 +67,7 @@ export const useWalletBalance = (): UseWalletBalanceReturn => {
     const handleWalletUpdate = (data: any) => {
       console.log('📡 walletUpdated event received:', data);
       walletCacheManager.invalidate();
-      setBalance(data.balance || data.amount || null);
+      setBalance(data.balance ?? data.amount ?? data.pocketBalance ?? null);
     };
 
     socket.on('walletUpdated', handleWalletUpdate);

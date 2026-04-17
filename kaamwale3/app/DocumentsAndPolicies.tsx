@@ -16,9 +16,12 @@ import { useRouter } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useAuth } from '../context/AuthContext';
 import * as ImagePicker from 'expo-image-picker';
+import * as FileSystem from 'expo-file-system';
 import { API_BASE } from '../utils/config';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { uploadToCloudinaryDirect } from '../utils/cloudinaryDirectUpload';
+
+const VERIFICATION_FILE_SIZE_LIMIT = 2 * 1024 * 1024; // 2MB
 
 const logActivity = async (token: string | null, action: string, details: string) => {
   try {
@@ -117,9 +120,24 @@ export default function DocumentsAndPolicies() {
 
   const uploadDocument = async (photo: any, documentType: string) => {
     try {
+      const token = accessToken;
+      if (!photo?.uri) {
+        showModal('error', 'Upload Failed', 'No file selected.');
+        return;
+      }
+
+      const fileInfo = await FileSystem.getInfoAsync(photo.uri);
+      if (!fileInfo.exists || !fileInfo.size) {
+        showModal('error', 'Upload Failed', 'Unable to read selected file.');
+        return;
+      }
+      if (fileInfo.size > VERIFICATION_FILE_SIZE_LIMIT) {
+        showModal('error', 'Upload Failed', 'Document too large. Please choose a file smaller than 2MB.');
+        return;
+      }
+
       setUploadProgress(0);
       setUploading(true);
-      const token = accessToken;
 
       // Step 1: Upload directly to Cloudinary with progress tracking
       const uploadResult = await uploadToCloudinaryDirect(
