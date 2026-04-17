@@ -27,6 +27,12 @@ function createWorkersRouter({
     res.set("Surrogate-Control", "no-store");
   };
 
+  const isValidCoordinate = (value, min, max) =>
+    typeof value === "number" && !Number.isNaN(value) && value >= min && value <= max;
+
+  const isValidPoint = (lat, lon) =>
+    isValidCoordinate(lat, -90, 90) && isValidCoordinate(lon, -180, 180);
+
   router.get("/workers/nearby", authenticateToken, async (req, res) => {
     try {
       let lat = req.query.lat ? parseFloat(req.query.lat) : null;
@@ -377,18 +383,18 @@ function createWorkersRouter({
       }
 
       const worker = await WorkerModel.findOne({ phone: workerPhone });
-      if (!worker) {
+      const user = await User.findOne({ phone: workerPhone });
+      if (!worker && !user) {
         return res.status(404).json({ success: false, message: "Worker not found" });
       }
 
-      const user = await User.findOne({ phone: workerPhone });
       return res.json({
-        id: worker._id.toString(),
-        phone: worker.phone,
-        location: worker.location || null,
-        isAvailable: user?.isAvailable ?? worker.isAvailable ?? false,
+        id: worker?._id?.toString() || null,
+        phone: worker?.phone || user?.phone,
+        location: worker?.location || null,
+        isAvailable: user?.isAvailable ?? worker?.isAvailable ?? false,
         profilePhoto: user?.profilePhoto || null,
-        skills: worker.skills || [],
+        skills: worker?.skills || [],
       });
     } catch (err) {
       console.error("Failed to fetch worker details", err);
@@ -404,28 +410,28 @@ function createWorkersRouter({
       }
 
       const worker = await WorkerModel.findOne({ phone: workerPhone });
-      if (!worker) {
+      const user = await User.findOne({ phone: workerPhone });
+      if (!worker && !user) {
         return res.status(404).json({ success: false, message: "Worker not found" });
       }
 
-      const user = await User.findOne({ phone: workerPhone });
       return res.json({
         success: true,
         worker: {
-          phone: worker.phone,
+          phone: worker?.phone || user?.phone,
           name: user?.name || "Unknown",
           profilePhoto: user?.profilePhoto,
-          skills: worker.skills || [],
-          mainSkill: user?.mainSkill || worker.mainSkill,
+          skills: worker?.skills || [],
+          mainSkill: user?.mainSkill || worker?.mainSkill,
           expectedWage: user?.expectedWage || "Negotiable",
-          isAvailable: user?.isAvailable ?? worker.isAvailable ?? false,
-          rating: worker.rating || 0,
+          isAvailable: user?.isAvailable ?? worker?.isAvailable ?? false,
+          rating: worker?.rating || 0,
           performanceMetrics: {
-            averageRating: worker.performanceMetrics?.averageRating || 0,
-            totalReviews: worker.performanceMetrics?.totalReviews || 0,
-            completionRate: worker.performanceMetrics?.completionRate || 0,
-            cancellationRate: worker.performanceMetrics?.cancellationRate || 0,
-            averageEarningsPerGig: worker.performanceMetrics?.averageEarningsPerGig || 0,
+            averageRating: worker?.performanceMetrics?.averageRating || 0,
+            totalReviews: worker?.performanceMetrics?.totalReviews || 0,
+            completionRate: worker?.performanceMetrics?.completionRate || 0,
+            cancellationRate: worker?.performanceMetrics?.cancellationRate || 0,
+            averageEarningsPerGig: worker?.performanceMetrics?.averageEarningsPerGig || 0,
           },
           gigsData: {
             totalGigsCompleted: worker.gigsData?.totalGigsCompleted || 0,
@@ -844,12 +850,31 @@ function createWorkersRouter({
         }
       }
 
+      const existingUser = await User.findOne({ phone });
+      if (!existingUser) {
+        return res.status(404).json({ success: false, message: "User not found" });
+      }
+
+      if (isAvailable === true && updateObj.latitude === undefined && updateObj.longitude === undefined) {
+        if (!isValidPoint(existingUser.latitude, existingUser.longitude)) {
+          return res.status(400).json({
+            success: false,
+            message: "Please enable location services and share your location before going online.",
+          });
+        }
+        updateObj.locationEnabled = true;
+      }
+
       const updatedUser = await User.findOneAndUpdate({ phone }, updateObj, { new: true });
       if (!updatedUser) {
         return res.status(404).json({ success: false, message: "User not found" });
       }
 
-      await WorkerModel.findOneAndUpdate({ phone }, updateObj, { new: true });
+      await WorkerModel.findOneAndUpdate(
+        { phone },
+        updateObj,
+        { new: true, upsert: true, setDefaultsOnInsert: true }
+      );
 
       for (const [socketId, worker] of connectedWorkers.entries()) {
         if (worker.phone === phone) {
@@ -867,6 +892,13 @@ function createWorkersRouter({
       if (isAvailable === true) {
         await checkJobMatchesForWorker(phone);
       }
+
+      io.to(phone).emit("workerStatusUpdate", {
+        isAvailable,
+        phone,
+        message: `Worker is now ${isAvailable ? "online" : "offline"}`,
+        timestamp: new Date(),
+      });
 
       return res.json({
         success: true,
@@ -900,8 +932,11 @@ function createWorkersRouter({
 
       const parsedLat = parseFloat(latitude);
       const parsedLon = parseFloat(longitude);
-      if (isNaN(parsedLat) || isNaN(parsedLon)) {
-        return res.status(400).json({ success: false, message: "Invalid coordinates" });
+      if (isNaN(parsedLat) || isNaN(parsedLon) || !isValidPoint(parsedLat, parsedLon)) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid coordinates. Latitude must be between -90 and 90 and longitude between -180 and 180.",
+        });
       }
 
       let city = "Unknown";

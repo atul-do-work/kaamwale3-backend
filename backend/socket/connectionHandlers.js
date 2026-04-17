@@ -23,42 +23,79 @@ function attachSocketConnectionHandlers(io, deps) {
   
   // Store connection timestamps
   const workerConnectionTimes = new Map(); // socketId -> timestamp
-  
+
+  async function markWorkerOfflineBySocketId(socketId) {
+    if (!socketId) return null;
+
+    try {
+      const worker = await WorkerModel.findOneAndUpdate(
+        { socketId },
+        { $set: { socketId: "", isAvailable: false, updatedAt: new Date() } },
+        { new: true }
+      );
+      if (worker?.phone) {
+        await User.findOneAndUpdate(
+          { phone: worker.phone },
+          { $set: { isAvailable: false, updatedAt: new Date() } }
+        );
+      }
+      return worker;
+    } catch (err) {
+      console.error("Error marking worker offline by socketId:", err);
+      return null;
+    }
+  }
+
+  async function setWorkerOfflineByPhone(phone) {
+    if (!phone || !String(phone).trim()) return null;
+    const normalizedPhone = String(phone).trim();
+    try {
+      await Promise.all([
+        User.findOneAndUpdate(
+          { phone: normalizedPhone },
+          { $set: { isAvailable: false, updatedAt: new Date() } }
+        ),
+        WorkerModel.findOneAndUpdate(
+          { phone: normalizedPhone },
+          { $set: { isAvailable: false, updatedAt: new Date() } }
+        ),
+      ]);
+    } catch (err) {
+      console.error("Error marking worker offline by phone:", err);
+    }
+  }
+
   // Cleanup function
-  function cleanupExpiredWorkers() {
+  async function cleanupExpiredWorkers() {
     const now = Date.now();
     const expiredSockets = [];
-    
+
     for (const [socketId, timestamp] of workerConnectionTimes.entries()) {
       if (now - timestamp > WORKER_TTL_MS) {
         expiredSockets.push(socketId);
       }
     }
-    
+
     for (const socketId of expiredSockets) {
       const worker = connectedWorkers.get(socketId);
       if (worker) {
         console.log(`🧹 Cleaning up expired worker: ${worker.name} (${worker.phone})`);
         connectedWorkers.delete(socketId);
         workerConnectionTimes.delete(socketId);
-        
-        // Update database to mark worker as offline
+
         try {
-          WorkerModel.findOneAndUpdate(
-            { socketId: socketId }, 
-            { $set: { socketId: "", isAvailable: false } }
-          ).catch(err => console.error("Error updating expired worker:", err));
+          await markWorkerOfflineBySocketId(socketId);
         } catch (e) {
           console.error("Error cleaning up expired worker in DB:", e);
         }
       }
     }
-    
+
     if (expiredSockets.length > 0) {
       console.log(`🧹 Cleaned up ${expiredSockets.length} expired workers. Total connected: ${connectedWorkers.size}`);
     }
   }
-  
+
   // Start cleanup interval
   const cleanupInterval = setInterval(cleanupExpiredWorkers, CLEANUP_INTERVAL_MS);
   
@@ -208,6 +245,35 @@ io.on("connection", (socket) => {
       }
     } catch (e) {
       console.error("registerWorker error:", e);
+    }
+  });
+
+  socket.on("workerOffline", async (payload) => {
+    try {
+      const phone = socket.user?.phone || payload?.phone;
+      if (!phone) {
+        console.warn("workerOffline received without authenticated phone");
+        return;
+      }
+
+      connectedWorkers.delete(socket.id);
+      workerConnectionTimes.delete(socket.id);
+
+      await setWorkerOfflineByPhone(phone);
+      io.to(phone).emit("workerStatusUpdate", {
+        isAvailable: false,
+        phone,
+        source: "workerOffline",
+        timestamp: new Date(),
+      });
+      socket.emit("workerStatusUpdate", {
+        isAvailable: false,
+        phone,
+        source: "workerOffline",
+        timestamp: new Date(),
+      });
+    } catch (err) {
+      console.error("workerOffline handler error:", err);
     }
   });
 
@@ -479,14 +545,33 @@ io.on("connection", (socket) => {
       console.log(`❌ Worker disconnected: ${worker.name}`);
       connectedWorkers.delete(socket.id);
       workerConnectionTimes.delete(socket.id); // ✅ Clean up timestamp
-      console.log(`✅ Total connected workers now: ${connectedWorkers.size}`);
 
-      // Clear socketId in DB for this worker
-      try {
-        await WorkerModel.findOneAndUpdate({ socketId: socket.id }, { $set: { socketId: "", isAvailable: false } });
-      } catch (e) {
-        console.error("Error clearing worker session on disconnect:", e);
+      const stillConnected = Array.from(connectedWorkers.values()).some((session) => session.phone === worker.phone);
+      if (!stillConnected) {
+        try {
+          await setWorkerOfflineByPhone(worker.phone);
+          io.to(worker.phone).emit("workerStatusUpdate", {
+            isAvailable: false,
+            phone: worker.phone,
+            source: "disconnect",
+            timestamp: new Date(),
+          });
+        } catch (e) {
+          console.error("Error clearing worker session on disconnect:", e);
+        }
+      } else {
+        // Clear only the stale socket reference if another session is still active
+        try {
+          await WorkerModel.findOneAndUpdate(
+            { socketId: socket.id },
+            { $set: { socketId: "", updatedAt: new Date() } }
+          );
+        } catch (e) {
+          console.error("Error clearing stale socket reference on disconnect:", e);
+        }
       }
+
+      console.log(`✅ Total connected workers now: ${connectedWorkers.size}`);
     } else {
       console.log("Disconnected:", socket.id);
       workerConnectionTimes.delete(socket.id); // ✅ Clean up timestamp even if worker not found

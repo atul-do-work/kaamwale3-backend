@@ -205,7 +205,9 @@ function createOpsSupportRouter({ upload, PORT }) {
     }
   });
 
-  router.post("/verification/upload", authenticateToken, async (req, res) => {
+  const verificationUploadMiddleware = upload.single('file');
+
+  router.post("/verification/upload", authenticateToken, verificationUploadMiddleware, async (req, res) => {
     try {
       const type = req.body?.type || req.body?.documentType || req.query?.type;
       const documentNumber = req.body?.documentNumber || req.query?.documentNumber;

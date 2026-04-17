@@ -54,6 +54,27 @@ function normalizePaidJobStatus(status) {
   return "completed";
 }
 
+async function setWorkerOfflineByPhone(phone) {
+  if (!phone || !String(phone).trim()) return;
+  const normalizedPhone = String(phone).trim();
+  try {
+    await User.findOneAndUpdate(
+      { phone: normalizedPhone },
+      { $set: { isAvailable: false, updatedAt: new Date() } }
+    );
+  } catch (err) {
+    console.error("Error marking user offline after payment:", err);
+  }
+  try {
+    await WorkerModel.findOneAndUpdate(
+      { phone: normalizedPhone },
+      { $set: { isAvailable: false, updatedAt: new Date() } }
+    );
+  } catch (err) {
+    console.error("Error marking worker offline after payment:", err);
+  }
+}
+
 function cleanupIdempotencyCache() {
   const now = Date.now();
   for (const [key, value] of payIdempotencyResults.entries()) {
@@ -236,12 +257,19 @@ async function payJob({ jobId, mode, workerPhone, idempotencyKey, userPhone, use
   };
 
   try {
-  const { updateContractorStats, emitJobUpdatedToUsers, logJobEvent } = deps;
+  const { updateContractorStats, emitJobUpdatedToUsers, logJobEvent, io } = deps;
   const job = await Job.findById(jobId);
   if (!job) return finalize({ code: 404, body: { message: "Job not found" } });
 
+  if (job.bulkHiring && !workerPhone) {
+    return finalize({ code: 400, body: { success: false, message: "Worker phone is required for bulk payments" } });
+  }
+
   if (job.bulkHiring && workerPhone) {
-    const target = (job.acceptedWorkers || []).find((w) => w.phone === workerPhone);
+    const normalizedWorkerPhone = String(workerPhone || "").replace(/\D/g, "");
+    const target = (job.acceptedWorkers || []).find((w) =>
+      String(w?.phone || "").replace(/\D/g, "") === normalizedWorkerPhone
+    );
     if (!target) {
       return finalize({ code: 404, body: { success: false, message: "Worker not found on this bulk job" } });
     }
@@ -375,6 +403,20 @@ async function payJob({ jobId, mode, workerPhone, idempotencyKey, userPhone, use
       console.error("Error updating gigs data on completion:", e);
     }
 
+    await setWorkerOfflineByPhone(workerPhone);
+    if (io && workerPhone) {
+      try {
+        io.to(workerPhone).emit("workerStatusUpdate", {
+          isAvailable: false,
+          phone: workerPhone,
+          source: "payment",
+          jobId: job._id.toString(),
+          timestamp: new Date(),
+        });
+      } catch (emitErr) {
+        console.error("Error emitting workerStatusUpdate after bulk payment:", emitErr);
+      }
+    }
     await updateContractorStats(userPhone);
     await emitJobUpdatedToUsers(job, [job.contractorPhone, workerPhone, job.acceptedBy || job.contractorPhone]);
     return finalize({ code: 200, body: { success: true, message: "Payment successful", job, workerPhone } });
@@ -543,9 +585,27 @@ async function payJob({ jobId, mode, workerPhone, idempotencyKey, userPhone, use
     console.error("Error applying first-cash pocket-balance compliance rule:", complianceErr);
   }
 
+  if (job.acceptedBy) {
+    await setWorkerOfflineByPhone(job.acceptedBy);
+  }
+
   await updateContractorStats(userPhone);
 
   try {
+    if (io && job.acceptedBy) {
+      try {
+        io.to(job.acceptedBy).emit("workerStatusUpdate", {
+          isAvailable: false,
+          phone: job.acceptedBy,
+          source: "payment",
+          jobId: job._id.toString(),
+          timestamp: new Date(),
+        });
+      } catch (emitErr) {
+        console.error("Error emitting workerStatusUpdate after payment:", emitErr);
+      }
+    }
+
     await updateGigDataOnCompletion(job.acceptedBy, {
       jobId: job._id.toString(),
       title: job.title,
@@ -566,7 +626,7 @@ async function payJob({ jobId, mode, workerPhone, idempotencyKey, userPhone, use
 }
 
 async function rateJob({ jobId, stars, feedback, workerPhone, userPhone, userName, deps }) {
-  const { emitJobUpdatedToUsers } = deps;
+  const { emitJobUpdatedToUsers, io } = deps;
   if (!stars || stars < 1 || stars > 5) {
     return { code: 400, body: { message: "Rating must be between 1 and 5 stars" } };
   }

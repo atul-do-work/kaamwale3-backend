@@ -5,6 +5,8 @@ const mongoose = require('mongoose');
 const { authenticateToken } = require('../utils/auth');
 const Wallet = require('../models/Wallet');
 const Job = require('../models/Jobs');
+const User = require('../models/User');
+const WorkerModel = require('../models/Worker');
 const NotificationHistory = require('../models/NotificationHistory');
 const WorkerEarnings = require('../models/WorkerEarnings');
 const ActivityLog = require('../models/ActivityLog');
@@ -13,6 +15,27 @@ const { createGigHistoryEvent } = require('../services/gigHistoryService');
 const { updateGigDataOnCompletion } = require('../utils/gigsDataTracker');
 const { sendOpsAlert } = require('../utils/opsAlert');
 const { buildLogContext, info, warn, error } = require('../utils/logContext');
+
+async function setWorkerOfflineByPhone(phone) {
+  if (!phone) return;
+  const normalizedPhone = String(phone).trim();
+  try {
+    await User.findOneAndUpdate(
+      { phone: normalizedPhone },
+      { $set: { isAvailable: false, updatedAt: new Date() } }
+    );
+  } catch (err) {
+    console.error('Error marking user offline after payment:', err);
+  }
+  try {
+    await WorkerModel.findOneAndUpdate(
+      { phone: normalizedPhone },
+      { $set: { isAvailable: false, updatedAt: new Date() } }
+    );
+  } catch (err) {
+    console.error('Error marking worker offline after payment:', err);
+  }
+}
 
 const router = express.Router();
 
@@ -434,6 +457,13 @@ router.post('/verify-payment', authenticateToken, async (req, res) => {
     // Commit transaction
     await session.commitTransaction();
 
+    // Ensure worker is marked offline after payment is credited
+    try {
+      await setWorkerOfflineByPhone(workerPhone);
+    } catch (setOfflineErr) {
+      console.error('Error marking worker offline after verified payment:', setOfflineErr);
+    }
+
     // 🔐 STEP 11: Emit socket events using room-based architecture
     const io = req.app.get('io');
     if (io) {
@@ -450,11 +480,18 @@ router.post('/verify-payment', authenticateToken, async (req, res) => {
         recipientPhone: workerPhone,
         notification: notification[0]
       });
+      io.to(workerPhone).emit('workerStatusUpdate', {
+        isAvailable: false,
+        phone: workerPhone,
+        source: 'payment',
+        jobId,
+        timestamp: new Date(),
+      });
       // ✅ CRITICAL: Emit full job object so worker job card updates with Paid status
       io.to(workerPhone).emit('jobUpdated', updatedJobFromWebhook);
       // ✅ Emit to contractor too so their job list shows payment complete
       io.to(job.contractorPhone).emit('jobUpdated', updatedJobFromWebhook);
-      info('📤 Emitted wallet, notification, and jobUpdated events', buildLogContext(req, { orderId, paymentId, jobId, workerPhone }));
+      info('📤 Emitted wallet, notification, jobUpdated, and workerStatusUpdate events', buildLogContext(req, { orderId, paymentId, jobId, workerPhone }));
     }
 
     res.status(200).json({
@@ -767,6 +804,12 @@ router.post('/webhook', async (req, res) => {
     // Commit transaction
     await session.commitTransaction();
 
+    try {
+      await setWorkerOfflineByPhone(workerPhone);
+    } catch (setOfflineErr) {
+      console.error('Error marking worker offline after webhook payment:', setOfflineErr);
+    }
+
     info('✅ Webhook payment processed successfully', buildLogContext(req, { paymentId, orderId, jobId, workerPhone, amount: actualAmount, idempotencyKey: paymentId }));
 
     // Emit socket event to notify worker (if connected)
@@ -784,6 +827,13 @@ router.post('/webhook', async (req, res) => {
       io.to(workerPhone).emit('notificationReceived', {
         recipientPhone: workerPhone,
         notification
+      });
+      io.to(workerPhone).emit('workerStatusUpdate', {
+        isAvailable: false,
+        phone: workerPhone,
+        source: 'payment_webhook',
+        jobId,
+        timestamp: new Date(),
       });
       // ✅ CRITICAL: Emit full job object so worker job card updates with Paid status
       io.to(workerPhone).emit('jobUpdated', updatedJobFromWebhook);
