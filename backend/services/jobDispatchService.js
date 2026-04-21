@@ -196,9 +196,9 @@ async function offerJobToNextWorker(job) {
       { 
         lat: job.lat, 
         lon: job.lon, 
-        mainSkill: job.description, // job.description contains the mainSkill (Labour, Mason, etc)
+        mainSkill: job.workerType || job.description,
         amount: job.amount, // Job wage
-        workerType: job.workerType
+        workerType: job.workerType,
       },
       connectedWorkers
     );

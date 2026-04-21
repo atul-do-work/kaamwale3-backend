@@ -21,9 +21,6 @@ function attachSocketAuthMiddleware(io, { jwt, jwtSecret, WorkerModel, User, con
           try {
             const existing = await WorkerModel.findOne({ phone: user.phone });
             if (existing) {
-              existing.socketId = socket.id;
-              await existing.save();
-
               let mainSkill = null;
               let expectedWage = null;
               let isAvailable = false;
@@ -38,13 +35,18 @@ function attachSocketAuthMiddleware(io, { jwt, jwtSecret, WorkerModel, User, con
                 console.error("Error fetching user mainSkill/expectedWage during reconnection:", e);
               }
 
+              const persistedMainSkill = existing.mainSkill || mainSkill || (existing.skills && existing.skills[0]) || null;
+              existing.socketId = socket.id;
+              existing.mainSkill = persistedMainSkill;
+              await existing.save();
+
               connectedWorkers.set(socket.id, {
                 name: existing.phone || user.name,
                 phone: existing.phone,
                 lat: existing.location?.coordinates?.[1] || 0,
                 lon: existing.location?.coordinates?.[0] || 0,
                 workerType: existing.skills && existing.skills[0],
-                mainSkill,
+                mainSkill: persistedMainSkill,
                 expectedWage,
                 socketId: socket.id,
                 isAvailable,
@@ -59,9 +61,9 @@ function attachSocketAuthMiddleware(io, { jwt, jwtSecret, WorkerModel, User, con
         return next();
       } catch (err) {
         if (err.name === "TokenExpiredError") {
-          console.warn("Socket connection with expired token - client should refresh token");
-          socket.tokenExpired = true;
-          return next();
+          console.warn("Socket connection with expired token - disconnecting client");
+          socket.emit('tokenExpired', { message: 'Authentication token expired. Please refresh and reconnect.' });
+          return socket.disconnect();
         }
 
         console.error(`Socket JWT verification FAILED: ${err && err.message}`);

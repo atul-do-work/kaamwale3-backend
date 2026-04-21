@@ -15,6 +15,7 @@ function attachSocketConnectionHandlers(io, deps) {
     emitJobCancelledToUsers,
     trackingJobs,
     sendNotificationToUserPhone,
+    CashDeposit,
   } = deps;
 
   // ✅ TTL cleanup for connectedWorkers Map to prevent memory leaks
@@ -160,6 +161,33 @@ io.on("connection", (socket) => {
         console.error(`❌ INVALID coordinates for ${name}! lat=${lat}, lon=${lon} (out of bounds)`);
       }
 
+      // 🔐 CRITICAL: Check for pending cash deposits before allowing worker registration
+      const pendingDeposits = await CashDeposit.find({
+        workerPhone: phone,
+        status: 'pending'
+      }).select('amount jobTitle contractorName depositDeadline').lean();
+
+      if (pendingDeposits.length > 0) {
+        const totalPendingAmount = pendingDeposits.reduce((sum, deposit) => sum + deposit.amount, 0);
+        const depositDetails = pendingDeposits.map(deposit => ({
+          amount: deposit.amount,
+          jobTitle: deposit.jobTitle,
+          contractorName: deposit.contractorName,
+          depositDeadline: deposit.depositDeadline
+        }));
+
+        console.log(`❌ BLOCKED worker registration for ${phone}: ₹${totalPendingAmount} pending cash deposits`);
+        
+        socket.emit('registrationBlocked', {
+          code: "PENDING_CASH_DEPOSIT",
+          message: `You have ₹${totalPendingAmount} in pending cash deposits that must be deposited before you can go online.`,
+          requiredDepositAmount: totalPendingAmount,
+          pendingDeposits: depositDetails,
+          actionRequired: "deposit_cash"
+        });
+        return; // Block registration
+      }
+
       console.log("Worker Registered:", name, "at", { lat, lon });
 
       // Persist session in Worker collection (upsert)
@@ -186,9 +214,10 @@ io.on("connection", (socket) => {
           console.error("Error fetching user profile photo for worker:", e);
         }
 
+        const inferredMainSkill = mainSkill || workerType || null;
         const updated = await WorkerModel.findOneAndUpdate(
           { phone },
-          { $set: { name, socketId: socket.id, location: loc, profilePhoto } },
+          { $set: { name, socketId: socket.id, location: loc, profilePhoto, mainSkill: inferredMainSkill } },
           { upsert: true, new: true, setDefaultsOnInsert: true }
         );
 
@@ -198,7 +227,7 @@ io.on("connection", (socket) => {
           lat: lat || 0,
           lon: lon || 0,
           workerType: workerType || (updated.skills && updated.skills[0]),
-          mainSkill: mainSkill, // ✅ Fetch from User model
+          mainSkill: inferredMainSkill,
           expectedWage: expectedWage, // ✅ Fetch from User model
           socketId: socket.id,
           isAvailable: isAvailable, // ✅ Now fetches from USER model (source of truth)
@@ -224,9 +253,9 @@ io.on("connection", (socket) => {
                 { 
                   lat: job.lat, 
                   lon: job.lon, 
-                  mainSkill: job.description,
+                  mainSkill: job.workerType || job.description,
                   amount: job.amount,
-                  workerType: job.workerType
+                  workerType: job.workerType,
                 },
                 connectedWorkers
               ).some(w => w.phone === phone); // Check if this new worker is in matches

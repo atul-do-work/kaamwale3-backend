@@ -3,46 +3,159 @@ const { authenticateToken } = require("../utils/auth");
 const ContractorStats = require("../models/ContractorStats");
 const Job = require("../models/Jobs");
 
+const normalizePaymentStatus = (status) => String(status || "").trim().toLowerCase();
+const isPaidStatus = (status) => normalizePaymentStatus(status) === "paid";
+
+const resolveJobDate = (job, fallback = new Date(0)) => {
+  const raw = job?.createdAt || job?.timestamp || job?.date || job?.updatedAt;
+  const parsed = raw ? new Date(raw) : fallback;
+  return Number.isNaN(parsed.getTime()) ? fallback : parsed;
+};
+
+const buildContractorJobQuery = ({ phone, startDate, endDate }) => ({
+  contractorPhone: phone,
+  createdAt: { $gte: startDate, $lte: endDate },
+  isCancelled: { $ne: true },
+  status: { $ne: "cancelled" },
+});
+
+const statsJobDetailsLimit = 200;
+
+const buildStatsFromJobs = (jobs, phone) => {
+  const dayMap = new Map();
+
+  for (const job of jobs) {
+    const jobDate = resolveJobDate(job, new Date());
+    jobDate.setHours(0, 0, 0, 0);
+    const dayKey = jobDate.toISOString();
+
+    if (!dayMap.has(dayKey)) {
+      dayMap.set(dayKey, {
+        phone,
+        date: new Date(jobDate),
+        jobsPosted: 0,
+        jobsCompleted: 0,
+        workersList: [],
+        totalSpending: 0,
+      });
+    }
+
+    const bucket = dayMap.get(dayKey);
+    bucket.jobsPosted += 1;
+    if (isPaidStatus(job.paymentStatus)) {
+      bucket.jobsCompleted += 1;
+      bucket.totalSpending += Number(job.amount) || 0;
+    }
+    if (job.acceptedBy) {
+      bucket.workersList.push(job.acceptedBy);
+    }
+    if (Array.isArray(job.acceptedWorkers)) {
+      for (const w of job.acceptedWorkers) {
+        if (w?.phone && (w.attendanceStatus === "Present" || isPaidStatus(w.paymentStatus))) {
+          bucket.workersList.push(w.phone);
+        }
+      }
+    }
+  }
+
+  return Array.from(dayMap.values()).map((s) => {
+    const uniqueWorkers = [...new Set(s.workersList.filter(Boolean))];
+    return {
+      ...s,
+      workersList: uniqueWorkers,
+      workersEngaged: uniqueWorkers.length,
+    };
+  }).sort((a, b) => new Date(b.date) - new Date(a.date));
+};
+
+const buildJobDetails = (jobs) =>
+  jobs.slice(0, statsJobDetailsLimit).map((j) => ({
+    jobId: j._id,
+    title: j.title,
+    workerName: j.acceptedBy,
+    amount: j.amount,
+    status: j.status,
+    paymentStatus: j.paymentStatus,
+    timestamp: j.createdAt,
+  }));
+
+const aggregateStats = (stats) => ({
+  totalJobsPosted: stats.reduce((sum, s) => sum + s.jobsPosted, 0),
+  totalJobsCompleted: stats.reduce((sum, s) => sum + s.jobsCompleted, 0),
+  totalWorkersEngaged: new Set(stats.flatMap((s) => s.workersList || [])).size,
+  totalSpending: stats.reduce((sum, s) => sum + s.totalSpending, 0),
+  avgJobsPerDay:
+    stats.length > 0
+      ? (stats.reduce((sum, s) => sum + s.jobsPosted, 0) / stats.length).toFixed(2)
+      : 0,
+  avgCompletionPerDay:
+    stats.length > 0
+      ? (stats.reduce((sum, s) => sum + s.jobsCompleted, 0) / stats.length).toFixed(2)
+      : 0,
+});
+
 function createContractorStatsRouter() {
   const router = express.Router();
-  const resolveJobDate = (job, fallback = new Date(0)) => {
-    const raw = job?.createdAt || job?.timestamp || job?.date || job?.updatedAt;
-    const parsed = raw ? new Date(raw) : fallback;
-    return Number.isNaN(parsed.getTime()) ? fallback : parsed;
-  };
 
   router.post("/contractor/stats/save", authenticateToken, async (req, res) => {
     try {
       const { phone } = req.user;
-      const { jobsPosted, jobsCompleted, workersEngaged, totalSpending, jobDetails, workersList } = req.body;
-
       const today = new Date();
       today.setHours(0, 0, 0, 0);
+      const endOfDay = new Date(today);
+      endOfDay.setHours(23, 59, 59, 999);
+
+      const jobs = await Job.find(
+        buildContractorJobQuery({ phone, startDate: today, endDate: endOfDay })
+      )
+        .select("createdAt timestamp date updatedAt status paymentStatus amount acceptedBy acceptedWorkers title attendanceStatus")
+        .lean();
+
+      const statsArray = buildStatsFromJobs(jobs, phone);
+      const todayStats = statsArray.find((item) => item.date.getTime() === today.getTime()) || {
+        phone,
+        date: today,
+        jobsPosted: 0,
+        jobsCompleted: 0,
+        workersList: [],
+        totalSpending: 0,
+        workersEngaged: 0,
+      };
+
+      const jobDetails = jobs.slice(0, statsJobDetailsLimit).map((j) => ({
+        jobId: j._id,
+        title: j.title,
+        workerName: j.acceptedBy,
+        amount: j.amount,
+        status: j.status,
+        paymentStatus: j.paymentStatus,
+        timestamp: j.createdAt,
+      }));
 
       let stats = await ContractorStats.findOne({ phone, date: today });
       if (stats) {
-        stats.jobsPosted = jobsPosted || stats.jobsPosted;
-        stats.jobsCompleted = jobsCompleted || stats.jobsCompleted;
-        stats.workersEngaged = workersEngaged || stats.workersEngaged;
-        stats.totalSpending = totalSpending || stats.totalSpending;
-        if (jobDetails) stats.jobDetails = jobDetails;
-        if (workersList) stats.workersList = workersList;
+        stats.jobsPosted = todayStats.jobsPosted;
+        stats.jobsCompleted = todayStats.jobsCompleted;
+        stats.workersEngaged = todayStats.workersEngaged;
+        stats.totalSpending = todayStats.totalSpending;
+        stats.jobDetails = jobDetails;
+        stats.workersList = todayStats.workersList;
         stats.updatedAt = new Date();
       } else {
         stats = new ContractorStats({
           phone,
           date: today,
-          jobsPosted: jobsPosted || 0,
-          jobsCompleted: jobsCompleted || 0,
-          workersEngaged: workersEngaged || 0,
-          totalSpending: totalSpending || 0,
-          jobDetails: jobDetails || [],
-          workersList: workersList || [],
+          jobsPosted: todayStats.jobsPosted,
+          jobsCompleted: todayStats.jobsCompleted,
+          workersEngaged: todayStats.workersEngaged,
+          totalSpending: todayStats.totalSpending,
+          jobDetails,
+          workersList: todayStats.workersList,
         });
       }
 
       await stats.save();
-      return res.json({ success: true, stats, message: "Stats saved successfully" });
+      return res.json({ success: true, stats, message: "Stats saved successfully from jobs" });
     } catch (err) {
       console.error("Save stats error", err);
       return res.status(500).json({ success: false, message: "Internal server error" });
@@ -66,78 +179,15 @@ function createContractorStatsRouter() {
         startDate.setDate(startDate.getDate() - 29);
       }
 
-      const baseJobQuery = {
-        $and: [
-          { contractorPhone: phone },
-          {
-            $or: [{ isCancelled: { $exists: false } }, { isCancelled: { $ne: true } }],
-          },
-          { status: { $ne: "cancelled" } },
-        ],
-      };
+      // Filter in DB using indexed contractorPhone + createdAt, then aggregate in memory.
+      const jobs = await Job.find(
+        buildContractorJobQuery({ phone, startDate, endDate })
+      )
+        .select("createdAt timestamp date updatedAt status paymentStatus amount acceptedBy acceptedWorkers title")
+        .lean();
 
-      const jobs = (await Job.find(baseJobQuery).lean()).filter((job) => {
-        const jobDate = resolveJobDate(job);
-        return jobDate >= startDate && jobDate <= endDate;
-      });
-
-      const dayMap = new Map();
-      for (const job of jobs) {
-        const day = resolveJobDate(job, now);
-        day.setHours(0, 0, 0, 0);
-        const dayKey = day.toISOString();
-        if (!dayMap.has(dayKey)) {
-          dayMap.set(dayKey, {
-            phone,
-            date: day,
-            jobsPosted: 0,
-            jobsCompleted: 0,
-            workersList: [],
-            totalSpending: 0,
-          });
-        }
-
-        const bucket = dayMap.get(dayKey);
-        bucket.jobsPosted += 1;
-        if (String(job.paymentStatus || "").toLowerCase() === "paid") {
-          bucket.jobsCompleted += 1;
-          bucket.totalSpending += Number(job.amount) || 0;
-        }
-        if (job.acceptedBy) {
-          bucket.workersList.push(job.acceptedBy);
-        }
-        if (Array.isArray(job.acceptedWorkers) && job.acceptedWorkers.length) {
-          for (const w of job.acceptedWorkers) {
-            // Only count workers who have been marked present or paid (matching frontend logic)
-            if (w?.phone && (w.attendanceStatus === 'Present' || String(w.paymentStatus || '').toLowerCase() === 'paid')) {
-              bucket.workersList.push(w.phone);
-            }
-          }
-        }
-      }
-
-      const stats = Array.from(dayMap.values())
-        .map((s) => ({
-          ...s,
-          workersList: [...new Set(s.workersList.filter(Boolean))],
-          workersEngaged: [...new Set(s.workersList.filter(Boolean))].length,
-        }))
-        .sort((a, b) => new Date(b.date) - new Date(a.date));
-
-      const aggregated = {
-        totalJobsPosted: stats.reduce((sum, s) => sum + s.jobsPosted, 0),
-        totalJobsCompleted: stats.reduce((sum, s) => sum + s.jobsCompleted, 0),
-        totalWorkersEngaged: new Set(stats.flatMap((s) => s.workersList || [])).size,
-        totalSpending: stats.reduce((sum, s) => sum + s.totalSpending, 0),
-        avgJobsPerDay:
-          stats.length > 0
-            ? (stats.reduce((sum, s) => sum + s.jobsPosted, 0) / stats.length).toFixed(2)
-            : 0,
-        avgCompletionPerDay:
-          stats.length > 0
-            ? (stats.reduce((sum, s) => sum + s.jobsCompleted, 0) / stats.length).toFixed(2)
-            : 0,
-      };
+      const stats = buildStatsFromJobs(jobs, phone);
+      const aggregated = aggregateStats(stats);
 
       return res.json({ success: true, stats, aggregated, range });
     } catch (err) {
@@ -173,78 +223,37 @@ function createContractorStatsRouter() {
   router.post("/contractor/stats/update-from-jobs", authenticateToken, async (req, res) => {
     try {
       const { phone } = req.user;
-      const jobs = await Job.find({
-        contractorPhone: phone,
-        isCancelled: { $ne: true },
-        status: { $ne: "cancelled" },
-      });
-
       const today = new Date();
       today.setHours(0, 0, 0, 0);
+      const endOfDay = new Date(today);
+      endOfDay.setHours(23, 59, 59, 999);
 
-      const todayJobs = jobs.filter((j) => {
-        const jDate = resolveJobDate(j);
-        jDate.setHours(0, 0, 0, 0);
-        return jDate.getTime() === today.getTime();
-      });
-      const jobsPosted = todayJobs.length;
-      const jobsCompleted = todayJobs.filter((j) => {
-        // For single jobs: check attendance and payment
-        if (j.acceptedBy && !Array.isArray(j.acceptedWorkers)) {
-          return j.attendanceStatus && String(j.paymentStatus || "").toLowerCase() === "paid";
-        }
-        // For bulk jobs: check if any worker has attendance 'Present' and payment 'paid'
-        if (Array.isArray(j.acceptedWorkers)) {
-          return j.acceptedWorkers.some(w => w?.attendanceStatus === 'Present' && String(w?.paymentStatus || "").toLowerCase() === "paid");
-        }
-        return false;
-      }).length;
-      const workersList = [
-        ...new Set(
-          todayJobs.flatMap((j) => {
-            const workers = [];
-            // Handle single jobs
-            if (j.acceptedBy && !Array.isArray(j.acceptedWorkers)) {
-              if (j.attendanceStatus && String(j.paymentStatus || "").toLowerCase() === "paid") {
-                workers.push(j.acceptedBy);
-              }
-            }
-            // Handle bulk jobs - only count workers who have been marked present and paid
-            if (Array.isArray(j.acceptedWorkers)) {
-              j.acceptedWorkers.forEach((w) => {
-                if (w?.phone && w.attendanceStatus === 'Present' && String(w.paymentStatus || "").toLowerCase() === "paid") {
-                  workers.push(w.phone);
-                }
-              });
-            }
-            return workers;
-          })
-        ),
-      ];
-      const workersEngaged = workersList.length;
-      const totalSpending = todayJobs
-        .filter((j) => {
-          // For single jobs
-          if (j.acceptedBy && !Array.isArray(j.acceptedWorkers)) {
-            return String(j.paymentStatus || "").toLowerCase() === "paid";
-          }
-          // For bulk jobs: check if any worker is paid
-          if (Array.isArray(j.acceptedWorkers)) {
-            return j.acceptedWorkers.some(w => String(w?.paymentStatus || "").toLowerCase() === "paid");
-          }
-          return false;
-        })
-        .reduce((sum, j) => sum + (Number(j.amount) || 0), 0);
+      // Only load today's contractor jobs from the DB, using indexed contractorPhone + createdAt.
+      const todayJobs = await Job.find(
+        buildContractorJobQuery({ phone, startDate: today, endDate: endOfDay })
+      )
+        .select("createdAt timestamp date updatedAt status paymentStatus amount acceptedBy acceptedWorkers title attendanceStatus")
+        .lean();
 
-      const jobDetails = todayJobs.map((j) => ({
-        jobId: j._id,
-        title: j.title,
-        workerName: j.acceptedBy,
-        amount: j.amount,
-        status: j.status,
-        paymentStatus: j.paymentStatus,
-        timestamp: j.createdAt,
-      }));
+      const statsArray = buildStatsFromJobs(todayJobs, phone);
+      const todayStats =
+        statsArray.find((item) => item.date.getTime() === today.getTime()) ||
+        {
+          phone,
+          date: today,
+          jobsPosted: 0,
+          jobsCompleted: 0,
+          workersList: [],
+          totalSpending: 0,
+          workersEngaged: 0,
+        };
+      const jobsPosted = todayStats.jobsPosted;
+      const jobsCompleted = todayStats.jobsCompleted;
+      const workersList = todayStats.workersList;
+      const workersEngaged = todayStats.workersEngaged;
+      const totalSpending = todayStats.totalSpending;
+
+      const jobDetails = buildJobDetails(todayJobs);
 
       let stats = await ContractorStats.findOne({ phone, date: today });
       if (stats) {

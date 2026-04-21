@@ -1,5 +1,6 @@
 const express = require("express");
 const mongoose = require("mongoose");
+const { normalizePhoneNumber } = require("../utils/dataNormalization");
 const { createGigHistoryEvent } = require("../services/gigHistoryService");
 const { cancelDispatchState } = require("../services/dispatchStateService");
 
@@ -31,7 +32,7 @@ function createJobsLifecycleCoreRouter({
     try {
       const jobId = req.params.id;
       const workerName = req.user.name;
-      const workerPhone = req.user.phone;
+      const workerPhone = normalizePhoneNumber(req.user.phone);
       const idempotencyKey =
         String(req.header("X-Idempotency-Key") || req.body?.idempotencyKey || "")
           .trim()
@@ -94,7 +95,7 @@ function createJobsLifecycleCoreRouter({
         acceptedWorkerSnapshot = {
           id: workerRecord?._id?.toString() || null,
           name: req.user.name || req.user.phone,
-          phone: req.user.phone,
+          phone: workerPhone,
           skills: workerRecord?.skills || [],
           profilePhoto: userRecord?.profilePhoto || null,
           location: workerRecord?.location || null,
@@ -114,8 +115,9 @@ function createJobsLifecycleCoreRouter({
         return finish(404, { success: false, message: "Job not found" }, false);
       }
 
+      const normalizedWorkerPhone = workerPhone;
       const hasUnpaidJobSingle = await Job.findOne({
-        acceptedBy: workerPhone,
+        acceptedBy: normalizedWorkerPhone,
         paymentStatus: { $ne: "paid" },
         status: { $nin: ["cancelled", "expired", "completed"] },
       });
@@ -133,7 +135,7 @@ function createJobsLifecycleCoreRouter({
       }
 
       if (job.bulkHiring) {
-        const alreadyAccepted = (job.acceptedWorkers || []).find((w) => w.phone === workerPhone);
+        const alreadyAccepted = (job.acceptedWorkers || []).find((w) => normalizePhoneNumber(w.phone) === normalizedWorkerPhone);
         if (alreadyAccepted) {
           return finish(200, { success: true, message: "Job already accepted by you", job, idempotent: true });
         }
@@ -303,13 +305,17 @@ function createJobsLifecycleCoreRouter({
         return finish(200, { success: true, message: "Job accepted successfully", job: bulkJob, idempotent: false });
       }
 
-      if (job.acceptedBy === workerPhone) {
+      if (job.acceptedBy === normalizedWorkerPhone) {
         return finish(200, { success: true, message: "Job already accepted by you", job, idempotent: true });
       }
 
       const updated = await Job.findOneAndUpdate(
-        { _id: jobId, status: "pending" },
-        { $set: { status: "accepted", acceptedBy: workerPhone, acceptedWorker: acceptedWorkerSnapshot, acceptedAt: new Date() } },
+        {
+          _id: jobId,
+          status: { $in: ["pending", "posted", "offered"] },
+          acceptedBy: { $in: [null, ""] },
+        },
+        { $set: { status: "accepted", acceptedBy: normalizedWorkerPhone, acceptedWorker: acceptedWorkerSnapshot, acceptedAt: new Date() } },
         { new: true }
       );
 
@@ -440,7 +446,7 @@ function createJobsLifecycleCoreRouter({
     try {
       const jobId = req.params.id;
       const workerName = req.user.name;
-      const workerPhone = req.user.phone;
+      const workerPhone = normalizePhoneNumber(req.user.phone);
       const idempotencyKey =
         String(req.header("X-Idempotency-Key") || req.body?.idempotencyKey || "")
           .trim()
@@ -477,22 +483,27 @@ function createJobsLifecycleCoreRouter({
         return finish(404, { success: false, message: "Job not found" }, false);
       }
 
-      // Canonical identity for declines is phone.
-      job.declinedBy = Array.isArray(job.declinedBy) ? job.declinedBy : [];
-      const alreadyDeclined = job.declinedBy.includes(workerPhone);
+      // Canonical identity for declines is normalized phone.
+      const normalizedWorkerPhone = normalizePhoneNumber(req.user.phone);
+      job.declinedBy = Array.isArray(job.declinedBy)
+        ? job.declinedBy.map(normalizePhoneNumber).filter(Boolean)
+        : [];
+      const alreadyDeclined = job.declinedBy.includes(normalizedWorkerPhone);
 
       // Idempotent return for repeated decline taps / retries.
-      if (alreadyDeclined && !(job.acceptedBy === workerPhone || (job.acceptedWorkers || []).some((w) => w.phone === workerPhone))) {
+      if (alreadyDeclined && !(normalizePhoneNumber(job.acceptedBy) === normalizedWorkerPhone || (job.acceptedWorkers || []).some((w) => normalizePhoneNumber(w.phone) === normalizedWorkerPhone))) {
         return finish(200, { success: true, message: "Job already declined", job, idempotent: true });
       }
 
-      if (!job.declinedBy.includes(workerPhone)) {
-        job.declinedBy.push(workerPhone);
+      if (!job.declinedBy.includes(normalizedWorkerPhone)) {
+        job.declinedBy.push(normalizedWorkerPhone);
       }
 
       if (job.bulkHiring) {
         const before = job.acceptedWorkers ? job.acceptedWorkers.length : 0;
-        job.acceptedWorkers = (job.acceptedWorkers || []).filter((w) => w.phone !== workerPhone);
+        job.acceptedWorkers = (job.acceptedWorkers || [])
+          .map((w) => ({ ...w, phone: normalizePhoneNumber(w.phone) }))
+          .filter((w) => w.phone !== normalizedWorkerPhone);
         const after = job.acceptedWorkers.length;
 
         if (after < before) {

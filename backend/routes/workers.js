@@ -7,6 +7,7 @@ const Wallet = require("../models/Wallet");
 const NotificationHistory = require("../models/NotificationHistory");
 const District = require("../models/City");
 const GigHistory = require("../models/GigHistory");
+const CashDeposit = require("../models/CashDeposit");
 const { calculateEligibility } = require("../services/incentiveEligibilityService");
 
 function createWorkersRouter({
@@ -326,22 +327,20 @@ function createWorkersRouter({
       await NotificationHistory.create(responseNotificationData);
 
       // Send real-time notification to contractor if online
-      if (contractor && contractor.socketId) {
-        try {
-          io.to(contractor.socketId).emit("jobRequestResponse", {
-            requestId,
-            workerPhone: req.user.phone,
-            workerName: req.user.name,
-            accepted,
-            date: notification.metadata.date,
-            startTime: notification.metadata.startTime,
-            endTime: notification.metadata.endTime,
-            location: notification.metadata.location,
-            responseTime: new Date().toISOString(),
-          });
-        } catch (e) {
-          console.warn("Could not emit jobRequestResponse to socket:", e.message);
-        }
+      try {
+        io.to(contractorPhone).emit("jobRequestResponse", {
+          requestId,
+          workerPhone: req.user.phone,
+          workerName: req.user.name,
+          accepted,
+          date: notification.metadata.date,
+          startTime: notification.metadata.startTime,
+          endTime: notification.metadata.endTime,
+          location: notification.metadata.location,
+          responseTime: new Date().toISOString(),
+        });
+      } catch (e) {
+        console.warn("Could not emit jobRequestResponse to contractor room:", e.message);
       }
 
       // Send push notification to contractor
@@ -804,6 +803,31 @@ function createWorkersRouter({
               currentPocketBalance: pocketBalance,
             });
           }
+        }
+
+        // 🔐 CRITICAL: Check for pending cash deposits before allowing worker to go online
+        const pendingDeposits = await CashDeposit.find({
+          workerPhone: phone,
+          status: 'pending'
+        }).select('amount jobTitle contractorName depositDeadline').lean();
+
+        if (pendingDeposits.length > 0) {
+          const totalPendingAmount = pendingDeposits.reduce((sum, deposit) => sum + deposit.amount, 0);
+          const depositDetails = pendingDeposits.map(deposit => ({
+            amount: deposit.amount,
+            jobTitle: deposit.jobTitle,
+            contractorName: deposit.contractorName,
+            depositDeadline: deposit.depositDeadline
+          }));
+
+          return res.status(403).json({
+            success: false,
+            code: "PENDING_CASH_DEPOSIT",
+            message: `You have ₹${totalPendingAmount} in pending cash deposits that must be deposited before you can go online.`,
+            requiredDepositAmount: totalPendingAmount,
+            pendingDeposits: depositDetails,
+            actionRequired: "deposit_cash"
+          });
         }
       }
 

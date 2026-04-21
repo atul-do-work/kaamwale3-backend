@@ -34,6 +34,7 @@ const User = require("./models/User");
 const ContractorStats = require("./models/ContractorStats");
 const Wallet = require("./models/Wallet"); 
 const Job = require("./models/Jobs"); 
+const CashDeposit = require("./models/CashDeposit");
 const NotificationHistory = require("./models/NotificationHistory");
 const JobEventLog = require("./models/JobEventLog");
 const { attachSocketAuthMiddleware } = require("./socket/authMiddleware");
@@ -122,6 +123,7 @@ attachSocketConnectionHandlers(io, {
   User,
   findNearbyWorkers,
   Wallet,
+  CashDeposit,
   logJobEvent,
   pendingJobTimeouts,
   pendingJobExpirations,

@@ -3,11 +3,13 @@ const mongoose = require('mongoose');
 // User model - keep schema minimal but useful for auth + profile
 const userSchema = new mongoose.Schema({
   name: { type: String, default: '' },
-  phone: { type: String, unique: true, required: true },
+  phone: { type: String, unique: true, required: true, index: true },
   password: { type: String, default: '' },
-  role: { type: String, default: 'worker' },
+  role: { type: String, default: 'worker', index: true },
   profilePhoto: { type: String, default: '' },
   isAvailable: { type: Boolean, default: false },
+  isBlocked: { type: Boolean, default: false },
+  blockedReason: { type: String, default: '' },
   // Refresh tokens stored for session management - keep as array
   refreshTokens: {
     type: [
@@ -74,6 +76,12 @@ const userSchema = new mongoose.Schema({
   // ✅ Worker Profile - Main Skill & Expected Wages
   mainSkill: { type: String, default: '' }, // Labour, Mason, Engineer, ITI/Technician
   expectedWage: { type: String, default: '' }, // 0-400, 400-550, 550-700, 700-max
+  // ✅ User preferences for app settings
+  preferences: {
+    notifications: { type: Boolean, default: true },
+    emailAlerts: { type: Boolean, default: true },
+    language: { type: String, default: 'en' }, // 'en', 'hi', 'mr'
+  },
   // ✅ Terms and Conditions
   agreedToTerms: { type: Boolean, default: false }, // User agreement to T&C during registration
   agreedToTermsAt: { type: Date, default: null }, // When user agreed to T&C
@@ -82,5 +90,9 @@ const userSchema = new mongoose.Schema({
 // create 2dsphere index for location queries
 // add 2dsphere index for geospatial queries
 userSchema.index({ location: '2dsphere' });
+userSchema.index({ role: 1 });
+userSchema.index({ 'refreshTokens.token': 1 });
+userSchema.index({ fcmToken: 1 });
+userSchema.index({ deviceTokens: 1 });
 
 module.exports = mongoose.model('User', userSchema);

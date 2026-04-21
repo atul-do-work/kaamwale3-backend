@@ -124,10 +124,58 @@ function createUsersProfileRouter({ upload, io, connectedWorkers }) {
           longitude: user.longitude || (user.location && user.location.coordinates ? user.location.coordinates[0] : 0),
           mainSkill: user.mainSkill || "",
           expectedWage: user.expectedWage || "",
+          preferences: {
+            notifications: user.preferences?.notifications ?? true,
+            emailAlerts: user.preferences?.emailAlerts ?? true,
+          },
         },
       });
     } catch (err) {
       console.error("Profile error:", err);
+      return res.status(500).json({ success: false, message: "Internal server error" });
+    }
+  });
+
+  router.get("/users/preferences", authenticateToken, async (req, res) => {
+    try {
+      const user = await User.findOne({ phone: req.user.phone }).select('preferences');
+      if (!user) {
+        return res.status(404).json({ success: false, message: "User not found" });
+      }
+      return res.json({
+        success: true,
+        preferences: {
+          notifications: user.preferences?.notifications ?? true,
+          emailAlerts: user.preferences?.emailAlerts ?? true,
+        },
+      });
+    } catch (err) {
+      console.error("Preferences fetch error:", err);
+      return res.status(500).json({ success: false, message: "Internal server error" });
+    }
+  });
+
+  router.post("/users/preferences", authenticateToken, async (req, res) => {
+    try {
+      const { notifications, emailAlerts } = req.body;
+      if (typeof notifications !== 'boolean' || typeof emailAlerts !== 'boolean') {
+        return res.status(400).json({ success: false, message: "Invalid preferences payload" });
+      }
+
+      const user = await User.findOne({ phone: req.user.phone });
+      if (!user) {
+        return res.status(404).json({ success: false, message: "User not found" });
+      }
+
+      user.preferences = {
+        notifications,
+        emailAlerts,
+      };
+      await user.save();
+
+      return res.json({ success: true, preferences: user.preferences });
+    } catch (err) {
+      console.error("Preferences update error:", err);
       return res.status(500).json({ success: false, message: "Internal server error" });
     }
   });

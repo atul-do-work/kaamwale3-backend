@@ -689,12 +689,79 @@ router.post("/payout-method", authenticateToken, async (req, res) => {
 });
 
 // ✅ WITHDRAW to bank account (requires bank account)
+function getLastWithdrawal(phone) {
+  return Withdrawal.findOne({ phone })
+    .sort({ createdAt: -1 })
+    .lean();
+}
+
+function isWeeklyWithdrawalBlocked(withdrawal, now = new Date()) {
+  if (!withdrawal) return { blocked: false };
+
+  const pendingStatuses = ["initiated", "processing"];
+  if (pendingStatuses.includes(String(withdrawal.status || "").toLowerCase())) {
+    return {
+      blocked: true,
+      message: "Please wait until your current withdrawal is completed before starting a new request.",
+    };
+  }
+
+  if (String(withdrawal.status || "").toLowerCase() !== "success") {
+    return { blocked: false };
+  }
+
+  const oneWeekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+  const lastCreated = new Date(withdrawal.createdAt || withdrawal.updatedAt || withdrawal.created_at || 0);
+  if (Number.isNaN(lastCreated.getTime())) return { blocked: false };
+
+  if (lastCreated >= oneWeekAgo) {
+    const nextAvailable = new Date(lastCreated.getTime() + 7 * 24 * 60 * 60 * 1000);
+    return {
+      blocked: true,
+      nextAllowedAt: nextAvailable,
+      message: `Only one withdrawal is allowed per week. Next withdrawal available after ${nextAvailable.toLocaleString('en-IN')}.`,
+    };
+  }
+
+  return { blocked: false, nextAllowedAt: null };
+}
+
+async function buildWithdrawStatus(phone) {
+  const recentWithdrawal = await getLastWithdrawal(phone);
+  const withdrawMeta = isWeeklyWithdrawalBlocked(recentWithdrawal);
+  const isRequestPending = Boolean(
+    recentWithdrawal &&
+    ["initiated", "processing"].includes(String(recentWithdrawal.status || "").toLowerCase())
+  );
+
+  return {
+    recentWithdrawal: recentWithdrawal || null,
+    withdrawStatus: {
+      blocked: Boolean(withdrawMeta.blocked),
+      message: String(withdrawMeta.message || ""),
+      nextAllowedAt: withdrawMeta.nextAllowedAt ? withdrawMeta.nextAllowedAt.toISOString() : null,
+      isRequestPending,
+      isWeeklyBlock: Boolean(withdrawMeta.blocked && withdrawMeta.nextAllowedAt),
+    },
+  };
+}
+
 router.post("/withdraw", authenticateToken, withdrawLimiter, async (req, res) => {
   try {
     if (!(await requirePayoutAccess(req, res))) return;
     const { amount, payoutMethod: payoutMethodInput } = req.body;
     const payoutMethod = String(payoutMethodInput || "bank").toLowerCase();
     
+    // 🔐 PRECHECK: Enforce contractor weekly withdrawal restrictions
+    const role = String(req.user?.role || "").toLowerCase();
+    if (role === "contractor") {
+      const lastWithdrawal = await getLastWithdrawal(req.user.phone);
+      const blockInfo = isWeeklyWithdrawalBlocked(lastWithdrawal);
+      if (blockInfo.blocked) {
+        return res.status(400).json({ success: false, message: blockInfo.message });
+      }
+    }
+
     // 🔐 STEP 1: INPUT VALIDATION - Numeric type safety
     if (amount === undefined || amount === null) {
       return res.status(400).json({ success: false, message: "Amount is required" });
@@ -775,8 +842,8 @@ router.post("/withdraw", authenticateToken, withdrawLimiter, async (req, res) =>
     if (!existingWalletBeforeWithdraw) {
       return res.status(404).json({ success: false, message: "Wallet not found. Please login again." });
     }
-    const role = String(req.user?.role || "").toLowerCase();
-    const isContractor = role === "contractor";
+    const userRole = String(req.user?.role || "").toLowerCase();
+    const isContractor = userRole === "contractor";
     const rawAvailable = Number(existingWalletBeforeWithdraw.availableBalance ?? 0);
     const rawPocket = Number(existingWalletBeforeWithdraw.pocketBalance ?? 0);
     const openingAvailable = rawAvailable;
@@ -906,6 +973,32 @@ router.post("/withdraw", authenticateToken, withdrawLimiter, async (req, res) =>
   } catch (err) {
     console.error('Withdraw error:', err);
     res.status(500).json({ success: false, message: "Error processing withdrawal" });
+  }
+});
+
+router.get("/withdraw/recent", authenticateToken, async (req, res) => {
+  try {
+    const payload = await buildWithdrawStatus(req.user.phone);
+    return res.json({
+      success: true,
+      ...payload,
+    });
+  } catch (err) {
+    console.error('Recent withdrawal lookup error:', err);
+    return res.status(500).json({ success: false, message: 'Failed to fetch recent withdrawal' });
+  }
+});
+
+router.get("/withdraw/status", authenticateToken, async (req, res) => {
+  try {
+    const payload = await buildWithdrawStatus(req.user.phone);
+    return res.json({
+      success: true,
+      ...payload,
+    });
+  } catch (err) {
+    console.error('Withdrawal status lookup error:', err);
+    return res.status(500).json({ success: false, message: 'Failed to fetch withdraw status' });
   }
 });
 

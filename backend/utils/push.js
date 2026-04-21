@@ -58,6 +58,13 @@ async function sendNotificationToUserPhone(phone, payload) {
 
     // try to find user and send push
     const user = await User.findOne({ phone });
+    if (user && user.preferences?.notifications === false) {
+      console.log(`Notifications disabled for ${phone}, skipping push delivery`);
+      record.pushNotificationSent = false;
+      record.pushNotificationSentAt = new Date();
+      await record.save();
+      return { success: true, skipped: true, record, message: 'Notifications disabled' };
+    }
     if (user && user.fcmToken) {
       const r = await sendPushToToken(user.fcmToken, payload.title, payload.body, payload.metadata || {});
       if (r.success) {

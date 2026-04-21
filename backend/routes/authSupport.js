@@ -2,34 +2,51 @@ const express = require("express");
 const bcrypt = require("bcrypt");
 const jwt = require("jsonwebtoken");
 const crypto = require("crypto");
+const rateLimit = require("express-rate-limit");
 
 const User = require("../models/User");
 const { sendOtp } = require("../utils/sendOtp");
 const { authenticateToken } = require("../utils/auth");
+const { normalizePhoneNumber, isValidPhoneNumber } = require("../utils/dataNormalization");
 
 // ✅ SECURITY: Generic response for failed password reset attempts
 const GENERIC_ERROR = "Invalid phone or password reset failed";
 
-// ✅ SECURITY: Phone validation - exactly 10 digits, numeric only
-function isValidPhoneNumber(phone) {
-  if (!phone || typeof phone !== 'string') return false;
-  // Must be exactly 10 digits
-  return /^\d{10}$/.test(phone);
+function normalizeAuthPhone(phone) {
+  return normalizePhoneNumber(phone);
 }
+
+const authIpLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 50, // limit each IP to 50 requests per windowMs
+  message: { success: false, message: "Too many requests from this IP. Please try again later." },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+const forgotPasswordRequestLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000, // 1 hour
+  max: 10, // limit each IP to 10 forgot-password requests per hour
+  message: { success: false, message: "Too many forgot-password requests from this IP. Please try again later." },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
 
 function createAuthSupportRouter({ JWT_SECRET, sendNotificationToUserPhone, sessionStore }) {
   const router = express.Router();
+  router.use(authIpLimiter);
 
-  router.post("/auth/forgot-password-request", async (req, res) => {
+  router.post("/auth/forgot-password-request", forgotPasswordRequestLimiter, async (req, res) => {
     try {
       const { phone } = req.body;
+      const normalizedPhone = normalizeAuthPhone(phone);
 
-      // ✅ SECURITY: Validate phone format (exactly 10 digits, numeric only)
-      if (!isValidPhoneNumber(phone)) {
+      // ✅ SECURITY: Validate phone format after normalization
+      if (!isValidPhoneNumber(normalizedPhone)) {
         return res.status(400).json({ success: false, message: GENERIC_ERROR });
       }
 
-      const user = await User.findOne({ phone });
+      const user = await User.findOne({ phone: normalizedPhone });
       if (!user) {
         // ✅ SECURITY: Generic error to prevent phone enumeration
         return res.status(400).json({ success: false, message: GENERIC_ERROR });
@@ -85,13 +102,14 @@ function createAuthSupportRouter({ JWT_SECRET, sendNotificationToUserPhone, sess
   router.post("/auth/forgot-password-verify-otp", async (req, res) => {
     try {
       const { phone, otp } = req.body;
+      const normalizedPhone = normalizeAuthPhone(phone);
       
       // ✅ SECURITY: Validate phone format
-      if (!isValidPhoneNumber(phone) || !otp) {
+      if (!isValidPhoneNumber(normalizedPhone) || !otp) {
         return res.status(400).json({ success: false, message: GENERIC_ERROR });
       }
 
-      const user = await User.findOne({ phone });
+      const user = await User.findOne({ phone: normalizedPhone });
       if (!user) {
         // ✅ SECURITY: Generic error to prevent phone enumeration
         return res.status(400).json({ success: false, message: GENERIC_ERROR });
@@ -145,9 +163,10 @@ function createAuthSupportRouter({ JWT_SECRET, sendNotificationToUserPhone, sess
   router.post("/auth/forgot-password-reset", async (req, res) => {
     try {
       const { phone, otp, newPassword, confirmPassword } = req.body;
+      const normalizedPhone = normalizeAuthPhone(phone);
 
       // ✅ SECURITY: Validate phone format and all required fields
-      if (!isValidPhoneNumber(phone) || !otp || !newPassword || !confirmPassword) {
+      if (!isValidPhoneNumber(normalizedPhone) || !otp || !newPassword || !confirmPassword) {
         return res.status(400).json({ success: false, message: GENERIC_ERROR });
       }
 
@@ -170,7 +189,7 @@ function createAuthSupportRouter({ JWT_SECRET, sendNotificationToUserPhone, sess
         return res.status(400).json({ success: false, message: "Passwords do not match" });
       }
 
-      const user = await User.findOne({ phone });
+      const user = await User.findOne({ phone: normalizedPhone });
       if (!user) {
         // ✅ SECURITY: Generic error to prevent phone enumeration
         return res.status(400).json({ success: false, message: GENERIC_ERROR });
@@ -242,15 +261,16 @@ function createAuthSupportRouter({ JWT_SECRET, sendNotificationToUserPhone, sess
   router.post("/auth/request-otp", async (req, res) => {
     try {
       const { phone, name, role, fcmToken } = req.body;
+      const normalizedPhone = normalizeAuthPhone(phone);
       
       // ✅ SECURITY: Validate phone format (exactly 10 digits, numeric only)
-      if (!isValidPhoneNumber(phone)) {
+      if (!isValidPhoneNumber(normalizedPhone)) {
         return res.status(400).json({ success: false, message: "Invalid phone number format" });
       }
 
-      let user = await User.findOne({ phone });
+      let user = await User.findOne({ phone: normalizedPhone });
       if (!user) {
-        user = new User({ phone, name: name || "Unknown", role: role || "worker" });
+        user = new User({ phone: normalizedPhone, name: name || "Unknown", role: role || "worker" });
       }
 
       if (fcmToken) {
@@ -259,7 +279,7 @@ function createAuthSupportRouter({ JWT_SECRET, sendNotificationToUserPhone, sess
       await user.save();
 
       const tokenToUse = fcmToken || user.fcmToken || null;
-      const otpResult = await sendOtp(phone, tokenToUse);
+      const otpResult = await sendOtp(normalizedPhone, tokenToUse);
 
       if (!otpResult.success) {
         return res.status(400).json({ success: false, message: otpResult.message });
@@ -280,13 +300,14 @@ function createAuthSupportRouter({ JWT_SECRET, sendNotificationToUserPhone, sess
   router.post("/auth/verify-otp", async (req, res) => {
     try {
       const { phone, otp } = req.body;
+      const normalizedPhone = normalizeAuthPhone(phone);
       
       // ✅ SECURITY: Validate phone format
-      if (!isValidPhoneNumber(phone) || !otp) {
+      if (!isValidPhoneNumber(normalizedPhone) || !otp) {
         return res.status(400).json({ success: false, message: "Invalid phone or OTP" });
       }
 
-      const user = await User.findOne({ phone });
+      const user = await User.findOne({ phone: normalizedPhone });
       if (!user) {
         return res.status(400).json({ success: false, message: "Invalid phone or OTP" });
       }

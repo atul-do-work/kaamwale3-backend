@@ -10,8 +10,14 @@ function isPremiumEntitled(user) {
   const expiryOk = expiryDate && new Date(expiryDate) > now;
   const graceOk = graceUntil && new Date(graceUntil) > now;
 
-  // ✅ FIXED: Status must be explicitly "active" or "grace", not null/undefined
-  const statusOk = status === "active" || status === "grace";
+  // ✅ FIXED: If status is missing, calculate it from dates
+  let statusOk = false;
+  if (status === "active" || status === "grace") {
+    statusOk = true;
+  } else if (!status) {
+    // Status is undefined - calculate from dates
+    statusOk = expiryOk || graceOk;
+  }
 
   return statusOk && (expiryOk || graceOk);
 }
