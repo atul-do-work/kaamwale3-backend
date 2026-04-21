@@ -7,6 +7,7 @@ const userSchema = new mongoose.Schema({
   password: { type: String, default: '' },
   role: { type: String, default: 'worker', index: true },
   profilePhoto: { type: String, default: '' },
+  profilePhotoPublicId: { type: String, default: '' },
   isAvailable: { type: Boolean, default: false },
   isBlocked: { type: Boolean, default: false },
   blockedReason: { type: String, default: '' },

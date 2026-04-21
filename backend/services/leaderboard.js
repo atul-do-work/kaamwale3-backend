@@ -13,7 +13,7 @@
 
 const express = require('express');
 const { authenticateToken } = require('../utils/auth');
-const { isPremiumEntitled } = require('../utils/premiumEntitlement');
+const { isPremiumEntitled, normalizePremiumPlanStatus } = require('../utils/premiumEntitlement');
 const User = require('../models/User');
 const Job = require('../models/Jobs');
 const CityLeaderboard = require('../models/CityLeaderboard');
@@ -39,6 +39,26 @@ const TIER_THRESHOLDS = {
 
 const RECALCULATION_INTERVAL = 6 * 60 * 60 * 1000; // 6 hours in milliseconds
 let leaderboardSchedulerRunning = false;
+
+async function getAuthenticatedLeaderboardUser(req, selectFields) {
+  const query = req.user?.id ? { _id: req.user.id } : { phone: req.user?.phone };
+  return User.findOne(query).select(selectFields);
+}
+
+function canAccessLeaderboard(user) {
+  if (!user) return false;
+
+  normalizePremiumPlanStatus(user);
+  if (!isPremiumEntitled(user)) return false;
+
+  return Boolean(user.premiumPlan?.entitlements?.canViewLeaderboard);
+}
+
+function isCurrentUserLeaderboardEntry(item, req, user) {
+  if (!item) return false;
+  if (req.user?.id && item.contractorId?.toString() === String(req.user.id)) return true;
+  return Boolean(user?.phone && item.phone === user.phone);
+}
 
 // ========================================
 // UTILITY FUNCTIONS
@@ -534,10 +554,8 @@ const router = express.Router();
  */
 router.get('/my-city', authenticateToken, async (req, res) => {
   try {
-    const user = await User.findById(req.user.id).select("phone premiumPlan city state");
-
-    // ✅ Check premium status
-    if (!isPremiumEntitled(user)) {
+    const user = await getAuthenticatedLeaderboardUser(req, "phone premiumPlan city state");
+    if (!canAccessLeaderboard(user)) {
       return res.status(403).json({
         success: false,
         message: 'Leaderboard feature requires an active premium plan',
@@ -598,8 +616,8 @@ router.get('/my-city', authenticateToken, async (req, res) => {
 
     if (allData) {
       const fullLeaderboard = await calculateCityLeaderboard(userCity, userState, 1, 500); // Get more to find user
-      const userInList = fullLeaderboard.leaderboard.find(
-        (item) => item.contractorId.toString() === req.user.id
+      const userInList = fullLeaderboard.leaderboard.find((item) =>
+        isCurrentUserLeaderboardEntry(item, req, user)
       );
       if (userInList) {
         userRank = userInList.rank;
@@ -638,9 +656,8 @@ router.get('/my-city', authenticateToken, async (req, res) => {
  */
 router.get('/city', authenticateToken, async (req, res) => {
   try {
-    // ✅ Check premium status
-    const user = await User.findById(req.user.id).select("phone premiumPlan");
-    if (!isPremiumEntitled(user)) {
+    const user = await getAuthenticatedLeaderboardUser(req, "phone premiumPlan");
+    if (!canAccessLeaderboard(user)) {
       return res.status(403).json({
         success: false,
         message: 'Leaderboard feature requires an active premium plan',
@@ -688,8 +705,9 @@ router.get('/city', authenticateToken, async (req, res) => {
         {
           city: district.name,
           state: district.state,
-          leaderboard: leaderboardData,
-          totalContractors: leaderboardData.length,
+          leaderboard: leaderboardData.leaderboard,
+          totalContractors: leaderboardData.totalContractors,
+          totalPages: leaderboardData.totalPages,
           calculatedAt: new Date(),
           expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
         },
@@ -698,8 +716,8 @@ router.get('/city', authenticateToken, async (req, res) => {
     }
 
     // Find current user's rank
-    const currentUserRank = leaderboard.leaderboard.find(
-      (item) => item.contractorId.toString() === req.user.id
+    const currentUserRank = leaderboard.leaderboard.find((item) =>
+      isCurrentUserLeaderboardEntry(item, req, user)
     );
 
     res.json({
@@ -730,8 +748,8 @@ router.get('/city/:cityName', authenticateToken, async (req, res) => {
   try {
     const { cityName } = req.params;
     const { state } = req.query;
-    const user = await User.findById(req.user.id).select('premiumPlan');
-    if (!isPremiumEntitled(user)) {
+    const user = await getAuthenticatedLeaderboardUser(req, 'phone premiumPlan');
+    if (!canAccessLeaderboard(user)) {
       return res.status(403).json({
         success: false,
         message: 'Leaderboard feature requires an active premium plan',
@@ -769,8 +787,9 @@ router.get('/city/:cityName', authenticateToken, async (req, res) => {
         {
           city: cityName.toLowerCase().trim(),
           state: (state || 'Unknown').toLowerCase().trim(),
-          leaderboard: leaderboardData,
-          totalContractors: leaderboardData.length,
+          leaderboard: leaderboardData.leaderboard,
+          totalContractors: leaderboardData.totalContractors,
+          totalPages: leaderboardData.totalPages,
           calculatedAt: new Date(),
           expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
         },
@@ -779,8 +798,8 @@ router.get('/city/:cityName', authenticateToken, async (req, res) => {
     }
 
     // Find current user's rank
-    const currentUserRank = leaderboard.leaderboard.find(
-      (item) => item.contractorId.toString() === req.user.id
+    const currentUserRank = leaderboard.leaderboard.find((item) =>
+      isCurrentUserLeaderboardEntry(item, req, user)
     );
 
     res.json({
@@ -829,8 +848,8 @@ router.put('/update-location', authenticateToken, async (req, res) => {
     }
 
     // Update user's location
-    const user = await User.findByIdAndUpdate(
-      req.user.id,
+    const user = await User.findOneAndUpdate(
+      req.user?.id ? { _id: req.user.id } : { phone: req.user?.phone },
       {
         city: district.name,
         state: district.state,
@@ -842,7 +861,7 @@ router.put('/update-location', authenticateToken, async (req, res) => {
     );
 
     // ✅ Return leaderboard only if user has premium
-    const hasPremium = isPremiumEntitled(user);
+    const hasPremium = canAccessLeaderboard(user);
 
     if (!hasPremium) {
       return res.json({
@@ -875,8 +894,9 @@ router.put('/update-location', authenticateToken, async (req, res) => {
         {
           city: district.name,
           state: district.state,
-          leaderboard: leaderboardData,
-          totalContractors: leaderboardData.length,
+          leaderboard: leaderboardData.leaderboard,
+          totalContractors: leaderboardData.totalContractors,
+          totalPages: leaderboardData.totalPages,
           calculatedAt: new Date(),
           expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
         },
@@ -884,8 +904,8 @@ router.put('/update-location', authenticateToken, async (req, res) => {
       );
     }
 
-    const currentUserRank = leaderboard.leaderboard.find(
-      (item) => item.contractorId.toString() === req.user.id
+    const currentUserRank = leaderboard.leaderboard.find((item) =>
+      isCurrentUserLeaderboardEntry(item, req, user)
     );
 
     res.json({
@@ -972,9 +992,8 @@ router.get('/stats/:contractorId', authenticateToken, async (req, res) => {
  */
 router.get('/contractors/by-district', authenticateToken, async (req, res) => {
   try {
-    // ✅ Check premium status
-    const user = await User.findById(req.user.id).select("phone premiumPlan");
-    if (!isPremiumEntitled(user)) {
+    const user = await getAuthenticatedLeaderboardUser(req, "phone premiumPlan");
+    if (!canAccessLeaderboard(user)) {
       return res.status(403).json({
         success: false,
         message: 'Leaderboard feature requires an active premium plan',

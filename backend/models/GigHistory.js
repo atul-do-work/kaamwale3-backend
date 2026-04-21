@@ -34,5 +34,16 @@ const gigHistorySchema = new mongoose.Schema(
 gigHistorySchema.index({ workerPhone: 1, eventTime: -1 });
 gigHistorySchema.index({ workerPhone: 1, workDate: -1, eventType: 1 });
 
+// 🔧 FIX: TTL Index - Auto-delete old records after 2 years
+// Prevents infinite growth of GigHistory collection
+// MongoDB will delete documents 730 days (2 years) after their timestamp
+gigHistorySchema.index(
+  { createdAt: 1 },
+  { 
+    expireAfterSeconds: 63072000, // 2 years = 2 * 365 * 24 * 60 * 60
+    name: 'gigHistory_ttl_2years'
+  }
+);
+
 module.exports = mongoose.model("GigHistory", gigHistorySchema);
 

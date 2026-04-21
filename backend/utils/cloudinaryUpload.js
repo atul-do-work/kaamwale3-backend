@@ -156,9 +156,60 @@ async function uploadFilePathToCloudinary({
   });
 }
 
+function isCloudinaryAssetUrl(url, cfg = getCloudinaryConfig()) {
+  if (!url || typeof url !== "string" || !cfg?.cloudName) return false;
+
+  try {
+    const parsed = new URL(url);
+    return (
+      parsed.hostname === "res.cloudinary.com" &&
+      parsed.pathname.startsWith(`/${cfg.cloudName}/`)
+    );
+  } catch (err) {
+    return false;
+  }
+}
+
+async function deleteCloudinaryAsset(publicId, resourceType = "image") {
+  const cfg = getCloudinaryConfig();
+  if (!cfg.configured || !publicId) {
+    return { result: "skipped" };
+  }
+
+  const timestamp = Math.floor(Date.now() / 1000);
+  const params = {
+    public_id: publicId,
+    timestamp,
+  };
+  const signature = signUploadParams(params, cfg.apiSecret);
+
+  const body = new URLSearchParams();
+  body.set("public_id", publicId);
+  body.set("timestamp", String(timestamp));
+  body.set("api_key", cfg.apiKey);
+  body.set("signature", signature);
+
+  const endpoint = `https://api.cloudinary.com/v1_1/${cfg.cloudName}/${resourceType}/destroy`;
+  const response = await fetch(endpoint, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: body.toString(),
+  });
+  const payload = await response.json().catch(() => ({}));
+
+  if (!response.ok) {
+    const reason = payload?.error?.message || "Cloudinary delete failed";
+    throw new Error(reason);
+  }
+
+  return payload;
+}
+
 module.exports = {
   getCloudinaryConfig,
   signUploadParams,
+  isCloudinaryAssetUrl,
+  deleteCloudinaryAsset,
   uploadImageBufferToCloudinary,
   uploadImagePathToCloudinary,
   uploadFileBufferToCloudinary,

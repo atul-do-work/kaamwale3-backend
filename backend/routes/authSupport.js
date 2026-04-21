@@ -345,7 +345,7 @@ function createAuthSupportRouter({ JWT_SECRET, sendNotificationToUserPhone, sess
       user.otpAttemptLockoutUntil = null;
 
       const accessToken = jwt.sign(
-        { name: user.name, phone: user.phone, role: user.role },
+        { name: user.name, phone: user.phone, role: user.role, id: user._id },
         JWT_SECRET,
         { expiresIn: "1h" }
       );
@@ -361,7 +361,7 @@ function createAuthSupportRouter({ JWT_SECRET, sendNotificationToUserPhone, sess
       await user.save();
       return res.json({
         success: true,
-        user: { name: user.name, phone: user.phone, role: user.role },
+        user: { _id: user._id, name: user.name, phone: user.phone, role: user.role },
         accessToken,
         refreshToken,
       });
@@ -385,7 +385,7 @@ function createAuthSupportRouter({ JWT_SECRET, sendNotificationToUserPhone, sess
       }
 
       const accessToken = jwt.sign(
-        { name: user.name, phone: user.phone, role: user.role },
+        { name: user.name, phone: user.phone, role: user.role, id: user._id },
         JWT_SECRET,
         { expiresIn: "1h" }
       );

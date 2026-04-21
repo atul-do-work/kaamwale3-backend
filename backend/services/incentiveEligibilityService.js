@@ -207,7 +207,73 @@ function calculateEligibility(events) {
   }
 }
 
+/**
+ * 🔧 FIX BUG #3: Recalculate incentive eligibility after gig updates
+ * Called after:
+ * - updateGigDataOnCompletion
+ * - updateGigDataOnCancellation
+ * 
+ * This ensures worker.gigsData stays in sync with GigHistory events
+ */
+async function updateIncentiveEligibility(workerPhone) {
+  try {
+    const GigHistory = require('../models/GigHistory');
+    const Worker = require('../models/Worker');
+
+    const normalizePhoneDigits = (value) => String(value || '').replace(/\D/g, '').slice(-10);
+    const phoneDigits = normalizePhoneDigits(workerPhone);
+
+    // Fetch recent gig history events
+    const events = await GigHistory.find({
+      $or: [
+        { workerPhone: { $in: [workerPhone, phoneDigits] } },
+        { workerPhone: { $regex: `${phoneDigits}$` } }
+      ]
+    })
+      .sort({ eventTime: -1 })
+      .limit(365)
+      .lean();
+
+    // Calculate eligibility from events
+    const eligibilityData = calculateEligibility(events);
+
+    // Update worker with calculated eligibility
+    const updateResult = await Worker.findOneAndUpdate(
+      { phone: workerPhone },
+      {
+        $set: {
+          'gigsData.eligibilitySnapshot': {
+            consecutiveDays: eligibilityData.consecutiveDays,
+            totalHours: eligibilityData.totalHours,
+            cancellationsInWindow: eligibilityData.cancellationsInWindow,
+            eligibleFor5Days: eligibilityData.eligibleFor5Days,
+            eligibleFor10Days: eligibilityData.eligibleFor10Days,
+            eligibleFor20Days: eligibilityData.eligibleFor20Days,
+            lastWorkDate: eligibilityData.lastWorkDate,
+            calculatedAt: new Date(),
+            dailyQualificationTrail: eligibilityData.dailyQualificationTrail,
+            fiveDayWindow: eligibilityData.fiveDayWindow,
+          },
+        }
+      },
+      { new: true }
+    );
+
+    if (!updateResult) {
+      console.warn(`Worker not found for incentive update: ${workerPhone}`);
+      return null;
+    }
+
+    return updateResult;
+  } catch (err) {
+    console.error('Error updating incentive eligibility:', err);
+    // Don't throw - this is secondary to main gig update
+    return null;
+  }
+}
+
 module.exports = {
   calculateEligibility,
   emptyEligibility,
+  updateIncentiveEligibility, // 🔧 FIX: Export function for post-gig recalculation
 };

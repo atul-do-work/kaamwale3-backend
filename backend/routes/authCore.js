@@ -111,7 +111,7 @@ function createAuthCoreRouter({ User, Wallet, WorkerModel, bcrypt, jwt, jwtSecre
         console.error("[Register] Error logging terms agreement:", termsErr.message);
       }
 
-      const accessToken = jwt.sign({ name: cleanName, phone: normalizedPhone, role }, jwtSecret, { expiresIn: "1h" });
+      const accessToken = jwt.sign({ name: cleanName, phone: normalizedPhone, role, id: newUser._id }, jwtSecret, { expiresIn: "1h" });
       const refreshToken = crypto.randomBytes(40).toString("hex");
       const expiresAt = new Date(Date.now() + 1000 * 60 * 60 * 24 * 30);
       newUser.refreshTokens.push({ token: refreshToken, issuedAt: new Date(), expiresAt, deviceInfo: req.headers["user-agent"] || "unknown" });
@@ -120,7 +120,7 @@ function createAuthCoreRouter({ User, Wallet, WorkerModel, bcrypt, jwt, jwtSecre
       await session.commitTransaction();
       session.endSession();
 
-      return res.json({ success: true, user: { name: cleanName, phone: normalizedPhone, role }, accessToken, refreshToken });
+      return res.json({ success: true, user: { _id: newUser._id, name: cleanName, phone: normalizedPhone, role }, accessToken, refreshToken });
     } catch (err) {
       if (session) {
         try {

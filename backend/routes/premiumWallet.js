@@ -339,9 +339,14 @@ function createPremiumWalletRouter({ io }) {
         io.to(req.user.phone).emit("premiumSubscriptionUpdate", {
           contractorPhone: req.user.phone,
           contractorName: req.user.name,
+          eventType: "subscription_started",
           planType: responsePayload.premiumPlan?.type,
+          status: responsePayload.premiumPlan?.status,
           subscriptionId: responsePayload.subscriptionId,
           expiryDate: responsePayload.premiumPlan?.expiryDate,
+          graceUntil: responsePayload.premiumPlan?.graceUntil || null,
+          entitlements: responsePayload.entitlements || responsePayload.premiumPlan?.entitlements || null,
+          premiumPlan: responsePayload.premiumPlan || null,
           timestamp: new Date(),
         });
 
@@ -497,8 +502,17 @@ function createPremiumWalletRouter({ io }) {
         planType: "free",
         subscriptionId: null,
         expiryDate: null,
+        graceUntil: null,
         status: "inactive",
         eventType: "premium_cancelled",
+        entitlements: getPlanEntitlements("free"),
+        premiumPlan: {
+          type: "free",
+          status: "inactive",
+          expiryDate: null,
+          graceUntil: null,
+          entitlements: getPlanEntitlements("free"),
+        },
         timestamp: new Date(),
       });
 

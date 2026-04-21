@@ -7,111 +7,125 @@
 const Worker = require("../models/Worker");
 
 /**
- * Update worker gigs data when a job is completed
+ * Update worker gigs data when a job is completed (ATOMIC)
+ * 🔧 FIX: Use atomic $inc to prevent race conditions
+ * 🔧 FIX: Call incentive recalculation after update
  */
 exports.updateGigDataOnCompletion = async (workerPhone, jobData) => {
   try {
-    const worker = await Worker.findOne({ phone: workerPhone });
-    if (!worker) return;
-
     const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD format
-
-    // Update gigs data
-    worker.gigsData.totalGigsCompleted += 1;
-    worker.gigsData.totalGigsAccepted -= 1; // Reduce from pending
-
-    // Update earnings
-    const amount = jobData.amount || 0;
-    worker.gigsData.totalEarnings += amount;
-    worker.gigsData.earningsPerDay.set(today, (worker.gigsData.earningsPerDay.get(today) || 0) + amount);
-
-    // Update hours (assuming 8 hours per gig if not specified)
     const hours = jobData.hoursWorked || 8;
-    worker.gigsData.totalHours += hours;
-    worker.gigsData.hoursPerDay.set(today, (worker.gigsData.hoursPerDay.get(today) || 0) + hours);
+    const amount = jobData.amount || 0;
 
-    // Update consecutive days
-    const lastWorkDate = worker.gigsData.lastWorkDate ? new Date(worker.gigsData.lastWorkDate).toISOString().split('T')[0] : null;
-    const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+    // ✅ ATOMIC UPDATE - prevents race conditions
+    const updated = await Worker.findOneAndUpdate(
+      { phone: workerPhone },
+      {
+        $inc: {
+          'gigsData.totalGigsCompleted': 1,
+          'gigsData.totalGigsAccepted': -1,
+          'gigsData.totalEarnings': amount,
+          'gigsData.totalHours': hours,
+        },
+        $set: {
+          'gigsData.lastUpdated': new Date(),
+          'gigsData.lastWorkDate': new Date(),
+        },
+        $push: {
+          recentGigs: {
+            $each: [{
+              jobId: jobData._id,
+              title: jobData.title,
+              amount: amount,
+              date: new Date(),
+              status: 'completed',
+              paymentStatus: 'paid',
+              contractorName: jobData.contractorName,
+              completedAt: new Date(),
+              hoursWorked: hours,
+            }],
+            $slice: -10, // Keep only last 10 gigs
+          }
+        }
+      },
+      { new: true }
+    );
 
-    if (lastWorkDate === yesterday) {
-      // Streak continues
-      worker.gigsData.consecutiveDays += 1;
-    } else if (lastWorkDate !== today) {
-      // Streak broken or first day
-      worker.gigsData.consecutiveDays = 1;
-      worker.gigsData.streakStartDate = new Date();
+    if (!updated) {
+      console.warn(`Worker not found for gig completion: ${workerPhone}`);
+      return null;
     }
 
-    worker.gigsData.lastWorkDate = new Date();
-
-    // Add to recent gigs
-    if (!worker.recentGigs) worker.recentGigs = [];
-    worker.recentGigs.unshift({
-      jobId: jobData._id,
-      title: jobData.title,
-      amount: jobData.amount,
-      date: new Date(),
-      status: 'completed',
-      paymentStatus: 'paid',
-      contractorName: jobData.contractorName,
-      completedAt: new Date(),
-      hoursWorked: hours,
-    });
-    // Keep only last 10 gigs
-    if (worker.recentGigs.length > 10) {
-      worker.recentGigs.pop();
+    // 🔧 FIX: Recalculate incentive eligibility after gig update
+    try {
+      const { updateIncentiveEligibility } = require('../services/incentiveEligibilityService');
+      await updateIncentiveEligibility(workerPhone);
+    } catch (eligibilityErr) {
+      console.error('Error recalculating incentive eligibility on completion:', eligibilityErr);
+      // Don't fail the whole operation - incentive is secondary
     }
 
-    // Update performance metrics
-    await updatePerformanceMetrics(worker);
-
-    worker.gigsData.lastUpdated = new Date();
-    await worker.save();
-
-    return worker;
+    return updated;
   } catch (err) {
     console.error('Error updating gig data on completion:', err);
   }
 };
 
 /**
- * Update worker gigs data when a job is cancelled
+ * Update worker gigs data when a job is cancelled (ATOMIC)
+ * 🔧 FIX: Use atomic $inc to prevent race conditions
+ * 🔧 FIX: Call incentive recalculation after update
  */
 exports.updateGigDataOnCancellation = async (workerPhone, jobData) => {
   try {
-    const worker = await Worker.findOne({ phone: workerPhone });
-    if (!worker) return;
-
     const today = new Date().toISOString().split('T')[0];
 
-    worker.gigsData.totalGigsCancelled += 1;
-    worker.gigsData.totalGigsAccepted -= 1;
-    worker.gigsData.totalCancellations += 1;
-    worker.gigsData.cancellationDates.push(new Date());
+    // ✅ ATOMIC UPDATE - prevents race conditions
+    const updated = await Worker.findOneAndUpdate(
+      { phone: workerPhone },
+      {
+        $inc: {
+          'gigsData.totalGigsCancelled': 1,
+          'gigsData.totalGigsAccepted': -1,
+          'gigsData.totalCancellations': 1,
+        },
+        $set: {
+          'gigsData.lastUpdated': new Date(),
+        },
+        $push: {
+          'gigsData.cancellationDates': new Date(),
+          recentGigs: {
+            $each: [{
+              jobId: jobData._id,
+              title: jobData.title,
+              amount: jobData.amount,
+              date: new Date(),
+              status: 'cancelled',
+              contractorName: jobData.contractorName,
+              cancelledAt: new Date(),
+            }],
+            $slice: -10, // Keep only last 10 gigs
+          }
+        }
+      },
+      { new: true }
+    );
 
-    // Add to recent gigs
-    if (!worker.recentGigs) worker.recentGigs = [];
-    worker.recentGigs.unshift({
-      jobId: jobData._id,
-      title: jobData.title,
-      amount: jobData.amount,
-      date: new Date(),
-      status: 'cancelled',
-      contractorName: jobData.contractorName,
-      cancelledAt: new Date(),
-    });
-    if (worker.recentGigs.length > 10) {
-      worker.recentGigs.pop();
+    if (!updated) {
+      console.warn(`Worker not found for gig cancellation: ${workerPhone}`);
+      return null;
     }
 
-    // Update performance metrics
-    await updatePerformanceMetrics(worker);
+    // 🔧 FIX: Recalculate incentive eligibility after cancellation (affects decline count)
+    try {
+      const { updateIncentiveEligibility } = require('../services/incentiveEligibilityService');
+      await updateIncentiveEligibility(workerPhone);
+    } catch (eligibilityErr) {
+      console.error('Error recalculating incentive eligibility on cancellation:', eligibilityErr);
+      // Don't fail the whole operation - incentive is secondary
+    }
 
-    worker.gigsData.lastUpdated = new Date();
-    await worker.save();
-
-    return worker;
+    return updated;
   } catch (err) {
     console.error('Error updating gig data on cancellation:', err);
   }
@@ -122,30 +136,40 @@ exports.updateGigDataOnCancellation = async (workerPhone, jobData) => {
  */
 exports.updateGigDataOnAcceptance = async (workerPhone, jobData) => {
   try {
-    const worker = await Worker.findOne({ phone: workerPhone });
-    if (!worker) return;
+    // ✅ ATOMIC UPDATE - prevents race conditions
+    const updated = await Worker.findOneAndUpdate(
+      { phone: workerPhone },
+      {
+        $inc: {
+          'gigsData.totalGigsAccepted': 1,
+        },
+        $set: {
+          'gigsData.lastUpdated': new Date(),
+        },
+        $push: {
+          recentGigs: {
+            $each: [{
+              jobId: jobData._id,
+              title: jobData.title,
+              amount: jobData.amount,
+              date: new Date(),
+              status: 'accepted',
+              contractorName: jobData.contractorName,
+              acceptedAt: new Date(),
+            }],
+            $slice: -10, // Keep only last 10 gigs
+          }
+        }
+      },
+      { new: true }
+    );
 
-    worker.gigsData.totalGigsAccepted += 1;
-
-    // Add to recent gigs
-    if (!worker.recentGigs) worker.recentGigs = [];
-    worker.recentGigs.unshift({
-      jobId: jobData._id,
-      title: jobData.title,
-      amount: jobData.amount,
-      date: new Date(),
-      status: 'accepted',
-      contractorName: jobData.contractorName,
-      acceptedAt: new Date(),
-    });
-    if (worker.recentGigs.length > 10) {
-      worker.recentGigs.pop();
+    if (!updated) {
+      console.warn(`Worker not found for gig acceptance: ${workerPhone}`);
+      return null;
     }
 
-    worker.gigsData.lastUpdated = new Date();
-    await worker.save();
-
-    return worker;
+    return updated;
   } catch (err) {
     console.error('Error updating gig data on acceptance:', err);
   }

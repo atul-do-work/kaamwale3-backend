@@ -1,7 +1,12 @@
 const express = require("express");
 const { authenticateToken } = require("../utils/auth");
 const User = require("../models/User");
-const { uploadImageBufferToCloudinary } = require("../utils/cloudinaryUpload");
+const Upload = require("../models/Upload");
+const {
+  uploadImageBufferToCloudinary,
+  isCloudinaryAssetUrl,
+  deleteCloudinaryAsset,
+} = require("../utils/cloudinaryUpload");
 const MAX_IMAGE_SIZE_BYTES = Math.floor(1.5 * 1024 * 1024);
 
 function createUsersProfileRouter({ upload, io, connectedWorkers }) {
@@ -13,6 +18,9 @@ function createUsersProfileRouter({ upload, io, connectedWorkers }) {
 
       // Check if it's a direct Cloudinary URL upload (new method)
       if (req.body.fileUrl && req.body.cloudinaryPublicId) {
+        if (!isCloudinaryAssetUrl(req.body.fileUrl)) {
+          return res.status(400).json({ success: false, message: "Invalid Cloudinary asset URL" });
+        }
         // Direct upload - URL already uploaded to Cloudinary
         uploaded = {
           secure_url: req.body.fileUrl,
@@ -39,10 +47,26 @@ function createUsersProfileRouter({ upload, io, connectedWorkers }) {
       const user = await User.findOne({ phone: req.user.phone });
       if (!user) return res.status(404).json({ success: false, message: "User not found" });
 
+      const previousPublicId = user.profilePhotoPublicId || "";
       user.profilePhoto = uploaded.secure_url;
+      user.profilePhotoPublicId = uploaded.public_id || "";
       await user.save();
 
-      io.emit("profilePhotoUpdated", {
+      await Upload.create({
+        userId: user._id,
+        type: "profilePhoto",
+        fileName: uploaded.public_id || `profile-${req.user.phone}-${Date.now()}`,
+        fileUrl: user.profilePhoto,
+        cloudinaryPublicId: user.profilePhotoPublicId,
+      });
+
+      if (previousPublicId && previousPublicId !== user.profilePhotoPublicId) {
+        deleteCloudinaryAsset(previousPublicId).catch((cleanupErr) => {
+          console.warn("Failed to delete previous Cloudinary profile photo", cleanupErr.message);
+        });
+      }
+
+      io.to(req.user.phone).emit("profilePhotoUpdated", {
         phone: req.user.phone,
         profilePhoto: user.profilePhoto,
       });
@@ -117,6 +141,7 @@ function createUsersProfileRouter({ upload, io, connectedWorkers }) {
           phone: user.phone,
           role: user.role,
           profilePhoto: user.profilePhoto,
+          profilePhotoPublicId: user.profilePhotoPublicId || "",
           city: user.city,
           state: user.state,
           premiumPlan: user.premiumPlan || { type: "free" },

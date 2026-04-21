@@ -51,6 +51,7 @@ router.post("/cloudinary-signature", authenticateToken, async (req, res) => {
 router.post("/save-url", authenticateToken, async (req, res) => {
   try {
     const { fileUrl, cloudinaryPublicId, type = "document" } = req.body;
+    const normalizedType = type === "profile" ? "profilePhoto" : type;
 
     if (!fileUrl) {
       return res.status(400).json({ success: false, message: "fileUrl is required" });
@@ -61,7 +62,7 @@ router.post("/save-url", authenticateToken, async (req, res) => {
 
     const newUpload = new Upload({
       userId: user._id,
-      type: type,
+      type: normalizedType,
       fileName: cloudinaryPublicId || `uploaded-${Date.now()}`,
       fileUrl,
       cloudinaryPublicId,
@@ -70,7 +71,7 @@ router.post("/save-url", authenticateToken, async (req, res) => {
     await newUpload.save();
 
     // If it's a profile photo, also update User
-    if (type === "profilePhoto") {
+    if (normalizedType === "profilePhoto") {
       user.profilePhoto = fileUrl;
       await user.save();
     }
