@@ -52,18 +52,24 @@ function createPremiumWalletRouter({ io }) {
     if (!user?.premiumPlan) {
       return { type: "free", status: "free", entitlements: getPlanEntitlements("free") };
     }
-
     const now = new Date();
     const plan = { ...user.premiumPlan };
     const expiryDate = plan.expiryDate ? new Date(plan.expiryDate) : null;
     const graceUntil = plan.graceUntil ? new Date(plan.graceUntil) : null;
 
-    if (expiryDate && expiryDate > now) {
-      plan.status = "active";
-    } else if (graceUntil && graceUntil > now) {
-      plan.status = "grace";
+    // If status is explicitly set to an inactive/cancelled/free state, preserve it
+    const existingStatus = (plan.status || "").toLowerCase();
+    if (existingStatus && !["active", "grace", "expired"].includes(existingStatus)) {
+      // Preserve non-time-based states like 'inactive' or 'cancelled'
+      plan.status = existingStatus;
     } else {
-      plan.status = "expired";
+      if (expiryDate && expiryDate > now) {
+        plan.status = "active";
+      } else if (graceUntil && graceUntil > now) {
+        plan.status = "grace";
+      } else {
+        plan.status = "expired";
+      }
     }
 
     plan.expiryDate = expiryDate;

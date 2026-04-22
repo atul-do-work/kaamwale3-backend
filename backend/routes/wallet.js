@@ -9,6 +9,148 @@ const User = require("../models/User");
 const BankAccount = require("../models/BankAccount");
 const Withdrawal = require("../models/Withdrawal");
 const { sendOpsAlert } = require("../utils/opsAlert");
+const axios = require('axios');
+
+async function createRazorpayPayout({ withdrawalId, amountPaise, payoutMethod, bankAccount, upiId, phone, loggerContext = {} }) {
+  const key = process.env.RAZORPAY_KEY_ID;
+  const secret = process.env.RAZORPAY_KEY_SECRET;
+  if (!key || !secret) throw new Error('Razorpay keys not configured for payouts');
+  const sourceAccountNumber = String(process.env.RAZORPAY_PAYOUT_SOURCE_ACCOUNT || '').trim();
+  if (!sourceAccountNumber) {
+    throw new Error('RAZORPAY_PAYOUT_SOURCE_ACCOUNT not configured for payouts');
+  }
+
+  const url = 'https://api.razorpay.com/v1/payouts';
+
+  // Build fund_account based on payout method
+  let fund_account = null;
+  if (payoutMethod === 'bank') {
+    // bankAccount may store account number encrypted; prefer decrypted virtual
+    const accountNumber = (bankAccount && (bankAccount.accountNumberDecrypted || bankAccount.accountNumber)) || '';
+    if (!accountNumber) {
+      throw new Error('Bank account number unavailable for payout');
+    }
+    fund_account = {
+      account_type: 'bank_account',
+      bank_account: {
+        name: bankAccount.accountHolderName || '',
+        ifsc: bankAccount.ifscCode || '',
+        account_number: accountNumber,
+      }
+    };
+  } else {
+    fund_account = {
+      account_type: 'vpa',
+      vpa: { address: upiId }
+    };
+  }
+
+  const payload = {
+    account_number: sourceAccountNumber,
+    amount: amountPaise,
+    currency: 'INR',
+    mode: payoutMethod === 'bank' ? (process.env.RAZORPAY_PAYOUT_MODE || 'IMPS') : 'UPI',
+    purpose: 'payout',
+    fund_account,
+    narration: `Payout for withdrawal ${withdrawalId}`,
+    reference_id: String(withdrawalId),
+    queue_if_low_balance: true,
+    notes: {
+      withdrawalId: String(withdrawalId),
+      phone: String(phone || '')
+    }
+  };
+
+  // Include mandatory idempotency header per Razorpay docs
+  const idempotencyKey = `payout_${String(withdrawalId)}`;
+  const headers = {
+    'X-Payout-Idempotency': idempotencyKey,
+    'Content-Type': 'application/json'
+  };
+
+  const resp = await axios.post(url, payload, {
+    auth: { username: key, password: secret },
+    timeout: 15000,
+    headers,
+  });
+
+  // Attach idempotency key to response for observability
+  return { ...resp.data, idempotencyKey };
+}
+
+function mapRazorpayPayoutStatus(providerStatus) {
+  const normalized = String(providerStatus || '').toLowerCase();
+  if (['queued', 'pending', 'processing', 'scheduled', 'created', 'initiated'].includes(normalized)) {
+    return 'processing';
+  }
+  if (normalized === 'processed') return 'success';
+  if (['reversed', 'cancelled'].includes(normalized)) return 'reversed';
+  if (['rejected', 'failed'].includes(normalized)) return 'failed';
+  return 'processing';
+}
+
+function markWalletTransactionStatus(wallet, walletTransactionId, status, extraMetadata = null) {
+  if (!wallet || !walletTransactionId) return false;
+  const tx = (wallet.transactions || []).find((row) => String(row?._id || '') === String(walletTransactionId));
+  if (!tx) return false;
+  tx.status = status;
+  if (extraMetadata) {
+    tx.metadata = {
+      ...(tx.metadata || {}),
+      ...extraMetadata,
+    };
+  }
+  return true;
+}
+
+function rollbackWithdrawalOnWallet({ wallet, withdrawal, rollbackEventId, description, source, providerEventId, metadata = {} }) {
+  if (!wallet || !withdrawal) return false;
+  const alreadyRolledBack = (wallet.transactions || []).some((tx) => tx.providerEventId === rollbackEventId);
+  if (alreadyRolledBack) return false;
+
+  const refundAvailable = Number(withdrawal.deductedFromAvailable || 0);
+  const refundPocket = Number(withdrawal.deductedFromPocket || 0);
+  const fallbackAmount = Number(withdrawal.amount || 0);
+  const openingBalance = Number(wallet.availableBalance ?? wallet.balance ?? 0) + Number(wallet.pocketBalance ?? 0);
+
+  if (refundAvailable > 0 || refundPocket > 0) {
+    if (refundAvailable > 0) {
+      wallet.availableBalance = Number(wallet.availableBalance ?? wallet.balance ?? 0) + refundAvailable;
+      wallet.balance = Number(wallet.availableBalance || 0);
+    }
+    if (refundPocket > 0) {
+      wallet.pocketBalance = Number(wallet.pocketBalance || 0) + refundPocket;
+    }
+  } else if (String(withdrawal.balanceSource || 'available') === 'pocket') {
+    wallet.pocketBalance = Number(wallet.pocketBalance || 0) + fallbackAmount;
+  } else {
+    wallet.availableBalance = Number(wallet.availableBalance ?? wallet.balance ?? 0) + fallbackAmount;
+    wallet.balance = Number(wallet.availableBalance || 0);
+  }
+
+  markWalletTransactionStatus(wallet, withdrawal.walletTransactionId, 'failed', {
+    rollbackEventId,
+    providerEventId,
+    failureReason: metadata.failureReason || null,
+  });
+
+  const closingBalance = Number(wallet.availableBalance ?? wallet.balance ?? 0) + Number(wallet.pocketBalance ?? 0);
+  wallet.transactions.push(
+    appendAuditFields({
+      type: 'refund',
+      amount: fallbackAmount,
+      openingBalance,
+      closingBalance,
+      status: 'completed',
+      description,
+      source,
+      provider: 'razorpay',
+      providerEventId: rollbackEventId,
+      metadata,
+    })
+  );
+  return true;
+}
 
 const depositOrderLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -748,6 +890,11 @@ async function buildWithdrawStatus(phone) {
 
 router.post("/withdraw", authenticateToken, withdrawLimiter, async (req, res) => {
   try {
+    // Prevent withdrawals if payout integration is not configured to avoid reconciled-but-unpaid withdrawals
+    const payoutsEnabled = String(process.env.RAZORPAY_PAYOUTS_ENABLED || "false").toLowerCase() === "true";
+    if (!payoutsEnabled) {
+      return res.status(503).json({ success: false, message: "Payouts not configured on server. Withdrawals are disabled.", note: "Set RAZORPAY_PAYOUTS_ENABLED=true and configure payouts to enable this endpoint." });
+    }
     if (!(await requirePayoutAccess(req, res))) return;
     const { amount, payoutMethod: payoutMethodInput } = req.body;
     const payoutMethod = String(payoutMethodInput || "bank").toLowerCase();
@@ -793,6 +940,7 @@ router.post("/withdraw", authenticateToken, withdrawLimiter, async (req, res) =>
     // 🔐 STEP 3: Verify selected payout method
     let bankAccount = null;
     let upiDetails = null;
+    let rawUpiId = null;
 
     if (payoutMethod === "bank") {
       bankAccount = await BankAccount.findOne({ phone: req.user.phone });
@@ -833,6 +981,7 @@ router.post("/withdraw", authenticateToken, withdrawLimiter, async (req, res) =>
       upiDetails = {
         maskedUpiId: walletForUpi.upiMasked || maskUpiId(walletForUpi.upiId),
       };
+      rawUpiId = walletForUpi.upiId;
     }
 
     // 🔐 STEP 4: ATOMIC OPERATION - Prevent race condition
@@ -953,6 +1102,87 @@ router.post("/withdraw", authenticateToken, withdrawLimiter, async (req, res) =>
     // TODO: Trigger Razorpay Payouts API for actual bank transfer and update withdrawal status.
     // This endpoint now stores an explicit withdrawal ledger record for reconciliation/rollback.
 
+    // Attempt to create a Razorpay payout (best-effort). If payouts are not configured this will be skipped.
+    (async () => {
+      try {
+        const payoutsEnabled = String(process.env.RAZORPAY_PAYOUTS_ENABLED || "false").toLowerCase() === "true";
+        if (!payoutsEnabled) return;
+
+        // Amount is in INR; convert to paise for gateway
+        const amountPaise = Math.round(withdrawAmount * 100);
+
+        const payoutResp = await createRazorpayPayout({
+          withdrawalId: withdrawal._id,
+          amountPaise,
+          payoutMethod: payoutMethod,
+          bankAccount,
+          upiId: rawUpiId,
+          phone: req.user.phone,
+          loggerContext: { phone: req.user.phone }
+        });
+
+        if (payoutResp && payoutResp.id) {
+          withdrawal.providerPayoutId = payoutResp.id;
+          withdrawal.providerEventId = payoutResp.idempotencyKey || payoutResp.status || null;
+          withdrawal.status = mapRazorpayPayoutStatus(payoutResp.status);
+          withdrawal.reconciledAt = new Date();
+          await withdrawal.save();
+          const payoutWallet = await Wallet.findOne({ phone: req.user.phone });
+          if (payoutWallet) {
+            markWalletTransactionStatus(
+              payoutWallet,
+              withdrawal.walletTransactionId,
+              withdrawal.status === 'success' ? 'completed' : 'processing',
+              {
+                payoutId: payoutResp.id,
+                payoutStatus: payoutResp.status || null,
+                payoutIdempotencyKey: payoutResp.idempotencyKey || null,
+              }
+            );
+            await payoutWallet.save();
+          }
+          // Emit update
+          const io2 = req.app.get('io');
+          if (io2) io2.to(req.user.phone).emit('withdrawalUpdated', { withdrawalId: withdrawal._id, status: withdrawal.status });
+        }
+      } catch (pErr) {
+        console.error('Payout initiation failed for withdrawal', withdrawal._id, pErr?.message || pErr);
+        await sendOpsAlert('Payout initiation failed', { withdrawalId: withdrawal._id, error: pErr?.message || String(pErr) });
+
+        // Immediate rollback on fatal failure: credit the wallet back if not already rolled back
+        try {
+          const wallet = await Wallet.findOne({ phone: req.user.phone });
+          if (wallet) {
+            const rollbackEventId = `payout_failed_rollback:${withdrawal._id.toString()}`;
+            const rolledBack = rollbackWithdrawalOnWallet({
+              wallet,
+              withdrawal,
+              rollbackEventId,
+              description: `Rollback for failed payout ${withdrawal._id}`,
+              source: 'system',
+              providerEventId: rollbackEventId,
+              metadata: {
+                withdrawalId: withdrawal._id,
+                failureReason: pErr?.message || String(pErr),
+              },
+            });
+            if (rolledBack) {
+              await wallet.save();
+              withdrawal.status = 'failed';
+              withdrawal.failureReason = pErr?.message || String(pErr);
+              withdrawal.reconciledAt = new Date();
+              await withdrawal.save();
+              const io3 = req.app.get('io');
+              if (io3) io3.to(req.user.phone).emit('walletUpdated', { phone: req.user.phone, balance: wallet.balance, availableBalance: wallet.availableBalance, pocketBalance: wallet.pocketBalance, type: 'refund', amount: Number(withdrawal.amount || 0) });
+            }
+          }
+        } catch (rbErr) {
+          console.error('Rollback after payout failure also failed', rbErr);
+          await sendOpsAlert('Rollback after payout failure failed', { withdrawalId: withdrawal._id, error: rbErr?.message || String(rbErr) });
+        }
+      }
+    })();
+
     res.json({ 
       success: true, 
       message: "Withdrawal initiated and queued for payout processing.",
@@ -1023,8 +1253,10 @@ router.post("/upi/add", authenticateToken, async (req, res) => {
 
     wallet.upiId = rawUpiId;
     wallet.upiMasked = maskUpiId(rawUpiId);
-    wallet.upiIsVerified = true;
-    wallet.upiVerificationStatus = "verified";
+    // Require server-side UPI verification for production; default to 'pending'
+    const autoVerifyUpi = String(process.env.SKIP_UPI_VERIFICATION || "false").toLowerCase() === "true";
+    wallet.upiIsVerified = !!autoVerifyUpi;
+    wallet.upiVerificationStatus = autoVerifyUpi ? "verified" : "pending";
     await wallet.save();
 
     return res.json({
@@ -1258,61 +1490,45 @@ router.post("/payout/webhook", async (req, res) => {
     withdrawal.reconciledAt = new Date();
     await withdrawal.save();
 
-    // Rollback wallet on failed/reversed payout if not already rolled back
-    if (mappedStatus === "failed" || mappedStatus === "reversed") {
-      const wallet = await Wallet.findOne({ phone: withdrawal.phone });
-      if (wallet) {
-        const rollbackEventId = `rollback:${withdrawal._id.toString()}`;
-        const alreadyRolledBack = wallet.transactions.some(
-          (tx) => tx.providerEventId === rollbackEventId
-        );
-        if (!alreadyRolledBack) {
-          const source = String(withdrawal.balanceSource || "available");
-          const addAvailable = Number(withdrawal.deductedFromAvailable || 0);
-          const addPocket = Number(withdrawal.deductedFromPocket || 0);
-          const fallbackAmount = Number(withdrawal.amount || 0);
-          const shouldFallbackSingleBucket = addAvailable <= 0 && addPocket <= 0;
-          const openingBalance = Number(wallet.availableBalance ?? wallet.balance ?? 0) + Number(wallet.pocketBalance ?? 0);
-          if (shouldFallbackSingleBucket) {
-            if (source === "pocket") {
-              wallet.pocketBalance = Number(wallet.pocketBalance || 0) + fallbackAmount;
-            } else {
-              wallet.availableBalance = Number(wallet.availableBalance ?? wallet.balance ?? 0) + fallbackAmount;
-              wallet.balance = Number(wallet.availableBalance || 0);
-            }
-          } else {
-            if (addAvailable > 0) {
-              wallet.availableBalance = Number(wallet.availableBalance ?? wallet.balance ?? 0) + addAvailable;
-              wallet.balance = Number(wallet.availableBalance || 0);
-            }
-            if (addPocket > 0) {
-              wallet.pocketBalance = Number(wallet.pocketBalance || 0) + addPocket;
-            }
-          }
-          const closingBalance = Number(wallet.availableBalance ?? wallet.balance ?? 0) + Number(wallet.pocketBalance ?? 0);
-          wallet.transactions.push(
-            appendAuditFields({
-              type: "refund",
-              amount: fallbackAmount,
-              openingBalance,
-              closingBalance,
-              status: "completed",
-              description: `Withdrawal rollback for ${withdrawal._id.toString()}`,
-              source: "webhook",
-              provider: "razorpay",
-              providerEventId: rollbackEventId,
-              metadata: {
-                payoutEvent: event,
-                payoutId,
-                balanceSource: source,
-                refundedToAvailable: addAvailable,
-                refundedToPocket: addPocket,
-              },
-            })
-          );
-          await wallet.save();
+    const wallet = await Wallet.findOne({ phone: withdrawal.phone });
+    if (wallet) {
+      markWalletTransactionStatus(
+        wallet,
+        withdrawal.walletTransactionId,
+        mappedStatus === "success" ? "completed" : mappedStatus === "processing" ? "processing" : "failed",
+        {
+          payoutId,
+          payoutEvent: event,
+          payoutStatus: mappedStatus,
+          failureReason: withdrawal.failureReason || null,
         }
+      );
+    }
+
+    // Rollback wallet on failed/reversed payout if not already rolled back
+    if (wallet && (mappedStatus === "failed" || mappedStatus === "reversed")) {
+      const rollbackEventId = `rollback:${withdrawal._id.toString()}`;
+      const rolledBack = rollbackWithdrawalOnWallet({
+        wallet,
+        withdrawal,
+        rollbackEventId,
+        description: `Withdrawal rollback for ${withdrawal._id.toString()}`,
+        source: "webhook",
+        providerEventId: event,
+        metadata: {
+          payoutEvent: event,
+          payoutId,
+          balanceSource: String(withdrawal.balanceSource || "available"),
+          refundedToAvailable: Number(withdrawal.deductedFromAvailable || 0),
+          refundedToPocket: Number(withdrawal.deductedFromPocket || 0),
+          failureReason: withdrawal.failureReason || null,
+        },
+      });
+      if (rolledBack) {
+        await wallet.save();
       }
+    } else if (wallet) {
+      await wallet.save();
     }
 
     return res.status(200).json({ success: true, status: mappedStatus });

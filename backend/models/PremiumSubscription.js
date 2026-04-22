@@ -59,7 +59,7 @@ premiumSubscriptionSchema.index(
 );
 premiumSubscriptionSchema.index(
   { userPhone: 1, status: 1 },
-  { unique: true, partialFilterExpression: { status: { $in: ["active", "grace"] } } }
+  { unique: true, partialFilterExpression: { status: { $in: ["active", "grace"] }, isCurrent: true } }
 );
 premiumSubscriptionSchema.index(
   { premiumTxnId: 1 },

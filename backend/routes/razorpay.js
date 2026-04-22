@@ -104,19 +104,38 @@ if (!process.env.RAZORPAY_WEBHOOK_SECRET) {
 // ✅ Create Payment Order
 router.post('/create-order', authenticateToken, async (req, res) => {
   try {
-    const { jobId, amount, workerPhone, workerName } = req.body;
+    const { jobId, workerPhone, workerName } = req.body;
 
-    if (!jobId || !amount || !workerPhone) {
+    if (!jobId || !workerPhone) {
       return res.status(400).json({ success: false, message: 'Missing required fields' });
     }
 
-    // 🔐 STEP 1: Type safety - validate amount
-    const orderAmount = Number(amount);
-    if (isNaN(orderAmount) || orderAmount <= 0 || orderAmount > 500000) {
-      return res.status(400).json({ success: false, message: 'Invalid amount. Must be between ₹1-₹5,00,000' });
+    // Load canonical job amount and enforce ownership
+    const job = await Job.findById(jobId).lean();
+    if (!job) return res.status(404).json({ success: false, message: 'Job not found' });
+
+    // Only contractor (or admin) may create payment orders for the job
+    const requesterPhone = String(req.user?.phone || '');
+    const requesterRole = String(req.user?.role || '').toLowerCase();
+    if (requesterPhone !== String(job.contractorPhone || '') && requesterRole !== 'admin') {
+      return res.status(403).json({ success: false, message: 'Forbidden: you are not the contractor for this job' });
     }
 
-    info('📝 Creating Razorpay order', buildLogContext(req, {
+    // Prevent creating orders for already-paid jobs (or already-paid worker in bulk flow)
+    const alreadyPaid = job.bulkHiring && workerPhone
+      ? isBulkWorkerAlreadyPaid(job, workerPhone)
+      : String(job.paymentStatus || '').toLowerCase() === 'paid';
+    if (alreadyPaid) {
+      return res.status(400).json({ success: false, message: 'Job already paid' });
+    }
+
+    // Use server-side canonical amount (prevent client-controlled amount)
+    const orderAmount = Number(job.amount || 0);
+    if (isNaN(orderAmount) || orderAmount <= 0 || orderAmount > 500000) {
+      return res.status(400).json({ success: false, message: 'Invalid job amount configured' });
+    }
+
+    info('📝 Creating Razorpay order (server-verified amount)', buildLogContext(req, {
       amount: orderAmount,
       jobId,
       workerPhone,
@@ -126,7 +145,7 @@ router.post('/create-order', authenticateToken, async (req, res) => {
     const shortJobId = jobId.substring(jobId.length - 8);
     const receipt = `job_${shortJobId}`;
 
-    // 🔐 STEP 2: Create Razorpay order with amount stored in notes for verification
+    // 🔐 STEP 2: Create Razorpay order with server-side amount and contractor identity in notes
     const order = await razorpay.orders.create({
       amount: Math.round(orderAmount * 100), // Convert to paise
       currency: 'INR',
@@ -135,7 +154,8 @@ router.post('/create-order', authenticateToken, async (req, res) => {
         jobId,
         workerPhone,
         workerName,
-        amount: orderAmount  // Store amount for later verification
+        amount: orderAmount, // Authoritative amount
+        contractorPhone: requesterPhone
       }
     });
 
@@ -153,9 +173,9 @@ router.post('/create-order', authenticateToken, async (req, res) => {
       currency: order.currency,
       key_id: process.env.RAZORPAY_KEY_ID  // 🔐 Never fallback to test keys
     });
-  } catch (error) {
-    error('Failed to create Razorpay order', buildLogContext(req, { error: error?.message || String(error) }));
-    res.status(500).json({ success: false, message: 'Failed to create payment order', error: error.message });
+  } catch (err) {
+    error('Failed to create Razorpay order', buildLogContext(req, { error: err?.message || String(err) }));
+    res.status(500).json({ success: false, message: 'Failed to create payment order', error: err?.message || String(err) });
   }
 });
 
@@ -307,6 +327,19 @@ router.post('/verify-payment', authenticateToken, async (req, res) => {
     };
     const weekNumber = getWeekNumber(now);
 
+    // 🔐 NEW: Validate captured amount equals server-side job amount (paise)
+    try {
+      const expectedPaise = Math.round(Number(job.amount || 0) * 100);
+      if (payment.amount !== expectedPaise) {
+        await session.abortTransaction();
+        return res.status(400).json({ success: false, message: 'Payment amount mismatch', expectedPaise, receivedPaise: payment.amount });
+      }
+    } catch (matchErr) {
+      // If job.amount missing or invalid, abort
+      await session.abortTransaction();
+      return res.status(400).json({ success: false, message: 'Invalid job amount for verification' });
+    }
+
     // 🔐 STEP 6: ATOMIC wallet update - prevents duplicate credits
     const updatedWallet = await Wallet.findOneAndUpdate(
       {
@@ -314,6 +347,7 @@ router.post('/verify-payment', authenticateToken, async (req, res) => {
         'transactions.paymentId': { $ne: paymentId }  // Only update if paymentId NOT present
       },
       {
+        $setOnInsert: { phone: workerPhone },
         $inc: { balance: actualAmount, availableBalance: actualAmount, totalEarned: actualAmount },
         $push: {
           transactions: {
@@ -328,21 +362,21 @@ router.post('/verify-payment', authenticateToken, async (req, res) => {
           }
         }
       },
-      { new: true, session }
+      { new: true, upsert: true, setDefaultsOnInsert: true, session }
     );
 
-    // If wallet is null → duplicate payment (idempotency triggered)
+    // If updatedWallet is null -> idempotency or other failure (upsert avoids missing-wallet case)
     if (!updatedWallet) {
-      // Payment already processed - check existing wallet
+      // Payment may already be processed - check existing wallet for observability
       const existingWallet = await Wallet.findOne({ phone: workerPhone }).session(session);
       await session.commitTransaction();
       return res.status(200).json({
         success: true,
-        message: 'Payment already processed',
+        message: 'Payment already processed or wallet unavailable',
         walletBalance: existingWallet?.balance || 0,
         availableBalance: Number(existingWallet?.availableBalance ?? existingWallet?.balance ?? 0),
         pocketBalance: Number(existingWallet?.pocketBalance || 0),
-        isDuplicate: true
+        isDuplicate: true,
       });
     }
 
@@ -503,13 +537,13 @@ router.post('/verify-payment', authenticateToken, async (req, res) => {
       notificationId: notification[0]._id
     });
 
-  } catch (error) {
+  } catch (err) {
     await session.abortTransaction();
-    error('Payment verification failed', buildLogContext(req, { orderId: req.body?.orderId, paymentId: req.body?.paymentId, jobId: req.body?.jobId, workerPhone: req.body?.workerPhone, error: error?.message || String(error) }));
+    error('Payment verification failed', buildLogContext(req, { orderId: req.body?.orderId, paymentId: req.body?.paymentId, jobId: req.body?.jobId, workerPhone: req.body?.workerPhone, error: err?.message || String(err) }));
     res.status(500).json({
       success: false,
       message: 'Payment verification failed',
-      error: error.message
+      error: err?.message || String(err)
     });
   } finally {
     session.endSession();
@@ -602,6 +636,28 @@ router.post('/webhook', async (req, res) => {
       return res.status(200).json({ received: true, message: 'Job not found' });
     }
 
+    // Verify contractor identity embedded in order notes (defense-in-depth)
+    const noteContractor = String(notes?.contractorPhone || "").trim();
+    if (noteContractor && String(job.contractorPhone || "") !== noteContractor) {
+      warn('⚠️ Webhook contractor mismatch - ignoring', buildLogContext(req, { paymentId, orderId, jobId, noteContractor, jobContractor: job.contractorPhone }));
+      await session.commitTransaction();
+      return res.status(200).json({ received: true, ignored: 'contractor_mismatch' });
+    }
+
+    // Validate captured amount equals server-side job amount
+    try {
+      const expectedPaise = Math.round(Number(job.amount || 0) * 100);
+      if (payment.amount !== expectedPaise) {
+        warn('⚠️ Webhook amount mismatch - ignoring', buildLogContext(req, { paymentId, orderId, jobId, expectedPaise, receivedPaise: payment.amount }));
+        await session.commitTransaction();
+        return res.status(200).json({ received: true, ignored: 'amount_mismatch' });
+      }
+    } catch (amtErr) {
+      warn('⚠️ Webhook amount validation failed', buildLogContext(req, { paymentId, orderId, jobId, error: amtErr?.message || String(amtErr) }));
+      await session.commitTransaction();
+      return res.status(200).json({ received: true, ignored: 'amount_validation_failed' });
+    }
+
     // Check if job already paid for this worker in bulk flow
     const duplicatePayment = job.bulkHiring && workerPhone
       ? isBulkWorkerAlreadyPaid(job, workerPhone)
@@ -620,6 +676,7 @@ router.post('/webhook', async (req, res) => {
         'transactions.paymentId': { $ne: paymentId }  // Only update if paymentId NOT already present
       },
       {
+        $setOnInsert: { phone: workerPhone },
         $inc: { balance: actualAmount, availableBalance: actualAmount, totalEarned: actualAmount },
         $push: {
           transactions: {
@@ -634,12 +691,12 @@ router.post('/webhook', async (req, res) => {
           }
         }
       },
-      { new: true, session }
+      { new: true, upsert: true, setDefaultsOnInsert: true, session }
     );
 
     // If wallet is null, payment already processed (idempotency)
     if (!updatedWallet) {
-      info('⚠️ WEBHOOK IDEMPOTENCY: Payment already processed', buildLogContext(req, { paymentId, orderId, jobId, workerPhone, idempotencyKey: paymentId }));
+      info('⚠️ WEBHOOK IDEMPOTENCY: Payment already processed or wallet unavailable', buildLogContext(req, { paymentId, orderId, jobId, workerPhone, idempotencyKey: paymentId }));
       await session.commitTransaction();
       return res.status(200).json({ received: true, message: 'Payment already processed' });
     }
@@ -849,7 +906,7 @@ router.post('/webhook', async (req, res) => {
       paymentId
     });
 
-  } catch (error) {
+  } catch (err) {
     await session.abortTransaction();
     error('Webhook processing error', buildLogContext(req, {
       paymentId: req.body?.payload?.payment?.entity?.id || null,
@@ -857,9 +914,9 @@ router.post('/webhook', async (req, res) => {
       jobId: req.body?.payload?.payment?.entity?.notes?.jobId || null,
       workerPhone: req.body?.payload?.payment?.entity?.notes?.workerPhone || null,
       idempotencyKey: req.body?.payload?.payment?.entity?.id || null,
-      error: error?.message || String(error),
+      error: err?.message || String(err),
     }));
-    await sendOpsAlert('Razorpay payment webhook failed', { error: error && error.message });
+    await sendOpsAlert('Razorpay payment webhook failed', { error: err && (err.message || String(err)) });
     
     // Return non-2xx so Razorpay retries webhook delivery.
     res.status(500).json({
