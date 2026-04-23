@@ -157,14 +157,13 @@ async function uploadFilePathToCloudinary({
 }
 
 function isCloudinaryAssetUrl(url, cfg = getCloudinaryConfig()) {
-  if (!url || typeof url !== "string" || !cfg?.cloudName) return false;
+  if (!url || typeof url !== "string") return false;
 
   try {
     const parsed = new URL(url);
-    return (
-      parsed.hostname === "res.cloudinary.com" &&
-      parsed.pathname.startsWith(`/${cfg.cloudName}/`)
-    );
+    if (parsed.hostname !== "res.cloudinary.com") return false;
+    if (!cfg?.cloudName) return true;
+    return parsed.pathname.startsWith(`/${cfg.cloudName}/`);
   } catch (err) {
     return false;
   }

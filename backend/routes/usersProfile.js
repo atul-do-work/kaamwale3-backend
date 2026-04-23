@@ -14,18 +14,33 @@ function createUsersProfileRouter({ upload, io, connectedWorkers }) {
 
   router.post("/users/photo", authenticateToken, async (req, res) => {
     try {
+      console.log("[profile-upload] /users/photo called", {
+        phone: req.user?.phone,
+        hasFileUrl: Boolean(req.body?.fileUrl),
+        hasCloudinaryPublicId: Boolean(req.body?.cloudinaryPublicId),
+        hasMultipartFile: Boolean(req.file),
+      });
+
       let uploaded;
 
       // Check if it's a direct Cloudinary URL upload (new method)
-      if (req.body.fileUrl && req.body.cloudinaryPublicId) {
+      if (req.body.fileUrl) {
         if (!isCloudinaryAssetUrl(req.body.fileUrl)) {
+          console.warn("[profile-upload] rejected invalid cloudinary url", {
+            phone: req.user?.phone,
+            fileUrl: req.body.fileUrl,
+          });
           return res.status(400).json({ success: false, message: "Invalid Cloudinary asset URL" });
         }
         // Direct upload - URL already uploaded to Cloudinary
         uploaded = {
           secure_url: req.body.fileUrl,
-          public_id: req.body.cloudinaryPublicId
+          public_id: req.body.cloudinaryPublicId || ""
         };
+        console.log("[profile-upload] accepted direct cloudinary url", {
+          phone: req.user?.phone,
+          publicId: uploaded.public_id || null,
+        });
       } else {
         // Legacy method - handle file upload via multer
         if (!req.file || !req.file.buffer) return res.status(400).json({ success: false, message: "No file uploaded" });
@@ -42,6 +57,10 @@ function createUsersProfileRouter({ upload, io, connectedWorkers }) {
           folder: "kaamwale/profile",
           publicId: `profile-${req.user.phone}-${Date.now()}`,
         });
+        console.log("[profile-upload] uploaded via multipart backend path", {
+          phone: req.user?.phone,
+          publicId: uploaded?.public_id || null,
+        });
       }
 
       const user = await User.findOne({ phone: req.user.phone });
@@ -51,6 +70,11 @@ function createUsersProfileRouter({ upload, io, connectedWorkers }) {
       user.profilePhoto = uploaded.secure_url;
       user.profilePhotoPublicId = uploaded.public_id || "";
       await user.save();
+      console.log("[profile-upload] user profile saved", {
+        phone: req.user?.phone,
+        previousPublicId: previousPublicId || null,
+        nextPublicId: user.profilePhotoPublicId || null,
+      });
 
       await Upload.create({
         userId: user._id,
@@ -59,6 +83,10 @@ function createUsersProfileRouter({ upload, io, connectedWorkers }) {
         fileUrl: user.profilePhoto,
         cloudinaryPublicId: user.profilePhotoPublicId,
       });
+      console.log("[profile-upload] upload record created", {
+        phone: req.user?.phone,
+        fileUrl: user.profilePhoto,
+      });
 
       if (previousPublicId && previousPublicId !== user.profilePhotoPublicId) {
         deleteCloudinaryAsset(previousPublicId).catch((cleanupErr) => {
@@ -66,15 +94,23 @@ function createUsersProfileRouter({ upload, io, connectedWorkers }) {
         });
       }
 
-      io.to(req.user.phone).emit("profilePhotoUpdated", {
-        phone: req.user.phone,
-        profilePhoto: user.profilePhoto,
-      });
+      if (io && typeof io.to === "function") {
+        io.to(req.user.phone).emit("profilePhotoUpdated", {
+          phone: req.user.phone,
+          profilePhoto: user.profilePhoto,
+        });
+        console.log("[profile-upload] socket event emitted", { phone: req.user?.phone });
+      }
 
+      console.log("[profile-upload] /users/photo success", { phone: req.user?.phone });
       return res.json({ success: true, profilePhoto: user.profilePhoto });
     } catch (err) {
-      console.error("Profile photo upload error", err);
-      return res.status(500).json({ success: false, message: "Internal server error" });
+      console.error("[profile-upload] /users/photo failed", {
+        phone: req.user?.phone,
+        message: err?.message,
+        stack: err?.stack,
+      });
+      return res.status(500).json({ success: false, message: err?.message || "Internal server error" });
     }
   });
 
