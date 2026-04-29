@@ -15,7 +15,6 @@ import { useAuth } from '../../../context/AuthContext';
 import { premiumCacheManager } from '../../../utils/premiumCacheManager';
 import { isPremiumPlanActive } from '../../../utils/premiumPlanState';
 import styles from '../../../styles/ContractorHomeStyles';
-const profile = require('../../../assets/oip2.jpg');
 
 
 
@@ -51,7 +50,7 @@ export default function ContractorHome() {
   const [hasPremium, setHasPremium] = React.useState(false);
   const [premiumStatusLoading, setPremiumStatusLoading] = React.useState(true);
   const [premiumDetails, setPremiumDetails] = React.useState<any | null>(null);
-  const [userProfilePhoto, setUserProfilePhoto] = React.useState(profile);
+  const [userProfilePhoto, setUserProfilePhoto] = React.useState<any | null>(null);
   // Default avatar assets (used when contractor hasn't set a profilePhoto)
   const defaultAvatars = [
     require('../../../assets/avatar1.png'),
@@ -93,6 +92,7 @@ export default function ContractorHome() {
     return defaultAvatars[idx];
   };
   const [leaderboard, setLeaderboard] = React.useState<any[]>([]);
+  const [currentUserLeaderboardEntry, setCurrentUserLeaderboardEntry] = React.useState<any | null>(null);
   const [leaderboardExpanded, setLeaderboardExpanded] = React.useState(false);
   const [leaderboardPagination, setLeaderboardPagination] = React.useState<{
     page: number;
@@ -264,35 +264,45 @@ export default function ContractorHome() {
   // ? Memoize sorted leaderboard to prevent re-sorting on every render
   // CRITICAL: Clone array before sorting to avoid mutating React state
   const sortedLeaderboard = React.useMemo(() => {
-    return [...leaderboard].sort((a, b) => {
-      // Current user always on top
-      const aIsCurrent = Boolean(currentUserPhone && (a.id === currentUserPhone || a.phone === currentUserPhone));
-      const bIsCurrent = Boolean(currentUserPhone && (b.id === currentUserPhone || b.phone === currentUserPhone));
-      if (aIsCurrent) return -1;
-      if (bIsCurrent) return 1;
-      // Then sort by rank
-      return (a.rank || 999) - (b.rank || 999);
+    const deduped = new Map<string, any>();
+    leaderboard.forEach((entry) => {
+      const key = String(entry?.id || entry?.phone || '');
+      if (!key) return;
+      const existing = deduped.get(key);
+      if (!existing || (entry?.rank || 999999) < (existing?.rank || 999999)) {
+        deduped.set(key, entry);
+      }
     });
-  }, [leaderboard, currentUserPhone]);
+    return Array.from(deduped.values()).sort((a, b) => (a.rank || 999) - (b.rank || 999));
+  }, [leaderboard]);
 
   // Prepare top-3 and remaining list once per render
   const top = React.useMemo(() => sortedLeaderboard.slice(0, 3), [sortedLeaderboard]);
   const first = top[0] || null;
   const second = top[1] || null;
   const third = top[2] || null;
+  const currentUserInTopThree = React.useMemo(
+    () => top.some((p) => Boolean(currentUserPhone && (p.id === currentUserPhone || p.phone === currentUserPhone))),
+    [top, currentUserPhone]
+  );
 
   const remainingList = React.useMemo(() => {
     const originalRemaining = sortedLeaderboard.slice(3);
-    const allIndexForCurrent = sortedLeaderboard.findIndex((p) =>
+    if (currentUserInTopThree) {
+      return originalRemaining;
+    }
+
+    const userEntry = currentUserLeaderboardEntry || sortedLeaderboard.find((p) =>
       Boolean(currentUserPhone && (p.id === currentUserPhone || p.phone === currentUserPhone))
     );
-    if (allIndexForCurrent >= 3) {
-      const userEntry = sortedLeaderboard[allIndexForCurrent];
-      const filtered = originalRemaining.filter((p) => !(p.id === userEntry.id || p.phone === userEntry.phone));
-      return [userEntry, ...filtered];
+
+    if (!userEntry) {
+      return originalRemaining;
     }
-    return originalRemaining;
-  }, [sortedLeaderboard, currentUserPhone]);
+
+    const filtered = originalRemaining.filter((p) => !(p.id === userEntry.id || p.phone === userEntry.phone));
+    return [userEntry, ...filtered];
+  }, [sortedLeaderboard, currentUserPhone, currentUserLeaderboardEntry, currentUserInTopThree]);
 
   const profileSourceSecond = second ? avatarSourceForEntry(second, 2) : null;
   const profileSourceFirst = first ? avatarSourceForEntry(first, 1) : null;
@@ -440,6 +450,9 @@ export default function ContractorHome() {
 
       const boardData = leaderboardData.leaderboard || [];
       const formattedLeaderboard = mapLeaderboardRows(boardData);
+      const formattedCurrentUserEntry = leaderboardData.currentUserEntry
+        ? mapLeaderboardRows([leaderboardData.currentUserEntry])[0] || null
+        : null;
 
       // Update pagination state
       setLeaderboardPagination({
@@ -456,6 +469,7 @@ export default function ContractorHome() {
       } else {
         setLeaderboard(formattedLeaderboard);
       }
+      setCurrentUserLeaderboardEntry(formattedCurrentUserEntry);
 
       // ⚠️ CHECK CACHED VERSION BEFORE SAVING NEW DATA
       // This detects if backend logic changed since last request
@@ -559,6 +573,9 @@ export default function ContractorHome() {
         const leaderboardData = cachedPageData.data;
         const boardData = leaderboardData.leaderboard || [];
         const formattedLeaderboard = mapLeaderboardRows(boardData);
+        const formattedCurrentUserEntry = leaderboardData.currentUserEntry
+          ? mapLeaderboardRows([leaderboardData.currentUserEntry])[0] || null
+          : null;
 
         // Update pagination from cache
         setLeaderboardPagination({
@@ -574,6 +591,7 @@ export default function ContractorHome() {
         } else {
           setLeaderboard(formattedLeaderboard);
         }
+        setCurrentUserLeaderboardEntry(formattedCurrentUserEntry);
 
         console.log(`📦 Using cached leaderboard page ${page} (${cacheAgeMinutes.toFixed(1)} min old, v${meta.dataVersion})`);
         return formattedLeaderboard;
@@ -1071,7 +1089,7 @@ export default function ContractorHome() {
       <View>
       {/* Header with Gradient */}
       <LinearGradient 
-        colors={['#1a2f4d', '#2d5a8c']} 
+        colors={['#17263A', '#243B55']} 
         start={{ x: 0, y: 0 }} 
         end={{ x: 1, y: 1 }}
         style={styles.headerContainer}
@@ -1082,7 +1100,13 @@ export default function ContractorHome() {
             onPress={() => router.push('/home/contractor/profile' as any)}
             style={styles.headerProfileContainer}
           >
-            <Image source={userProfilePhoto} style={styles.headerProfilePhoto} />
+            {userProfilePhoto ? (
+              <Image source={userProfilePhoto} style={styles.headerProfilePhoto} />
+            ) : (
+              <View style={styles.headerProfilePlaceholder}>
+                <MaterialIcons name="person" size={24} color="#FFFFFF" />
+              </View>
+            )}
           </TouchableOpacity>
           <View style={styles.headerActions}>
             <TouchableOpacity
@@ -1095,7 +1119,7 @@ export default function ContractorHome() {
               style={styles.bellContainer}
               onPress={() => router.push("/NotificationHistory" as any)}
             >
-              <MaterialIcons name="notifications-none" size={28} color="#000" />
+              <MaterialIcons name="notifications-none" size={24} color="#fff" />
               {notificationCount > 0 && ( // ? Show badge if unread notifications exist
                 <View style={styles.badge}>
                   <Text style={styles.badgeText}>
@@ -1113,7 +1137,7 @@ export default function ContractorHome() {
         {topCards.slice(0, 2).map((card) => (
           <TouchableOpacity key={card.id} style={styles.card}>
             <LinearGradient 
-              colors={card.id === 1 ? ['#1f3a5f', '#1f3a5f'] : ['#1f3a5f', '#1f3a5f']} 
+              colors={['#17263A', '#243B55']} 
               style={styles.gradientCard}
             >
               <View style={styles.bubble1} />
@@ -1128,7 +1152,7 @@ export default function ContractorHome() {
 
       {/* Bottom card - Dashboard */}
       <TouchableOpacity style={styles.fullWidthCard} onPress={() => router.navigate('../../dashboard' as any)}>
-        <LinearGradient colors={['#1f3a5f', '#1f3a5f']} style={styles.gradientCard}>
+        <LinearGradient colors={['#17263A', '#243B55']} style={styles.gradientCard}>
           <View style={styles.bubble1} />
           <View style={styles.bubble2} />
           <MaterialIcons name={bottomCard.icon as any} size={32} color="#fff" />
@@ -1161,7 +1185,7 @@ export default function ContractorHome() {
         <View style={styles.leaderboardContent}>
           {/* Leaderboard Header with Title and Expand Button */}
           <View style={styles.leaderboardHeader}>
-            <Text style={styles.leaderboardTitle}>🏆 Leadership Board</Text>
+            <Text style={styles.leaderboardTitle}>Leadership Board</Text>
             {!premiumStatusLoading && hasPremium && (
               <TouchableOpacity 
                 onPress={() => setLeaderboardExpanded(!leaderboardExpanded)}

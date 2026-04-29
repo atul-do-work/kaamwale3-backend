@@ -1194,8 +1194,8 @@ export default function ContractorWalletAttendance() {
     <View
       style={{
         flex: 1,
-        backgroundColor: "#f5f5f5",
-        paddingTop: 40,
+        backgroundColor: "#F4F6F8",
+        paddingTop: 32,
         paddingBottom: 8,
       }}
     >
@@ -1205,14 +1205,14 @@ export default function ContractorWalletAttendance() {
           style={[styles.tabButton, activeTab === "Wallet" && styles.activeTab]}
           onPress={() => setActiveTab("Wallet")}
         >
-          <Text style={styles.tabText}>{t('wallet')}</Text>
+          <Text style={[styles.tabText, activeTab === "Wallet" && styles.activeTabText]}>{t('wallet')}</Text>
         </TouchableOpacity>
 
         <TouchableOpacity
           style={[styles.tabButton, activeTab === "Attendance" && styles.activeTab]}
           onPress={() => setActiveTab("Attendance")}
         >
-          <Text style={styles.tabText}>{t('attendance')}</Text>
+          <Text style={[styles.tabText, activeTab === "Attendance" && styles.activeTabText]}>{t('attendance')}</Text>
         </TouchableOpacity>
       </View>
 

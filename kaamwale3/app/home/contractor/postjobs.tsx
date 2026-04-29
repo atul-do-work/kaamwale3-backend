@@ -557,7 +557,7 @@ export default function PostJobScreen() {
   };
 
   return (
-    <SafeAreaView edges={['top', 'left', 'right']} style={{ flex: 1, backgroundColor: '#f3f3f3' }}>
+    <SafeAreaView edges={['top', 'left', 'right']} style={{ flex: 1, backgroundColor: '#F4F6F8' }}>
       <ScrollView contentContainerStyle={styles.scroll}>
       <View style={styles.container}>
         <Text style={styles.header}>{t('postNewJob')}</Text>
@@ -575,8 +575,8 @@ export default function PostJobScreen() {
         <View style={styles.dropdownContainer}>
           <Text style={styles.label}>{t('jobTitle')}</Text>
           <TouchableOpacity style={styles.dropdown} onPress={() => setShowTitleDropdown(!showTitleDropdown)}>
-            <Text style={[styles.dropdownText, !title && { color: '#aaa' }]}>{title ? getJobTitleLabel(title) : t('selectJobTitle')}</Text>
-            <Ionicons name={showTitleDropdown ? 'chevron-up' : 'chevron-down'} size={20} color="#fff" />
+            <Text style={[styles.dropdownText, !title && styles.placeholderText]}>{title ? getJobTitleLabel(title) : t('selectJobTitle')}</Text>
+            <Ionicons name={showTitleDropdown ? 'chevron-up' : 'chevron-down'} size={20} color="#6B7280" />
           </TouchableOpacity>
           {showTitleDropdown && (
             <View style={styles.dropdownMenu}>
@@ -593,8 +593,8 @@ export default function PostJobScreen() {
         <View style={styles.dropdownContainer}>
           <Text style={styles.label}>{t('mainSkill')}</Text>
           <TouchableOpacity style={styles.dropdown} onPress={() => setShowSkillDropdown(!showSkillDropdown)}>
-            <Text style={[styles.dropdownText, !mainSkill && { color: '#aaa' }]}>{mainSkill ? getSkillLabel(mainSkill) : t('selectMainSkill')}</Text>
-            <Ionicons name={showSkillDropdown ? 'chevron-up' : 'chevron-down'} size={20} color="#fff" />
+            <Text style={[styles.dropdownText, !mainSkill && styles.placeholderText]}>{mainSkill ? getSkillLabel(mainSkill) : t('selectMainSkill')}</Text>
+            <Ionicons name={showSkillDropdown ? 'chevron-up' : 'chevron-down'} size={20} color="#6B7280" />
           </TouchableOpacity>
           {showSkillDropdown && (
             <View style={styles.dropdownMenu}>
@@ -612,8 +612,8 @@ export default function PostJobScreen() {
           <View style={styles.dropdownContainer}>
             <Text style={styles.label}>{t('workerType')}</Text>
             <TouchableOpacity style={styles.dropdown} onPress={() => setShowWorkerTypeDropdown(!showWorkerTypeDropdown)}>
-              <Text style={[styles.dropdownText, !workerType && { color: '#aaa' }]}>{workerType ? getWorkerTypeLabel(workerType) : t('selectWorkerType')}</Text>
-              <Ionicons name={showWorkerTypeDropdown ? 'chevron-up' : 'chevron-down'} size={20} color="#fff" />
+              <Text style={[styles.dropdownText, !workerType && styles.placeholderText]}>{workerType ? getWorkerTypeLabel(workerType) : t('selectWorkerType')}</Text>
+              <Ionicons name={showWorkerTypeDropdown ? 'chevron-up' : 'chevron-down'} size={20} color="#6B7280" />
             </TouchableOpacity>
             {showWorkerTypeDropdown && (
               <View style={styles.dropdownMenu}>
@@ -629,11 +629,11 @@ export default function PostJobScreen() {
 
         {/* Estimated Price with Validation */}
         <View style={styles.inputCard}>
-          <Ionicons name="cash-outline" size={22} color="#bcbec7ff" />
+          <Ionicons name="cash-outline" size={22} color="#9CA3AF" />
           <TextInput
             style={[styles.input, priceError && { borderColor: '#ff4444', borderWidth: 2 }]}
             placeholder={t('estimatedPricePlaceholder')}
-            placeholderTextColor="#aaa"
+            placeholderTextColor="#9CA3AF"
             keyboardType="numeric"
             value={price}
             onChangeText={handlePriceChange}
@@ -645,24 +645,24 @@ export default function PostJobScreen() {
         <View style={styles.dropdownContainer}>
           <Text style={styles.label}>{t('jobLocation')}</Text>
           <TouchableOpacity
-            style={[styles.inputCard, { backgroundColor: selectedLocation ? '#1a5c3a' : '#162b49ff' }]}
+            style={[styles.inputCard, selectedLocation && styles.inputCardSelected]}
             onPress={getCurrentLocation}
             disabled={gettingLocation}
           >
             {gettingLocation ? (
-              <ActivityIndicator size="small" color="#bcbec7ff" />
+              <ActivityIndicator size="small" color="#6B7280" />
             ) : (
-              <Ionicons name="locate-outline" size={22} color={selectedLocation ? '#4ade80' : '#bcbec7ff'} />
+              <Ionicons name="locate-outline" size={22} color={selectedLocation ? '#047857' : '#9CA3AF'} />
             )}
             <View style={{ flex: 1, marginLeft: 10 }}>
-              <Text style={[styles.input, { color: selectedLocation ? '#4ade80' : '#aaa' }]}>
+              <Text style={[styles.input, selectedLocation ? styles.selectedValueText : styles.placeholderText]}>
                 {selectedLocation?.placeName 
                   ? `📍 ${selectedLocation.placeName}`
                   : gettingLocation ? t('gettingLocation') : t('useCurrentLocation')
                 }
               </Text>
               {selectedLocation && (
-                <Text style={{ fontSize: 11, color: '#7ed5a9', marginTop: 3 }}>
+                <Text style={{ fontSize: 11, color: '#059669', marginTop: 3 }}>
                   Lat: {selectedLocation.lat.toFixed(4)} | Lon: {selectedLocation.lon.toFixed(4)}
                 </Text>
               )}
@@ -690,8 +690,8 @@ export default function PostJobScreen() {
           <View style={styles.twoColItem}>
             <Text style={styles.label}>{t('startTime')}</Text>
             <TouchableOpacity style={styles.inputCard} onPress={() => setShowStartTimePicker(true)}>
-              <Ionicons name="time-outline" size={22} color="#bcbec7ff" />
-              <Text style={[styles.input, { color: "#fff" }]}>
+              <Ionicons name="time-outline" size={22} color="#9CA3AF" />
+              <Text style={styles.input}>
                 {formatTimeDisplay(startTime)}
               </Text>
             </TouchableOpacity>
@@ -700,8 +700,8 @@ export default function PostJobScreen() {
           <View style={styles.twoColItem}>
             <Text style={styles.label}>{t('endTime')}</Text>
             <TouchableOpacity style={styles.inputCard} onPress={() => setShowEndTimePicker(true)}>
-              <Ionicons name="time-outline" size={22} color="#bcbec7ff" />
-              <Text style={[styles.input, { color: "#fff" }]}>
+              <Ionicons name="time-outline" size={22} color="#9CA3AF" />
+              <Text style={styles.input}>
                 {formatTimeDisplay(endTime)}
               </Text>
             </TouchableOpacity>
@@ -756,8 +756,8 @@ export default function PostJobScreen() {
               <View style={styles.twoColItem}>
                 <Text style={styles.label}>{t('jobDuration')}</Text>
                 <TouchableOpacity style={styles.dropdown} onPress={() => setShowDaysDropdown(!showDaysDropdown)}>
-                  <Text style={[styles.dropdownText, { color: '#fff' }]}>{numberOfDays} {numberOfDays === 1 ? t('day') : t('days')}</Text>
-                  <Ionicons name={showDaysDropdown ? 'chevron-up' : 'chevron-down'} size={20} color="#fff" />
+                  <Text style={styles.dropdownText}>{numberOfDays} {numberOfDays === 1 ? t('day') : t('days')}</Text>
+                  <Ionicons name={showDaysDropdown ? 'chevron-up' : 'chevron-down'} size={20} color="#6B7280" />
                 </TouchableOpacity>
                 {showDaysDropdown && (
                   <View style={styles.dropdownMenu}>
@@ -799,7 +799,7 @@ export default function PostJobScreen() {
               </View>
             )}
 
-            <Text style={{ color: '#999', fontSize: 12, marginTop: 8, paddingHorizontal: 4 }}>
+            <Text style={{ color: '#6B7280', fontSize: 12, marginTop: 8, paddingHorizontal: 4 }}>
               {t('jobDurationNotice')}
             </Text>
           </View>
@@ -810,16 +810,16 @@ export default function PostJobScreen() {
           <View style={styles.twoColItem}>
             <Text style={styles.label}>{t('date')}</Text>
             <TouchableOpacity style={styles.inputCard} onPress={() => setShowDatePicker(true)}>
-              <Ionicons name="calendar-outline" size={22} color="#bcbec7ff" />
-              <Text style={[styles.input, { color: "#fff" }]}>{date.toDateString()}</Text>
+              <Ionicons name="calendar-outline" size={22} color="#9CA3AF" />
+              <Text style={styles.input}>{date.toDateString()}</Text>
             </TouchableOpacity>
           </View>
 
           <View style={styles.twoColItem}>
             <Text style={styles.label}>{t('image')}</Text>
-            <TouchableOpacity style={[styles.inputCard, { backgroundColor: selectedImage ? '#1a4c6d' : '#162b49ff' }]} onPress={pickImage}>
-              <Ionicons name="image-outline" size={22} color={selectedImage ? '#3b82f6' : '#bcbec7ff'} />
-              <Text style={[styles.input, { color: selectedImage ? '#3b82f6' : '#aaa' }]} numberOfLines={1}>
+            <TouchableOpacity style={[styles.inputCard, selectedImage && styles.inputCardSelectedBlue]} onPress={pickImage}>
+              <Ionicons name="image-outline" size={22} color={selectedImage ? '#2563EB' : '#9CA3AF'} />
+              <Text style={[styles.input, selectedImage ? styles.selectedBlueText : styles.placeholderText]} numberOfLines={1}>
                 {selectedImage ? t('imageSelected') : t('chooseImage')}
               </Text>
             </TouchableOpacity>
@@ -921,53 +921,89 @@ export default function PostJobScreen() {
 }
 
 const styles = StyleSheet.create({
-  scroll: { flexGrow: 1, paddingHorizontal: 16, paddingTop: 14, paddingBottom: 16, backgroundColor: "#f3f3f3", alignItems: "center" },
-  container: { backgroundColor: "#1f3a5f", borderRadius: 20, paddingHorizontal: 16, paddingTop: 16, paddingBottom: 14, width: "100%", maxWidth: 420, marginBottom: 10 },
-  header: { fontSize: 18, fontWeight: "700", color: "#fff", marginBottom: 12, textAlign: "center" },
-  walletText: { color: "#fff", fontWeight: "700", marginBottom: 10, fontSize: 14 },
+  scroll: {
+    flexGrow: 1,
+    paddingHorizontal: 16,
+    paddingTop: 16,
+    paddingBottom: 24,
+    backgroundColor: "#F4F6F8",
+    alignItems: "center",
+  },
+  container: {
+    backgroundColor: "#FFFFFF",
+    borderRadius: 28,
+    paddingHorizontal: 18,
+    paddingTop: 20,
+    paddingBottom: 18,
+    width: "100%",
+    maxWidth: 440,
+    marginBottom: 10,
+    borderWidth: 1,
+    borderColor: "#E8EDF3",
+  },
+  header: { fontSize: 22, fontWeight: "700", color: "#111827", marginBottom: 10, textAlign: "center" },
+  walletText: { color: "#4B5563", fontWeight: "600", marginBottom: 14, fontSize: 14, textAlign: "center" },
   inputCard: {
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: "#162b49ff",
-    borderRadius: 14,
+    backgroundColor: "#F9FAFB",
+    borderRadius: 16,
     minHeight: 48,
     paddingHorizontal: 12,
     paddingVertical: 9,
     marginBottom: 10,
+    borderWidth: 1,
+    borderColor: "#D8DEE6",
   },
-  input: { flex: 1, marginLeft: 10, color: "#fff", fontSize: 15 },
+  inputCardSelected: {
+    backgroundColor: "#ECFDF5",
+    borderColor: "#A7F3D0",
+  },
+  inputCardSelectedBlue: {
+    backgroundColor: "#EFF6FF",
+    borderColor: "#BFDBFE",
+  },
+  input: { flex: 1, marginLeft: 10, color: "#111827", fontSize: 15 },
+  placeholderText: { color: "#9CA3AF" },
+  selectedValueText: { color: "#047857" },
+  selectedBlueText: { color: "#2563EB" },
   textAreaCard: { alignItems: "flex-start" },
   textArea: { height: 100, textAlignVertical: "top" },
-  button: { marginTop: 8, backgroundColor: "#172c4aff", paddingVertical: 14, borderRadius: 14, alignItems: "center" },
-  buttonText: { fontSize: 18, color: "#fff", fontWeight: "600" },
+  button: { marginTop: 10, backgroundColor: "#17263A", paddingVertical: 15, borderRadius: 18, alignItems: "center" },
+  buttonText: { fontSize: 16, color: "#fff", fontWeight: "700" },
   dropdownContainer: { marginBottom: 10 },
-  label: { fontSize: 13, fontWeight: '600', color: '#d6e3f2', marginBottom: 6 },
+  label: { fontSize: 13, fontWeight: '700', color: '#6B7280', marginBottom: 7, letterSpacing: 0.3 },
   dropdown: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    backgroundColor: '#162b49ff',
-    borderRadius: 14,
+    backgroundColor: '#F9FAFB',
+    borderRadius: 16,
     minHeight: 48,
     paddingHorizontal: 12,
     paddingVertical: 10,
+    borderWidth: 1,
+    borderColor: '#D8DEE6',
   },
-  dropdownText: { flex: 1, color: '#fff', fontSize: 15 },
+  dropdownText: { flex: 1, color: '#111827', fontSize: 15 },
   dropdownMenu: {
-    backgroundColor: '#0f1f35',
-    borderBottomLeftRadius: 14,
-    borderBottomRightRadius: 14,
-    marginTop: -1,
-    borderTopColor: '#1a3a5f',
+    backgroundColor: '#FFFFFF',
+    borderBottomLeftRadius: 16,
+    borderBottomRightRadius: 16,
+    marginTop: 4,
+    borderTopColor: '#E5E7EB',
     borderTopWidth: 1,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    overflow: 'hidden',
   },
   dropdownItem: {
     paddingHorizontal: 12,
     paddingVertical: 11,
-    borderBottomColor: '#1a3a5f',
+    borderBottomColor: '#F3F4F6',
     borderBottomWidth: 1,
   },
-  dropdownItemText: { color: '#fff', fontSize: 15 },
+  dropdownItemText: { color: '#111827', fontSize: 15 },
   errorText: { color: '#ff4444', fontWeight: '600', marginBottom: 8, marginTop: -4, fontSize: 12 },
   twoColRow: {
     flexDirection: 'row',
@@ -982,21 +1018,21 @@ const styles = StyleSheet.create({
   imagePreview: { alignItems: 'center', marginBottom: 12 },
   previewImage: { width: 150, height: 120, borderRadius: 10, backgroundColor: '#0f1f35' },
   bulkDurationWrap: {
-    backgroundColor: '#0f1f35',
-    borderRadius: 14,
+    backgroundColor: '#F9FAFB',
+    borderRadius: 18,
     padding: 12,
     marginBottom: 10,
-    borderLeftWidth: 4,
-    borderLeftColor: '#667eea',
+    borderWidth: 1,
+    borderColor: '#DDE5EE',
   },
   // ✅ Bulk hiring styles
   bulkHiringContainer: {
-    backgroundColor: '#0f1f35',
+    backgroundColor: '#F9FAFB',
     borderRadius: 14,
     padding: 15,
     marginBottom: 15,
-    borderLeftWidth: 4,
-    borderLeftColor: '#667eea',
+    borderWidth: 1,
+    borderColor: '#DDE5EE',
   },
   bulkHiringHeader: {
     flexDirection: 'row',
@@ -1006,7 +1042,7 @@ const styles = StyleSheet.create({
   bulkHiringLabel: {
     fontSize: 16,
     fontWeight: '700',
-    color: '#667eea',
+    color: '#17263A',
     marginLeft: 8,
   },
   bulkHiringToggle: {
@@ -1015,27 +1051,27 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     minHeight: 48,
     paddingVertical: 8,
-    backgroundColor: '#162b49ff',
+    backgroundColor: '#FFFFFF',
     borderRadius: 10,
     marginBottom: 0,
     borderWidth: 2,
-    borderColor: '#334466',
+    borderColor: '#D8DEE6',
   },
   bulkHiringToggleActive: {
-    borderColor: '#667eea',
+    borderColor: '#17263A',
   },
   toggleCircle: {
     width: 24,
     height: 24,
     borderRadius: 12,
-    backgroundColor: '#334466',
+    backgroundColor: '#CBD5E1',
     marginRight: 10,
   },
   toggleCircleActive: {
-    backgroundColor: '#667eea',
+    backgroundColor: '#17263A',
   },
   toggleText: {
-    color: '#fff',
+    color: '#111827',
     fontSize: 14,
     fontWeight: '600',
   },
@@ -1043,7 +1079,7 @@ const styles = StyleSheet.create({
     marginTop: 12,
   },
   workerCountLabel: {
-    color: '#aaa',
+    color: '#6B7280',
     fontSize: 13,
     fontWeight: '600',
     marginBottom: 10,
@@ -1057,19 +1093,19 @@ const styles = StyleSheet.create({
     flex: 1,
     paddingVertical: 10,
     paddingHorizontal: 8,
-    backgroundColor: '#162b49ff',
+    backgroundColor: '#FFFFFF',
     borderRadius: 10,
     marginHorizontal: 4,
     alignItems: 'center',
     borderWidth: 2,
-    borderColor: '#334466',
+    borderColor: '#D8DEE6',
   },
   workerCountButtonActive: {
-    backgroundColor: '#667eea',
-    borderColor: '#667eea',
+    backgroundColor: '#17263A',
+    borderColor: '#17263A',
   },
   workerCountButtonText: {
-    color: '#aaa',
+    color: '#6B7280',
     fontSize: 14,
     fontWeight: '600',
   },
@@ -1077,42 +1113,42 @@ const styles = StyleSheet.create({
     color: '#fff',
   },
   bulkHiringInfo: {
-    color: '#667eea',
+    color: '#4B5563',
     fontSize: 12,
     fontStyle: 'italic',
     textAlign: 'center',
   },
   // ✅ Fee display styles
   feeDisplay: {
-    backgroundColor: '#0f1f35',
-    borderRadius: 14,
+    backgroundColor: '#F9FAFB',
+    borderRadius: 16,
     padding: 12,
     marginBottom: 10,
-    borderLeftWidth: 4,
-    borderLeftColor: '#4ade80',
+    borderWidth: 1,
+    borderColor: '#DDE5EE',
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
     gap: 8,
   },
   feeLabel: {
-    color: '#aaa',
+    color: '#6B7280',
     fontSize: 13,
     fontWeight: '600',
   },
   feeAmount: {
-    color: '#4ade80',
+    color: '#047857',
     fontSize: 18,
     fontWeight: '700',
   },
   feeInfo: {
-    color: '#667eea',
+    color: '#4B5563',
     fontSize: 12,
     fontStyle: 'italic',
   },
   addressButton: {
-    backgroundColor: '#26486e',
-    borderRadius: 12,
+    backgroundColor: '#17263A',
+    borderRadius: 14,
     minHeight: 44,
     flexDirection: 'row',
     alignItems: 'center',

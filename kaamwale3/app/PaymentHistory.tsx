@@ -124,8 +124,7 @@ export default function PaymentHistoryScreen(): React.ReactElement {
 
   return (
     <SafeAreaView style={styles.container} edges={['top', 'left', 'right']}>
-      {/* Header */}
-      <LinearGradient colors={["#6C63FF", "#A78BFA"]} style={[styles.header, { paddingTop: 10 }]}>
+      <LinearGradient colors={["#17263A", "#243B55"]} style={[styles.header, { paddingTop: 10 }]}>
         <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}>
           <Ionicons name="arrow-back" size={24} color="#fff" />
         </TouchableOpacity>
@@ -208,14 +207,14 @@ export default function PaymentHistoryScreen(): React.ReactElement {
         ListEmptyComponent={
           loading ? (
             <View style={styles.loadingContainer}>
-              <ActivityIndicator size="large" color="#6C63FF" />
+              <ActivityIndicator size="large" color="#17263A" />
             </View>
           ) : error ? (
             <View style={styles.emptyContainer}>
               <MaterialIcons name="error-outline" size={48} color="#FF6B6B" />
               <Text style={styles.emptyText}>{error}</Text>
               <TouchableOpacity onPress={() => fetchTransactions(1, false)} style={{ marginTop: 12 }}>
-                <Text style={{ color: '#6C63FF', fontWeight: '700' }}>Retry</Text>
+                <Text style={{ color: '#17263A', fontWeight: '700' }}>Retry</Text>
               </TouchableOpacity>
             </View>
           ) : (
@@ -237,21 +236,23 @@ export default function PaymentHistoryScreen(): React.ReactElement {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: "#F8F9FA",
+    backgroundColor: "#F4F6F8",
   },
   header: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
     paddingHorizontal: 16,
-    // ✅ paddingTop is now dynamic (set in component with insets.top)
-    paddingBottom: 20,
+    paddingBottom: 18,
+    marginHorizontal: 16,
+    marginTop: 8,
+    borderRadius: 24,
   },
   backBtn: {
     width: 40,
     height: 40,
     borderRadius: 20,
-    backgroundColor: "rgba(255,255,255,0.2)",
+    backgroundColor: "rgba(255,255,255,0.14)",
     justifyContent: "center",
     alignItems: "center",
   },
@@ -305,42 +306,46 @@ const styles = StyleSheet.create({
   filterContainer: {
     flexDirection: "row",
     paddingHorizontal: 16,
-    paddingVertical: 12,
+    paddingVertical: 14,
     backgroundColor: "#fff",
-    borderBottomWidth: 1,
-    borderBottomColor: "#F0F0F0",
+    marginHorizontal: 16,
+    marginTop: 14,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: "#E8EDF3",
   },
   filterTab: {
     flex: 1,
     paddingVertical: 10,
     alignItems: "center",
-    borderBottomWidth: 2,
-    borderBottomColor: "transparent",
+    borderRadius: 12,
   },
   filterTabActive: {
-    borderBottomColor: "#6C63FF",
+    backgroundColor: "#17263A",
   },
   filterText: {
     fontSize: 13,
     fontWeight: "600",
-    color: "#999",
+    color: "#6B7280",
   },
   filterTextActive: {
-    color: "#6C63FF",
+    color: "#FFFFFF",
   },
   content: {
     flex: 1,
     paddingHorizontal: 16,
-    paddingVertical: 12,
+    paddingVertical: 14,
   },
   transactionCard: {
     flexDirection: "row",
     alignItems: "center",
     backgroundColor: "#fff",
-    borderRadius: 12,
+    borderRadius: 20,
     paddingHorizontal: 16,
     paddingVertical: 14,
-    marginBottom: 10,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: "#E8EDF3",
   },
   iconBg: {
     width: 44,
@@ -355,12 +360,12 @@ const styles = StyleSheet.create({
   },
   description: {
     fontSize: 14,
-    fontWeight: "600",
-    color: "#1A1A1A",
+    fontWeight: "700",
+    color: "#111827",
   },
   date: {
-    fontSize: 13,
-    color: "#555",
+    fontSize: 12,
+    color: "#6B7280",
     marginTop: 6,
     fontWeight: "500",
   },
