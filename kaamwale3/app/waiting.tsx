@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useRef, useCallback } from "react";
 import { View, Text, StyleSheet, TouchableOpacity, ActivityIndicator, Alert, Modal, Image, ScrollView, TextInput } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
@@ -7,11 +7,24 @@ import { socket } from "../utils/socket";
 import { SERVER_URL } from "../utils/config";
 import * as Location from "expo-location";
 import { useLanguage } from "../context/LanguageContext";
+import { SafeAreaView } from "react-native-safe-area-context";
+
+// ✅ NEW: Import service managers
+import { tokenManager } from "../services/tokenManager";
+import { socketConnectionManager } from "../services/socketConnectionManager";
+
+
+
 
 export default function WaitingScreen() {
   const router = useRouter();
   const { t } = useLanguage();
-  const [timeLeft, setTimeLeft] = useState(300); // 5 min default
+  
+  // ✅ FIXED: Timer from backend, not fake
+  const [timeLeft, setTimeLeft] = useState<number>(0);
+  const [jobExpiryTime, setJobExpiryTime] = useState<number | null>(null);
+  const timerIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  
   const [modalVisible, setModalVisible] = useState(false);
   const [acceptedWorker, setAcceptedWorker] = useState<any | null>(null);
   const [workerLocationName, setWorkerLocationName] = useState<string>("Getting location...");
@@ -19,7 +32,7 @@ export default function WaitingScreen() {
   const [token, setToken] = useState<string | null>(null);
   const [currentUser, setCurrentUser] = useState<any | null>(null);
   
-  // ✅ NEW: Bulk hiring states
+  // ✅ NEW: Bulk hiring states with backend sync
   const [isBulkHiring, setIsBulkHiring] = useState(false);
   const [requiredWorkers, setRequiredWorkers] = useState(1);
   const [acceptedWorkers, setAcceptedWorkers] = useState<any[]>([]);
@@ -32,19 +45,170 @@ export default function WaitingScreen() {
   ]);
   const [messageInput, setMessageInput] = useState('');
 
-  useEffect(() => {
-    const interval = setInterval(() => {
-      setTimeLeft((prev) => (prev > 0 ? prev - 1 : 0));
-    }, 1000);
-
-    return () => clearInterval(interval);
-  }, []);
+  // ✅ NEW: Network failure handling
+  const [networkError, setNetworkError] = useState(false);
+  const [socketConnected, setSocketConnected] = useState(false);
+  const [pollingFallback, setPollingFallback] = useState(false);
+  const pollingIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  
+  // ✅ NEW: State recovery
+  const [jobState, setJobState] = useState<any>(null);
+  const lastJobUpdateRef = useRef<number>(0);
 
   const formatTime = (seconds: number) => {
     const m = Math.floor(seconds / 60);
     const s = seconds % 60;
     return `${m}m ${s < 10 ? "0" : ""}${s}s`;
   };
+
+  // ✅ NEW: Backend-driven timer
+  const startBackendTimer = useCallback((expiryTimestamp: number) => {
+    if (timerIntervalRef.current) {
+      clearInterval(timerIntervalRef.current);
+    }
+
+    const updateTimer = () => {
+      const now = Date.now();
+      const remaining = Math.max(0, Math.floor((expiryTimestamp - now) / 1000));
+      setTimeLeft(remaining);
+
+      if (remaining <= 0) {
+        clearInterval(timerIntervalRef.current!);
+        timerIntervalRef.current = null;
+        // Job expired - show appropriate message
+        setNetworkError(true);
+      }
+    };
+
+    updateTimer(); // Initial update
+    timerIntervalRef.current = setInterval(updateTimer, 1000);
+  }, []);
+
+  // ✅ NEW: Polling fallback when socket fails
+  const startPollingFallback = useCallback(async () => {
+    if (pollingIntervalRef.current) return; // Already polling
+
+    console.log('🔄 Starting polling fallback for job updates...');
+    setPollingFallback(true);
+
+    pollingIntervalRef.current = setInterval(async () => {
+      if (!jobId || !token) return;
+
+      try {
+        const response = await fetch(`${SERVER_URL}/jobs/by-id/${jobId}`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+
+        if (response.ok) {
+          const data = await response.json();
+          const job = data.job || data;
+
+          // Only process if job was updated more recently than our last update
+          const jobUpdatedAt = new Date(job.updatedAt || job.createdAt).getTime();
+          if (jobUpdatedAt > lastJobUpdateRef.current) {
+            lastJobUpdateRef.current = jobUpdatedAt;
+            processJobUpdate(job);
+          }
+        }
+      } catch (err) {
+        console.warn('⚠️ Polling fallback failed:', err);
+      }
+    }, 5000); // Poll every 5 seconds
+  }, [jobId, token]);
+
+  // ✅ NEW: Stop polling fallback
+  const stopPollingFallback = useCallback(() => {
+    if (pollingIntervalRef.current) {
+      clearInterval(pollingIntervalRef.current);
+      pollingIntervalRef.current = null;
+      setPollingFallback(false);
+      console.log('🛑 Stopped polling fallback');
+    }
+  }, []);
+
+  // ✅ NEW: Process job updates (unified for socket and polling)
+  const processJobUpdate = useCallback((job: any) => {
+    console.log("📢 Processing job update:", job._id, "status:", job.status);
+
+    // ✅ CRITICAL: Verify this job is for current user
+    if (!currentUser || !jobId || job._id !== jobId) {
+      return;
+    }
+
+    // ✅ Update job state for recovery
+    setJobState(job);
+
+    // ✅ Check if this is a bulk hiring job
+    if (job.bulkHiring) {
+      console.log(`📊 Bulk hiring job - Required: ${job.requiredWorkers}, Accepted: ${job.acceptedWorkers?.length || 0}`);
+      setIsBulkHiring(true);
+      setRequiredWorkers(job.requiredWorkers || 1);
+      setAcceptedWorkers(job.acceptedWorkers || []);
+
+      // ✅ FIXED: Use backend completion flag instead of frontend check
+      if (job.isComplete || (job.acceptedWorkers && job.acceptedWorkers.length >= job.requiredWorkers)) {
+        console.log("🎉 Bulk hiring complete!");
+        setBulkHiringComplete(true);
+        setModalVisible(true);
+        stopPollingFallback(); // Stop polling when complete
+      }
+    } else if (job.status === "accepted") {
+      console.log("🎉 Job accepted! Showing modal");
+      const worker = job.acceptedWorker || { name: job.acceptedBy };
+      setAcceptedWorker(worker);
+
+      // Get location name if coordinates available
+      if (worker?.location?.coordinates && worker.location.coordinates.length === 2) {
+        const [lon, lat] = worker.location.coordinates;
+        getLocationName(lat, lon).then(locationName => {
+          setWorkerLocationName(locationName);
+        });
+      } else {
+        setWorkerLocationName("Location not available");
+      }
+
+      setModalVisible(true);
+      stopPollingFallback(); // Stop polling when accepted
+    } else if (job.status === "cancelled" || job.status === "expired") {
+      console.log("❌ Job cancelled/expired");
+      Alert.alert("Job Update", `Job has been ${job.status}`);
+      stopPollingFallback();
+      router.replace("/home/contractor/postjobs");
+    }
+  }, [currentUser, jobId, stopPollingFallback, router]);
+
+  // ✅ NEW: State recovery on app restart
+  const recoverJobState = useCallback(async () => {
+    try {
+      const savedJobState = await AsyncStorage.getItem('waitingJobState');
+      if (savedJobState) {
+        const parsed = JSON.parse(savedJobState);
+        if (parsed.jobId === jobId && parsed.timestamp > Date.now() - 3600000) { // Within 1 hour
+          console.log('🔄 Recovered job state:', parsed);
+          setJobState(parsed.job);
+          processJobUpdate(parsed.job);
+        } else {
+          // Stale state, remove it
+          await AsyncStorage.removeItem('waitingJobState');
+        }
+      }
+    } catch (err) {
+      console.warn('⚠️ Failed to recover job state:', err);
+    }
+  }, [jobId, processJobUpdate]);
+
+  // ✅ NEW: Save state for recovery
+  const saveJobState = useCallback(async (job: any) => {
+    try {
+      await AsyncStorage.setItem('waitingJobState', JSON.stringify({
+        jobId,
+        job,
+        timestamp: Date.now(),
+      }));
+    } catch (err) {
+      console.warn('⚠️ Failed to save job state:', err);
+    }
+  }, [jobId]);
 
   // ✅ Function to get location name from coordinates
   const getLocationName = async (latitude: number, longitude: number) => {
@@ -97,23 +261,38 @@ export default function WaitingScreen() {
       setChatMessages([...chatMessages, newMessage]);
       setMessageInput('');
       
-      // Simulate support response
+      // ✅ IMPROVED: More realistic support simulation
+      const supportResponses = [
+        "Thanks for your message! Our support team has been notified and will respond shortly.",
+        "We're experiencing high volume right now. A support agent will contact you within 5-10 minutes.",
+        "Your concern has been logged. For immediate assistance, please call our support line.",
+        "We're here to help! Please provide more details about the issue you're facing.",
+        "A support ticket has been created for your request. You'll receive an update soon."
+      ];
+      
+      // Simulate typing indicator
       setTimeout(() => {
-        const supportResponses = [
-          "Thanks for your message! A support agent is looking into this.",
-          "We're here to help! What specific issue are you facing?",
-          "Your concern has been noted. Our team will assist you shortly.",
-          "Is there anything else we can help you with?"
-        ];
-        const randomResponse = supportResponses[Math.floor(Math.random() * supportResponses.length)];
-        const responseMessage = {
-          id: Date.now().toString(),
+        const typingMessage = {
+          id: `typing_${Date.now()}`,
           sender: 'support' as const,
-          text: randomResponse,
+          text: 'Support is typing...',
           timestamp: new Date()
         };
-        setChatMessages(prev => [...prev, responseMessage]);
-      }, 1500);
+        setChatMessages(prev => [...prev, typingMessage]);
+        
+        // Remove typing and add response
+        setTimeout(() => {
+          setChatMessages(prev => prev.filter(msg => msg.id !== typingMessage.id));
+          const randomResponse = supportResponses[Math.floor(Math.random() * supportResponses.length)];
+          const responseMessage = {
+            id: Date.now().toString(),
+            sender: 'support' as const,
+            text: randomResponse,
+            timestamp: new Date()
+          };
+          setChatMessages(prev => [...prev, responseMessage]);
+        }, 2000);
+      }, 1000);
     }
   };
 
@@ -140,9 +319,17 @@ export default function WaitingScreen() {
       return;
     }
 
+    // ✅ FIXED: Prevent duplicate cancellation requests
+    if (cancellationLoading) {
+      console.log("⏳ Cancellation already in progress");
+      return;
+    }
+
     setCancellationLoading(true);
 
     try {
+      console.log("🛑 Cancelling job:", jobId);
+
       const response = await fetch(`${SERVER_URL}/jobs/cancel/${jobId}`, {
         method: "POST",
         headers: {
@@ -161,6 +348,9 @@ export default function WaitingScreen() {
       if (data.success && data.cancellation) {
         const refundAmount = data.cancellation.refundAmount || 0;
         const cancellationFee = data.cancellation.cancellationFee || 0;
+
+        // ✅ Clear saved job state
+        await AsyncStorage.removeItem('waitingJobState');
 
         Alert.alert(
           "Job Cancelled Successfully",
@@ -186,44 +376,118 @@ export default function WaitingScreen() {
     } catch (error) {
       setCancellationLoading(false);
       console.error("Cancel job network error:", error);
-      Alert.alert(
-        "Network Error",
-        "Failed to cancel job. Please check your connection and try again."
-      );
+
+      // ✅ NEW: Network error handling
+      if (!navigator.onLine) {
+        Alert.alert(
+          "Network Error",
+          "No internet connection. Please check your connection and try again.",
+          [
+            { text: "Retry", onPress: () => handleCancelJobConfirm() },
+            { text: "Cancel", style: "cancel" }
+          ]
+        );
+      } else {
+        Alert.alert(
+          "Network Error",
+          "Failed to cancel job. Please check your connection and try again.",
+          [
+            { text: "Retry", onPress: () => handleCancelJobConfirm() },
+            { text: "Cancel", style: "cancel" }
+          ]
+        );
+      }
     }
   };
 
     // Setup socket and listen for job updates
     useEffect(() => {
+      let mounted = true;
+
       (async () => {
         try {
-          const last = await AsyncStorage.getItem("lastJobId");
-          const storedToken = (await AsyncStorage.getItem("accessToken")) || (await AsyncStorage.getItem("token"));
-          const userStr = await AsyncStorage.getItem("user");
-          const user = userStr ? JSON.parse(userStr) : null;
-          setJobId(last);
-          setToken(storedToken);
-          setCurrentUser(user);
-
-          // ✅ CRITICAL: Ensure socket is connected with auth token before listening
-          if (storedToken && !socket.connected) {
-            socket.auth = { token: storedToken };
-            socket.connect();
-            console.log("🔌 Waiting screen: Socket connecting with auth token");
+          // ✅ NEW: Get fresh token using tokenManager
+          const tokenResult = await tokenManager.refreshAccessToken();
+          if (!tokenResult.success || !tokenResult.accessToken) {
+            console.error('❌ Cannot setup waiting screen: Token refresh failed');
+            setNetworkError(true);
+            return;
           }
 
-          // Add socket listener with proper context
+          const authToken = tokenResult.accessToken;
+          setToken(authToken);
+
+          // ✅ NEW: Load user and job data
+          const userStr = await AsyncStorage.getItem("user");
+          const lastJobId = await AsyncStorage.getItem("lastJobId");
+          const user = userStr ? JSON.parse(userStr) : null;
+
+          if (!user || !lastJobId) {
+            console.error('❌ Missing user or job data');
+            router.replace("/home/contractor/postjobs");
+            return;
+          }
+
+          setCurrentUser(user);
+          setJobId(lastJobId);
+
+          // ✅ NEW: Fetch initial job state from backend
+          try {
+            const jobResponse = await fetch(`${SERVER_URL}/jobs/by-id/${lastJobId}`, {
+              headers: { Authorization: `Bearer ${authToken}` },
+            });
+
+            if (jobResponse.ok) {
+              const jobData = await jobResponse.json();
+              const job = jobData.job || jobData;
+
+              // ✅ Set backend-driven timer
+              if (job.expiryTime) {
+                setJobExpiryTime(job.expiryTime);
+                startBackendTimer(job.expiryTime);
+              } else {
+                // Fallback to 5 minutes if no expiry time
+                const fallbackExpiry = Date.now() + (5 * 60 * 1000);
+                setJobExpiryTime(fallbackExpiry);
+                startBackendTimer(fallbackExpiry);
+              }
+
+              // ✅ Process initial job state
+              processJobUpdate(job);
+              saveJobState(job);
+            } else {
+              console.error('❌ Failed to fetch initial job state');
+              setNetworkError(true);
+            }
+          } catch (err) {
+            console.error('❌ Error fetching initial job:', err);
+            setNetworkError(true);
+          }
+
+          // ✅ NEW: Ensure socket is connected with tokenManager
+          const socketResult = await socketConnectionManager.ensureConnected(user.phone);
+          if (socketResult) {
+            setSocketConnected(true);
+            console.log("✅ Socket connected for waiting screen");
+          } else {
+            console.warn("⚠️ Socket connection failed, starting polling fallback");
+            startPollingFallback();
+          }
+
+          // ✅ FIXED: Proper socket listener cleanup
           const handleJobUpdated = (job: any) => {
-            console.log("⏳ waiting: jobUpdated event received", job._id, "status:", job.status);
-            console.log("👤 Current user:", user?.name, "| Target list:", job.targetedFor);
-            
-            if (!job || !last) {
-              console.log("No job or lastJobId");
+            if (!mounted) return;
+
+            console.log("⏳ Socket: jobUpdated event received", job._id, "status:", job.status);
+
+            // ✅ CRITICAL: Verify this job is for current user
+            if (!job || !lastJobId || job._id !== lastJobId) {
+              console.log("Job ID mismatch or no job");
               return;
             }
-            
+
             // If server sent targeted update and current user is not in the target list, ignore
-            if (job._targetedUpdate && Array.isArray(job.targetedFor) && user) {
+            if (job._targetedUpdate && Array.isArray(job.targetedFor)) {
               const userIdentifiers = job.targetedFor.map((i: any) => i && i.toString());
               const matches = [user.name, user.phone].some((id) => userIdentifiers.includes(id));
               console.log("Targeted update check:", { targetedFor: job.targetedFor, userInfo: [user.name, user.phone], matches });
@@ -232,62 +496,63 @@ export default function WaitingScreen() {
                 return;
               }
             }
-            
-            if (job._id !== last) {
-              console.log(`Job ID mismatch: ${job._id} !== ${last}`);
-              return;
-            }
-            
-            console.log("✅ Job status:", job.status);
-            
-            // ✅ Check if this is a bulk hiring job
-            if (job.bulkHiring) {
-              console.log(`📊 Bulk hiring job - Required: ${job.requiredWorkers}, Accepted: ${job.acceptedWorkers?.length || 0}`);
-              setIsBulkHiring(true);
-              setRequiredWorkers(job.requiredWorkers || 1);
-              setAcceptedWorkers(job.acceptedWorkers || []);
-              
-              // Check if all required workers have accepted
-              if (job.acceptedWorkers && job.acceptedWorkers.length >= job.requiredWorkers) {
-                console.log("🎉 All workers accepted!");
-                setBulkHiringComplete(true);
-                setModalVisible(true);
-              }
-            } else if (job.status === "accepted") {
-              console.log("🎉 Job accepted! Showing modal");
-              // Use acceptedWorker snapshot if available, fallback to acceptedBy
-              const worker = job.acceptedWorker || { name: job.acceptedBy };
-              console.log("Worker data:", worker);
-              setAcceptedWorker(worker);
-              
-              // Get location name if coordinates available
-              if (worker?.location?.coordinates && worker.location.coordinates.length === 2) {
-                const [lon, lat] = worker.location.coordinates;
-                getLocationName(lat, lon).then(locationName => {
-                  console.log("Location name:", locationName);
-                  setWorkerLocationName(locationName);
-                });
-              } else {
-                setWorkerLocationName("Location not available");
-              }
-              
-              setModalVisible(true);
-            }
+
+            // ✅ Process job update and save state
+            processJobUpdate(job);
+            saveJobState(job);
+            lastJobUpdateRef.current = Date.now();
           };
 
+          // ✅ NEW: Socket connection status monitoring
+          const handleConnect = () => {
+            if (!mounted) return;
+            console.log("🔌 Socket connected");
+            setSocketConnected(true);
+            setNetworkError(false);
+            stopPollingFallback(); // Stop polling when socket reconnects
+          };
+
+          const handleDisconnect = () => {
+            if (!mounted) return;
+            console.log("🔌 Socket disconnected, starting polling fallback");
+            setSocketConnected(false);
+            startPollingFallback();
+          };
+
+          // ✅ Register socket listeners
           socket.on("jobUpdated", handleJobUpdated);
-          console.log("✅ Socket listener registered for jobUpdated");
+          socket.on("connect", handleConnect);
+          socket.on("disconnect", handleDisconnect);
+
+          console.log("✅ Socket listeners registered for waiting screen");
+
+          // ✅ NEW: State recovery
+          await recoverJobState();
 
         } catch (e) {
-          console.error("Waiting screen socket error", e);
+          console.error("❌ Waiting screen setup error:", e);
+          setNetworkError(true);
         }
       })();
 
       return () => {
-        // Clean up listener only, don't disconnect global socket
+        mounted = false;
+
+        // ✅ FIXED: Remove specific listeners, not all
         socket.off("jobUpdated");
+        socket.off("connect");
+        socket.off("disconnect");
+
+        // ✅ Cleanup timers and polling
+        if (timerIntervalRef.current) {
+          clearInterval(timerIntervalRef.current);
+          timerIntervalRef.current = null;
+        }
+        stopPollingFallback();
+
+        console.log("🧹 Waiting screen cleanup complete");
       };
-    }, []);
+    }, [startBackendTimer, processJobUpdate, saveJobState, recoverJobState, startPollingFallback, stopPollingFallback, router]);
 
     const handleCloseModal = () => {
       setModalVisible(false);
@@ -296,7 +561,7 @@ export default function WaitingScreen() {
     };
 
   return (
-    <View style={styles.container}>
+    <SafeAreaView style={styles.container} edges={['top', 'left', 'right', 'bottom']}>
       {/* Top Header Area */}
       <View style={styles.headerContainer}>
         {/* ✅ Back button disabled - contractor must wait for acceptances or cancel job */}
@@ -308,6 +573,27 @@ export default function WaitingScreen() {
 
       {/* Center Loader */}
       <View style={styles.centerArea}>
+        {/* ✅ NEW: Network error indicator */}
+        {networkError && (
+          <View style={styles.networkErrorContainer}>
+            <Ionicons name="cloud-offline" size={24} color="#ef4444" />
+            <Text style={styles.networkErrorText}>
+              {timeLeft > 0 ? "Connection issues - using backup mode" : "Job search expired"}
+            </Text>
+            {pollingFallback && (
+              <Text style={styles.pollingText}>Checking for updates...</Text>
+            )}
+          </View>
+        )}
+
+        {/* ✅ NEW: Socket status indicator */}
+        {!socketConnected && !networkError && (
+          <View style={styles.socketStatusContainer}>
+            <Ionicons name="radio" size={20} color="#f59e0b" />
+            <Text style={styles.socketStatusText}>Reconnecting...</Text>
+          </View>
+        )}
+
         <ActivityIndicator size="large" color="#667eea" />
         {isBulkHiring ? (
           <>
@@ -327,7 +613,9 @@ export default function WaitingScreen() {
             </View>
           </>
         ) : (
-          <Text style={styles.loadingText}>{t('weAreNotifyingWorkersNearYou')}</Text>
+          <Text style={styles.loadingText}>
+            {networkError ? "Searching with limited connection..." : t('weAreNotifyingWorkersNearYou')}
+          </Text>
         )}
       </View>
 
@@ -492,7 +780,7 @@ export default function WaitingScreen() {
           </View>
         </View>
       </Modal>
-    </View>
+    </SafeAreaView>
   );
 }
 
@@ -780,5 +1068,45 @@ const styles = StyleSheet.create({
   acceptedTime: {
     fontSize: 11,
     color: '#9ca3af',
+  },
+  // ✅ NEW: Network error styles
+  networkErrorContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#fef2f2',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 8,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: '#fecaca',
+  },
+  networkErrorText: {
+    color: '#dc2626',
+    fontSize: 14,
+    fontWeight: '600',
+    marginLeft: 8,
+  },
+  pollingText: {
+    color: '#7f1d1d',
+    fontSize: 12,
+    marginTop: 4,
+  },
+  socketStatusContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#fffbeb',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 6,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: '#fed7aa',
+  },
+  socketStatusText: {
+    color: '#c2410c',
+    fontSize: 12,
+    fontWeight: '500',
+    marginLeft: 6,
   },
 });

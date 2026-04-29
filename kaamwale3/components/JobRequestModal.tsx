@@ -16,6 +16,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
 import DateTimePicker from '@react-native-community/datetimepicker';
+import * as Location from 'expo-location';
 import { useAuth } from '../context/AuthContext';
 import { SERVER_URL } from '../utils/config';
 
@@ -55,6 +56,9 @@ export default function JobRequestModal({
   const [startTime, setStartTime] = useState(new Date());
   const [endTime, setEndTime] = useState(new Date());
   const [location, setLocation] = useState('');
+  const [locationSource, setLocationSource] = useState<'manual' | 'current'>('manual');
+  const [currentLocationLabel, setCurrentLocationLabel] = useState('');
+  const [fetchingLocation, setFetchingLocation] = useState(false);
   const [loading, setLoading] = useState(false);
 
   // Picker visibility
@@ -67,13 +71,57 @@ export default function JobRequestModal({
     setStartTime(new Date());
     setEndTime(new Date());
     setLocation('');
+    setLocationSource('manual');
+    setCurrentLocationLabel('');
+  }, []);
+
+  const fetchCurrentLocation = useCallback(async () => {
+    setFetchingLocation(true);
+    try {
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert('Location required', 'Please allow location access to use current location.');
+        setLocationSource('manual');
+        return;
+      }
+
+      const position = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Highest });
+      const { latitude, longitude } = position.coords;
+      const geocoded = await Location.reverseGeocodeAsync({ latitude, longitude });
+      const place = geocoded[0];
+      const address = place
+        ? [
+            place.name,
+            place.street,
+            place.subregion || place.district || place.city || place.region || '',
+            place.postalCode,
+          ]
+            .filter(Boolean)
+            .join(', ')
+        : `Lat ${latitude.toFixed(5)}, Lon ${longitude.toFixed(5)}`;
+      const normalized = address.length > 0 ? address : `Lat ${latitude.toFixed(5)}, Lon ${longitude.toFixed(5)}`;
+
+      setCurrentLocationLabel(normalized);
+      setLocation(normalized);
+    } catch (err) {
+      console.error('Failed to fetch current location:', err);
+      Alert.alert('Location error', 'Unable to retrieve current location. Please try again or use manual location.');
+      setLocationSource('manual');
+    } finally {
+      setFetchingLocation(false);
+    }
   }, []);
 
   const handleSendRequest = useCallback(async () => {
     if (!worker) return;
 
     // Validation
-    const trimmedLocation = location.trim();
+    if (locationSource === 'current' && !currentLocationLabel) {
+      Alert.alert('Error', 'Please fetch your current location before sending the request.');
+      return;
+    }
+
+    const trimmedLocation = (locationSource === 'current' ? currentLocationLabel : location).trim();
     if (!trimmedLocation || trimmedLocation.length > 200) {
       Alert.alert('Error', 'Please enter a valid location (1-200 characters)');
       return;
@@ -232,15 +280,63 @@ export default function JobRequestModal({
                 {/* Location Input */}
                 <View style={styles.field}>
                   <Text style={styles.fieldLabel}>Location</Text>
-                  <TextInput
-                    style={styles.textInput}
-                    placeholder="Enter job location"
-                    value={location}
-                    onChangeText={(text) => setLocation(text.slice(0, 200))}
-                    multiline
-                    numberOfLines={2}
-                    accessibilityLabel="Job location"
-                  />
+
+                  <View style={styles.locationToggleRow}>
+                    <TouchableOpacity
+                      style={[
+                        styles.locationToggleButton,
+                        locationSource === 'manual' && styles.locationToggleButtonActive,
+                      ]}
+                      onPress={() => setLocationSource('manual')}
+                    >
+                      <MaterialIcons name="edit" size={18} color={locationSource === 'manual' ? '#fff' : '#333'} />
+                      <Text style={[styles.locationToggleText, locationSource === 'manual' && styles.locationToggleTextActive]}>
+                        Manual
+                      </Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={[
+                        styles.locationToggleButton,
+                        locationSource === 'current' && styles.locationToggleButtonActive,
+                      ]}
+                      onPress={() => {
+                        setLocationSource('current');
+                        if (!currentLocationLabel) {
+                          fetchCurrentLocation();
+                        }
+                      }}
+                    >
+                      <MaterialIcons name="my-location" size={18} color={locationSource === 'current' ? '#fff' : '#333'} />
+                      <Text style={[styles.locationToggleText, locationSource === 'current' && styles.locationToggleTextActive]}>
+                        Current
+                      </Text>
+                    </TouchableOpacity>
+                  </View>
+
+                  {locationSource === 'manual' ? (
+                    <TextInput
+                      style={styles.textInput}
+                      placeholder="Enter job location"
+                      value={location}
+                      onChangeText={(text) => setLocation(text.slice(0, 200))}
+                      multiline
+                      numberOfLines={2}
+                      accessibilityLabel="Job location"
+                    />
+                  ) : (
+                    <View style={styles.currentLocationContainer}>
+                      <Text style={styles.currentLocationLabel} numberOfLines={2}>
+                        {currentLocationLabel || 'Fetching current location...'}
+                      </Text>
+                      <TouchableOpacity
+                        style={styles.refreshLocationButton}
+                        onPress={fetchCurrentLocation}
+                        disabled={fetchingLocation}
+                      >
+                        <MaterialIcons name="refresh" size={20} color="#667eea" />
+                      </TouchableOpacity>
+                    </View>
+                  )}
                 </View>
               </ScrollView>
 
@@ -435,6 +531,58 @@ const styles = StyleSheet.create({
     minHeight: 60,
     textAlignVertical: 'top',
   },
+  locationToggleRow: {
+    flexDirection: 'row',
+    gap: 10,
+    marginBottom: 12,
+  },
+  locationToggleButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    borderWidth: 1,
+    borderColor: '#d1d5db',
+    borderRadius: 10,
+    paddingVertical: 10,
+    backgroundColor: '#fafafa',
+  },
+  locationToggleButtonActive: {
+    backgroundColor: '#667eea',
+    borderColor: '#667eea',
+  },
+  locationToggleText: {
+    fontSize: 13,
+    color: '#333',
+    fontWeight: '600',
+  },
+  locationToggleTextActive: {
+    color: '#fff',
+  },
+  currentLocationContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#f5f7ff',
+    padding: 14,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#d1d5db',
+  },
+  currentLocationLabel: {
+    flex: 1,
+    color: '#333',
+    fontSize: 15,
+    marginRight: 12,
+  },
+  refreshLocationButton: {
+    padding: 8,
+    borderRadius: 999,
+    backgroundColor: '#fff',
+    borderWidth: 1,
+    borderColor: '#d1d5db',
+  },
   actions: {
     flexDirection: 'row',
     padding: 20,
@@ -443,15 +591,15 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   panelOverlay: {
-    flex: 1,
-    backgroundColor: 'transparent',
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: '#fff',
+    zIndex: 999,
   },
   panelContainer: {
+    flex: 1,
     backgroundColor: '#fff',
     borderTopLeftRadius: 20,
     borderTopRightRadius: 20,
-    minHeight: '80%',
-    maxHeight: '100%',
   },
   cancelButton: {
     flex: 1,

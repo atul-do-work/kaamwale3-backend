@@ -11,7 +11,7 @@ import {
   Platform,
   UIManager,
 } from "react-native";
-import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { MaterialIcons } from "@expo/vector-icons";
 
 // ✅ Enable layout animations for Android
@@ -156,7 +156,6 @@ const faqData: FAQItem[] = [
 
 export default function HelpCentre() {
   const router = useRouter();
-  const insets = useSafeAreaInsets();
   const [searchText, setSearchText] = useState("");
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [selectedCategory, setSelectedCategory] = useState("All");
@@ -212,13 +211,14 @@ export default function HelpCentre() {
   };
 
   return (
-    <ScrollView style={styles.container} showsVerticalScrollIndicator={false}>
+    <SafeAreaView style={styles.container} edges={['top', 'left', 'right']}>
+      <ScrollView style={styles.container} showsVerticalScrollIndicator={false}>
       {/* Header with Gradient */}
       <LinearGradient
         colors={["#1a2f4d", "#2d5a8c"]}
         start={{ x: 0, y: 0 }}
         end={{ x: 1, y: 1 }}
-        style={[styles.header, { paddingTop: insets.top + 10 }]}
+        style={[styles.header, { paddingTop: 10 }]}
       >
         <TouchableOpacity
           style={styles.backButton}
@@ -389,7 +389,8 @@ export default function HelpCentre() {
       </View>
 
       <View style={{ height: 30 }} />
-    </ScrollView>
+      </ScrollView>
+    </SafeAreaView>
   );
 }
 

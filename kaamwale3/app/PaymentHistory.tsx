@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import {
   View,
   Text,
@@ -7,7 +7,8 @@ import {
   StyleSheet,
   ActivityIndicator,
 } from "react-native";
-import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { useFocusEffect } from "@react-navigation/native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { MaterialIcons, Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import { useRouter } from "expo-router";
@@ -26,23 +27,46 @@ type FilterType = "all" | "credit" | "debit" | "refund";
 
 export default function PaymentHistoryScreen(): React.ReactElement {
   const router = useRouter();
-  const insets = useSafeAreaInsets();
   const [filter, setFilter] = useState<FilterType>("all");
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const isFetchingRef = useRef(false);
+  const [page, setPage] = useState(1);
+  const [hasMore, setHasMore] = useState(true);
 
-  useEffect(() => {
-    fetchTransactions();
-  }, []);
+  // Fetch when screen gains focus (covers initial mount and returning to screen)
+  useFocusEffect(
+    useCallback(() => {
+      setPage(1);
+      setHasMore(true);
+      fetchTransactions(1, false);
+    }, [])
+  );
 
-  const fetchTransactions = async () => {
-    try {
+  const fetchTransactions = async (pageToLoad = 1, append = false) => {
+    if (isFetchingRef.current) return;
+    isFetchingRef.current = true;
+    if (pageToLoad === 1) {
+      setLoading(true);
       setError("");
-      const res = await api.get(`/wallet/transactions`);
+    }
+    try {
+      // basic pagination query params; backend may ignore if not supported
+      const res = await api.get(`/wallet/transactions?page=${pageToLoad}&limit=20`);
       const data = res.data;
-      if (data.success && data.transactions) {
-        setTransactions(data.transactions);
+      if (data.success && Array.isArray(data.transactions)) {
+        if (append) {
+          setTransactions((prev) => {
+            const next = [...prev, ...data.transactions];
+            return JSON.stringify(prev) !== JSON.stringify(next) ? next : prev;
+          });
+        } else {
+          setTransactions(data.transactions);
+        }
+        // simple hasMore detection
+        setHasMore((data.transactions.length || 0) >= 20);
+        setPage(pageToLoad);
       } else {
         setError("Failed to load transactions");
       }
@@ -50,6 +74,7 @@ export default function PaymentHistoryScreen(): React.ReactElement {
       console.error("Failed to fetch transactions:", err);
       setError("Unable to fetch transactions. Please try again.");
     } finally {
+      isFetchingRef.current = false;
       setLoading(false);
     }
   };
@@ -98,9 +123,9 @@ export default function PaymentHistoryScreen(): React.ReactElement {
   }, [transactions, filter]);
 
   return (
-    <View style={styles.container}>
+    <SafeAreaView style={styles.container} edges={['top', 'left', 'right']}>
       {/* Header */}
-      <LinearGradient colors={["#6C63FF", "#A78BFA"]} style={[styles.header, { paddingTop: insets.top + 10 }]}>
+      <LinearGradient colors={["#6C63FF", "#A78BFA"]} style={[styles.header, { paddingTop: 10 }]}>
         <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}>
           <Ionicons name="arrow-back" size={24} color="#fff" />
         </TouchableOpacity>
@@ -135,7 +160,7 @@ export default function PaymentHistoryScreen(): React.ReactElement {
       <FlatList
         style={styles.content}
         data={filteredTransactions}
-        keyExtractor={(item) => item.id}
+        keyExtractor={(item, index) => item.id || index.toString()}
         renderItem={({ item: transaction }) => {
           const config = typeConfig[transaction.type];
           const isPositive = transaction.type === "credit" || transaction.type === "refund";
@@ -161,7 +186,7 @@ export default function PaymentHistoryScreen(): React.ReactElement {
                     { color: isPositive ? "#2ECC71" : "#FF6B6B" },
                   ]}
                 >
-                  {isPositive ? "+" : "-"}₹{Math.abs(transaction.amount).toFixed(2)}
+                  {new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR' }).format(transaction.amount)}
                 </Text>
                 <View
                   style={[
@@ -189,6 +214,9 @@ export default function PaymentHistoryScreen(): React.ReactElement {
             <View style={styles.emptyContainer}>
               <MaterialIcons name="error-outline" size={48} color="#FF6B6B" />
               <Text style={styles.emptyText}>{error}</Text>
+              <TouchableOpacity onPress={() => fetchTransactions(1, false)} style={{ marginTop: 12 }}>
+                <Text style={{ color: '#6C63FF', fontWeight: '700' }}>Retry</Text>
+              </TouchableOpacity>
             </View>
           ) : (
             <View style={styles.emptyContainer}>
@@ -197,8 +225,12 @@ export default function PaymentHistoryScreen(): React.ReactElement {
             </View>
           )
         }
+        onEndReachedThreshold={0.5}
+        onEndReached={() => {
+          if (!loading && hasMore) fetchTransactions(page + 1, true);
+        }}
       />
-    </View>
+    </SafeAreaView>
   );
 }
 

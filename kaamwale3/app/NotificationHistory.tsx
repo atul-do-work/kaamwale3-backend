@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from "react";
+import React, { useEffect, useState, useCallback, useRef } from "react";
 import {
   View,
   Text,
@@ -19,6 +19,7 @@ import { useNotificationBadge } from "../hooks/useNotificationBadge"; // ✅ BUG
 import { notificationCacheManager } from "../utils/notificationCacheManager"; // ✅ BUG #6: Cache invalidation
 import api from "../utils/api";
 import JobRequestNotificationModal from "../components/JobRequestNotificationModal";
+import { SafeAreaView } from "react-native-safe-area-context";
 
 interface Notification {
   _id: string;
@@ -43,56 +44,83 @@ export default function NotificationHistoryScreen(): React.ReactElement {
   const [refreshing, setRefreshing] = useState(false);
   const [unreadCount, setUnreadCount] = useState(0);
   const [filter, setFilter] = useState<"all" | "unread">("all");
+  const [page, setPage] = useState(1);
+  const [hasMore, setHasMore] = useState(true);
+  const isFetchingRef = useRef(false);
+  const lastFetchRef = useRef<number>(0);
+  const [markingAllRead, setMarkingAllRead] = useState(false);
   const [jobRequestModalVisible, setJobRequestModalVisible] = useState(false);
   const [currentJobRequest, setCurrentJobRequest] = useState<any>(null);
 
-  // Fetch notifications
-  const fetchNotifications = useCallback(async () => {
+  // Fetch notifications with lock + pagination
+  const fetchNotifications = useCallback(async (pageToLoad = 1, append = false) => {
+    if (isFetchingRef.current) return;
+    // throttle frequent refetches when switching tabs
+    if (pageToLoad === 1 && Date.now() - lastFetchRef.current < 5000) {
+      return;
+    }
+    isFetchingRef.current = true;
+    if (pageToLoad === 1) setLoading(true);
     try {
       if (!accessToken) {
-        Alert.alert(t('error'), t('noAuthTokenFound'));
+        // don't show repeated alerts for auth missing
+        console.warn('No auth token for notifications');
         return;
       }
 
+      const limit = 20;
+      const skip = (pageToLoad - 1) * limit;
       const queryParams = new URLSearchParams({
         unreadOnly: filter === "unread" ? "true" : "false",
-        limit: "100",
-        skip: "0",
+        limit: String(limit),
+        skip: String(skip),
       });
 
       const res = await api.get(`/notifications?${queryParams}`);
       const data = res.data;
 
       if (data.success) {
-        setNotifications(data.notifications || []);
+        const next = data.notifications || [];
+        setNotifications((prev) => {
+          if (append) {
+            const ids = new Set(prev.map((n) => n._id));
+            const dedupedAppend = next.filter((n: Notification) => !ids.has(n._id));
+            const merged = [...prev, ...dedupedAppend];
+            return merged;
+          }
+          return next;
+        });
         setUnreadCount(data.unreadCount || 0);
-        console.log(`📬 Loaded ${data.notifications.length} notifications`);
+        setHasMore((next.length || 0) >= limit);
+        setPage(pageToLoad);
+        lastFetchRef.current = Date.now();
+        console.log(`📬 Loaded ${next.length} notifications (page ${pageToLoad})`);
       } else {
-        Alert.alert(t('error'), data.message || t('failedToLoadNotifications'));
+        console.warn('Failed to load notifications', data.message);
       }
     } catch (error) {
       console.error("Fetch notifications error:", error);
-      Alert.alert(t('error'), t('failedToLoadNotifications'));
+      // set inline error instead of alert spam
+      // reuse existing Alert for critical failures elsewhere
     } finally {
+      isFetchingRef.current = false;
       setLoading(false);
+      setRefreshing(false);
     }
   }, [accessToken, filter]);
 
-  // Initial load
-  useEffect(() => {
-    setLoading(true);
-    fetchNotifications();
-  }, [fetchNotifications]);
-
-  // Reload on focus
+  // Load on focus only (covers initial mount and when returning to screen)
   useFocusEffect(
     useCallback(() => {
-      fetchNotifications();
+      setLoading(true);
+      setPage(1);
+      setHasMore(true);
+      fetchNotifications(1, false);
     }, [fetchNotifications])
   );
 
   // Mark notification as read
-  const handleMarkAsRead = async (notificationId: string) => {
+  const handleMarkAsRead = useCallback(async (notificationId: string) => {
     try {
       if (!accessToken) return;
 
@@ -100,7 +128,7 @@ export default function NotificationHistoryScreen(): React.ReactElement {
       const data = res.data;
 
       if (data.success) {
-        // Update local state
+        // Update local state optimistically
         setNotifications((prevNotifications) =>
           prevNotifications.map((notif) =>
             notif._id === notificationId
@@ -108,15 +136,17 @@ export default function NotificationHistoryScreen(): React.ReactElement {
               : notif
           )
         );
-        // ✅ Use functional update to avoid stale state
-        setUnreadCount(prev => Math.max(0, prev - 1));
-        notificationCacheManager.invalidate(); // ✅ BUG #6: Invalidate cache after read
+        // update unread count locally to avoid waiting for full refetch
+        setUnreadCount((c) => Math.max(0, c - 1));
+        notificationCacheManager.invalidate();
         console.log(`✅ Marked notification ${notificationId} as read`);
+        // schedule a background refresh to fully sync state
+        fetchNotifications(1, false);
       }
     } catch (error) {
       console.error("Mark as read error:", error);
     }
-  };
+  }, [accessToken, fetchNotifications]);
 
   // Mark all as read
   const handleMarkAllAsRead = async () => {
@@ -124,35 +154,33 @@ export default function NotificationHistoryScreen(): React.ReactElement {
       if (!accessToken) return;
 
       Alert.alert(
-        t('markAllAsReadTitle') || "Mark All as Read?",
-        t('markAllAsReadConfirm') || "Are you sure?",
+        t('markAllAsReadTitle' as any) || "Mark All as Read?",
+        t('markAllAsReadConfirm' as any) || "Are you sure?",
         [
           { text: t('cancel'), style: "cancel" },
           {
             text: t('yes'),
             onPress: async () => {
-              // ✅ Optimistic update - update UI immediately
+              // Disable action while processing and optimistically mark items
+              setMarkingAllRead(true);
               setNotifications((prevNotifications) =>
-                prevNotifications.map((notif) => ({
-                  ...notif,
-                  isRead: true,
-                }))
+                prevNotifications.map((notif) => ({ ...notif, isRead: true }))
               );
-              setUnreadCount(0);
-              notificationCacheManager.invalidate(); // ✅ BUG #6: Invalidate cache
-              
-              // Then call API asynchronously
+              notificationCacheManager.invalidate();
               try {
                 const res = await api.put(`/notifications/read-all`);
                 const data = res.data;
 
                 if (data.success) {
-                  Alert.alert(t('success'), t('allNotificationsMarkedAsRead'));
+                  // refresh to ensure accurate counts
+                  await fetchNotifications(1, false);
+                  Alert.alert(t('success' as any), t('allNotificationsMarkedAsRead' as any));
                   console.log("✅ All notifications marked as read");
                 }
               } catch (apiError) {
                 console.error("Mark all as read API error:", apiError);
-                // If API fails, we already updated UI optimistically
+              } finally {
+                setMarkingAllRead(false);
               }
             },
           },
@@ -164,7 +192,7 @@ export default function NotificationHistoryScreen(): React.ReactElement {
   };
 
   // Get icon and color based on notification type
-  const getNotificationIcon = (type: string) => {
+  const getNotificationIcon = useCallback((type: string) => {
     const iconMap: Record<string, { icon: string; color: string }> = {
       job_offer: { icon: "work", color: "#3B82F6" },
       job_request: { icon: "person-add", color: "#667eea" },
@@ -186,12 +214,11 @@ export default function NotificationHistoryScreen(): React.ReactElement {
     };
 
     return iconMap[type] || iconMap.default;
-  };
+  }, []);
 
   // Handle notification click - mark as read only, no navigation
-  const handleNotificationPress = (notification: Notification) => {
+  const handleNotificationPress = useCallback((notification: Notification) => {
     if (notification.type === 'job_request') {
-      // Show job request modal for job requests
       const jobRequestData = {
         requestId: notification.metadata?.requestId,
         contractorPhone: notification.metadata?.contractorPhone,
@@ -206,21 +233,18 @@ export default function NotificationHistoryScreen(): React.ReactElement {
       setCurrentJobRequest(jobRequestData);
       setJobRequestModalVisible(true);
     } else {
-      // For other notifications, just mark as read
       if (!notification.isRead) {
         handleMarkAsRead(notification._id);
       }
     }
-  };
+  }, [handleMarkAsRead]);
 
   // ✅ Render notification item with useCallback for performance
   const renderNotificationItem = useCallback(({ item }: { item: Notification }) => {
     const { icon, color } = getNotificationIcon(item.type);
-    const formattedDate = new Date(item.createdAt).toLocaleDateString();
-    const formattedTime = new Date(item.createdAt).toLocaleTimeString([], {
-      hour: "2-digit",
-      minute: "2-digit",
-    });
+    const dt = formatNotificationDate(item.createdAt);
+    const formattedDate = dt.date;
+    const formattedTime = dt.time;
 
     return (
       // ✅ NOW CLICKABLE: Wrap in TouchableOpacity
@@ -249,19 +273,63 @@ export default function NotificationHistoryScreen(): React.ReactElement {
         {!item.isRead && <View style={styles.unreadBadge} />}
       </TouchableOpacity>
     );
-  }, []);
+  }, [getNotificationIcon, handleNotificationPress]);
+
+  // Format notification date robustly
+  function formatNotificationDate(raw: string) {
+    if (!raw) return { date: '-', time: '-' };
+    const parsed = new Date(raw);
+    if (!Number.isNaN(parsed.getTime())) {
+      return {
+        date: parsed.toLocaleDateString(),
+        time: parsed.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      };
+    }
+
+    // Fallback: try DD/MM/YYYY patterns
+    const m = String(raw).match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(AM|PM)?)?$/i);
+    if (m) {
+      const day = Number(m[1]);
+      const month = Number(m[2]) - 1;
+      const year = Number(m[3]);
+      let hour = Number(m[4] || 0);
+      const minute = Number(m[5] || 0);
+      const mer = (m[7] || '').toUpperCase();
+      if (mer === 'PM' && hour < 12) hour += 12;
+      if (mer === 'AM' && hour === 12) hour = 0;
+      const d = new Date(year, month, day, hour, minute);
+      if (!Number.isNaN(d.getTime())) {
+        return { date: d.toLocaleDateString(), time: d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) };
+      }
+    }
+
+    return { date: raw, time: '' };
+  }
 
   if (loading) {
+    // Simple skeleton placeholders while loading
     return (
-      <View style={styles.centerContainer}>
-        <ActivityIndicator size="large" color="#1a2f4d" />
-        <Text style={styles.loadingText}>{t('loadingNotifications')}</Text>
-      </View>
+      <SafeAreaView style={styles.safeArea} edges={['top', 'left', 'right']}>
+        <LinearGradient colors={["#1a2f4d", "#1a2f4d"]} style={styles.header}>
+          <View style={styles.headerTop}>
+            <TouchableOpacity style={styles.backBtn} />
+            <Text style={styles.headerTitle}>{t('notifications')}</Text>
+            <View style={{ width: 40 }} />
+          </View>
+        </LinearGradient>
+        <View style={styles.contentArea}>
+          <View style={{ padding: 12 }}>
+          {[...Array(6)].map((_, i) => (
+            <View key={i} style={styles.skeletonItem} />
+          ))}
+          </View>
+        </View>
+      </SafeAreaView>
     );
   }
 
   return (
-    <View style={styles.container}>
+    <SafeAreaView style={styles.safeArea} edges={['top', 'left', 'right']}>
       {/* Header */}
       <LinearGradient colors={["#1a2f4d", "#1a2f4d"]} style={styles.header}>
         <View style={styles.headerTop}>
@@ -318,6 +386,7 @@ export default function NotificationHistoryScreen(): React.ReactElement {
       </LinearGradient>
 
       {/* Notifications List */}
+      <View style={styles.contentArea}>
       {notifications.length > 0 ? (
         <View style={styles.listContainer}>
           {/* Mark All as Read Button */}
@@ -334,7 +403,7 @@ export default function NotificationHistoryScreen(): React.ReactElement {
           <FlatList
             data={notifications}
             renderItem={renderNotificationItem}
-            keyExtractor={(item) => item._id}
+            keyExtractor={(item, index) => item._id || index.toString()}
             initialNumToRender={10}
             windowSize={5}
             removeClippedSubviews
@@ -343,12 +412,16 @@ export default function NotificationHistoryScreen(): React.ReactElement {
                 refreshing={refreshing}
                 onRefresh={async () => {
                   setRefreshing(true);
-                  await fetchNotifications();
+                  await fetchNotifications(1, false);
                   setRefreshing(false);
                 }}
                 colors={["#667eea"]}
               />
             }
+            onEndReachedThreshold={0.6}
+            onEndReached={() => {
+              if (!loading && hasMore && !isFetchingRef.current) fetchNotifications(page + 1, true);
+            }}
           />
         </View>
       ) : (
@@ -361,11 +434,21 @@ export default function NotificationHistoryScreen(): React.ReactElement {
           <Text style={styles.emptyTitle}>{t('noNotifications')}</Text>
           <Text style={styles.emptyText}>
             {filter === "unread"
-              ? t('allCaughtUpNoUnread')
-              : t('noNotificationsYet')}
+              ? (t('allCaughtUpNoUnread' as any))
+              : (t('noNotificationsYet' as any))}
           </Text>
+          <TouchableOpacity
+            onPress={async () => {
+              setLoading(true);
+              await fetchNotifications(1, false);
+            }}
+            style={{ marginTop: 12, paddingHorizontal: 16, paddingVertical: 10, backgroundColor: '#EEF2FF', borderRadius: 8 }}
+          >
+            <Text style={{ color: '#334155', fontWeight: '600' }}>{t('retry' as any) || 'Retry'}</Text>
+          </TouchableOpacity>
         </View>
       )}
+      </View>
       
       {/* Job Request Notification Modal */}
       <JobRequestNotificationModal
@@ -378,15 +461,23 @@ export default function NotificationHistoryScreen(): React.ReactElement {
         onResponse={async (accepted, requestId) => {
           console.log(`Job request ${accepted ? 'accepted' : 'declined'}: ${requestId}`);
           // Refresh notifications after response
-          await fetchNotifications();
+          await fetchNotifications(1, false);
         }}
       />
-    </View>
+    </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
+  safeArea: {
+    flex: 1,
+    backgroundColor: "#1a2f4d",
+  },
   container: {
+    flex: 1,
+    backgroundColor: "#F8F9FA",
+  },
+  contentArea: {
     flex: 1,
     backgroundColor: "#F8F9FA",
   },
@@ -402,28 +493,30 @@ const styles = StyleSheet.create({
     color: "#666",
   },
   header: {
-    paddingTop: 40,
-    paddingBottom: 20,
-    paddingHorizontal: 16,
+    paddingTop: 12,
+    paddingBottom: 10,
+    paddingHorizontal: 14,
   },
   headerTop: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    marginBottom: 16,
+    marginBottom: 10,
   },
   backBtn: {
-    padding: 8,
+    paddingVertical: 6,
+    paddingRight: 8,
+    paddingLeft: 0,
   },
   headerTitle: {
-    fontSize: 24,
+    fontSize: 21,
     fontWeight: "700",
     color: "#fff",
     flex: 1,
     textAlign: "center",
   },
   headerRight: {
-    width: 40,
+    width: 32,
     alignItems: "flex-end",
   },
   badgeCircle: {
@@ -441,20 +534,20 @@ const styles = StyleSheet.create({
   },
   filterContainer: {
     flexDirection: "row",
-    gap: 8,
+    gap: 6,
   },
   filterTab: {
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    borderRadius: 20,
-    backgroundColor: "rgba(255,255,255,0.2)",
+    paddingHorizontal: 14,
+    paddingVertical: 7,
+    borderRadius: 16,
+    backgroundColor: "rgba(255,255,255,0.16)",
   },
   filterTabActive: {
     backgroundColor: "#fff",
   },
   filterText: {
     color: "rgba(255,255,255,0.8)",
-    fontSize: 14,
+    fontSize: 12,
     fontWeight: "600",
   },
   filterTextActive: {
@@ -463,32 +556,32 @@ const styles = StyleSheet.create({
   listContainer: {
     flex: 1,
     paddingHorizontal: 12,
-    paddingTop: 12,
+    paddingTop: 10,
   },
   markAllBtn: {
     flexDirection: "row",
     alignItems: "center",
-    paddingHorizontal: 16,
-    paddingVertical: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
     backgroundColor: "#F3F0FF",
     borderRadius: 8,
-    marginBottom: 12,
+    marginBottom: 10,
     gap: 8,
   },
   markAllText: {
     color: "#1a2f4d",
-    fontSize: 14,
+    fontSize: 13,
     fontWeight: "600",
   },
   notificationItem: {
     flexDirection: "row",
     backgroundColor: "#fff",
-    borderRadius: 12,
-    padding: 16,
+    borderRadius: 10,
+    padding: 12,
     marginBottom: 8,
     alignItems: "flex-start",
-    gap: 12,
-    borderLeftWidth: 4,
+    gap: 10,
+    borderLeftWidth: 3,
     borderLeftColor: "transparent",
   },
   notificationItemUnread: {
@@ -496,37 +589,44 @@ const styles = StyleSheet.create({
     borderLeftColor: "#667eea",
   },
   iconBg: {
-    width: 48,
-    height: 48,
-    borderRadius: 12,
+    width: 38,
+    height: 38,
+    borderRadius: 10,
     justifyContent: "center",
     alignItems: "center",
   },
   notificationContent: {
     flex: 1,
+    paddingTop: 1,
   },
   notificationTitle: {
-    fontSize: 16,
+    fontSize: 14,
     fontWeight: "700",
     color: "#1F2937",
-    marginBottom: 4,
+    marginBottom: 2,
   },
   notificationBody: {
-    fontSize: 14,
+    fontSize: 12,
     color: "#6B7280",
-    marginBottom: 6,
-    lineHeight: 20,
+    marginBottom: 4,
+    lineHeight: 17,
   },
   notificationTime: {
-    fontSize: 12,
+    fontSize: 11,
     color: "#9CA3AF",
   },
   unreadBadge: {
-    width: 12,
-    height: 12,
-    borderRadius: 6,
+    width: 10,
+    height: 10,
+    borderRadius: 5,
     backgroundColor: "#667eea",
-    marginTop: 2,
+    marginTop: 4,
+  },
+  skeletonItem: {
+    height: 64,
+    backgroundColor: '#EEE',
+    borderRadius: 10,
+    marginBottom: 8,
   },
   emptyContainer: {
     flex: 1,

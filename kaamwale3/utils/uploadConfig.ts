@@ -6,7 +6,7 @@
 // File size limits (in bytes)
 export const UPLOAD_LIMITS = {
   PROFILE_PHOTO: 5 * 1024 * 1024, // 5 MB
-  VERIFICATION_DOCUMENT: 2 * 1024 * 1024, // 2 MB
+  VERIFICATION_DOCUMENT: 4 * 1024 * 1024, // 4 MB
   DEFAULT: 5 * 1024 * 1024, // 5 MB
 };
 
@@ -54,7 +54,6 @@ export const UPLOAD_ERROR_CODES = {
   SIGNATURE_EXPIRED: 'SIGNATURE_EXPIRED',
   RATE_LIMIT_EXCEEDED: 'RATE_LIMIT_EXCEEDED',
   UPLOAD_FAILED: 'UPLOAD_FAILED',
-  INVALID_DIMENSIONS: 'INVALID_DIMENSIONS',
   USER_CANCELLED: 'USER_CANCELLED',
 };
 
@@ -67,7 +66,6 @@ export const ERROR_MESSAGES: Record<string, string> = {
   SIGNATURE_EXPIRED: 'Security token expired. Please try again.',
   RATE_LIMIT_EXCEEDED: 'Too many uploads. Please wait a moment before trying again.',
   UPLOAD_FAILED: 'Upload failed. Please try again.',
-  INVALID_DIMENSIONS: 'Image dimensions are invalid. Please choose another image.',
   USER_CANCELLED: 'Upload cancelled.',
 };
 
@@ -78,11 +76,3 @@ export enum LogLevel {
   WARN = 'WARN',
   ERROR = 'ERROR',
 }
-
-// Image validation constraints
-export const IMAGE_CONSTRAINTS = {
-  MIN_WIDTH: 100,
-  MIN_HEIGHT: 100,
-  MAX_WIDTH: 4000,
-  MAX_HEIGHT: 4000,
-};

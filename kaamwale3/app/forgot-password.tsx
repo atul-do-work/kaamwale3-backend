@@ -3,6 +3,7 @@ import { View, Text, TextInput, TouchableOpacity, Alert, StatusBar, ActivityIndi
 import { useRouter } from 'expo-router';
 import { API_BASE } from '../utils/config';
 import styles from '../styles/LoginScreenStyles';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
 export default function ForgotPasswordScreen() {
   const router = useRouter();
@@ -42,7 +43,7 @@ export default function ForgotPasswordScreen() {
   };
 
   return (
-    <View style={styles.container}>
+    <SafeAreaView style={styles.container} edges={['top', 'left', 'right']}>
       <StatusBar barStyle="light-content" backgroundColor="#007bff" />
       <View style={{ width: '100%', alignItems: 'center' }}>
         <Text style={styles.title}>Forgot Password</Text>
@@ -73,6 +74,6 @@ export default function ForgotPasswordScreen() {
           <Text style={styles.forgotPasswordText}>Back to Login</Text>
         </TouchableOpacity>
       </View>
-    </View>
+    </SafeAreaView>
   );
 }

@@ -15,10 +15,11 @@ import { LinearGradient } from "expo-linear-gradient";
 import { useRouter, useFocusEffect } from "expo-router";
 import { useAuth } from "../context/AuthContext";
 import * as ImagePicker from "expo-image-picker";
-import * as FileSystem from "expo-file-system";
+import { getFileInfo, readFileAsBase64 } from "../utils/fileSystem";
 import { SERVER_URL } from "../utils/config";
 import api from "../utils/api";
 import { uploadToCloudinaryDirect } from "../utils/cloudinaryDirectUpload";
+import { SafeAreaView } from "react-native-safe-area-context";
 
 interface VerificationDocument {
   type: string;
@@ -49,12 +50,17 @@ const DOCUMENT_TYPES = [
   { id: "gst", label: "GST Certificate", icon: "business" },
 ];
 
-const VERIFICATION_FILE_SIZE_LIMIT = 2 * 1024 * 1024; // 2MB
+const VERIFICATION_FILE_SIZE_LIMIT = 4 * 1024 * 1024; // 4MB
 
 async function getFileSize(uri: string) {
   try {
-    const info = await FileSystem.getInfoAsync(uri);
-    return typeof (info as any).size === 'number' ? (info as any).size : 0;
+    const fileInfo = await getFileInfo(uri);
+    const size = typeof fileInfo.size === 'number' ? fileInfo.size : 0;
+    if (size > 0) return size;
+    
+    // Fallback: read as base64 to estimate size
+    const base64 = await readFileAsBase64(uri);
+    return Math.ceil((base64.length * 3) / 4);
   } catch (err) {
     console.warn("Failed to read file size", err);
     return 0;
@@ -69,17 +75,10 @@ async function validateVerificationFile(uri: string) {
   if (size > VERIFICATION_FILE_SIZE_LIMIT) {
     return {
       valid: false,
-      message: "Selected file is too large. Please choose an image smaller than 2MB.",
+      message: "Selected file is too large. Please choose an image smaller than 4MB.",
     };
   }
   return { valid: true, size };
-}
-
-function isValidImageDimension(width?: number, height?: number) {
-  if (!width || !height) return false;
-  const minDimension = 300;
-  const ratio = width / height;
-  return width >= minDimension && height >= minDimension && ratio >= 0.75 && ratio <= 1.33;
 }
 
 export default function VerificationScreen(): React.ReactElement {
@@ -135,9 +134,7 @@ export default function VerificationScreen(): React.ReactElement {
   const pickDocument = async () => {
     try {
       const result = await ImagePicker.launchImageLibraryAsync({
-
         allowsEditing: true,
-        aspect: [4, 3],
         quality: 0.8,
       });
 
@@ -146,10 +143,6 @@ export default function VerificationScreen(): React.ReactElement {
         const validation = await validateVerificationFile(asset.uri);
         if (!validation.valid) {
           Alert.alert("Error", validation.message);
-          return;
-        }
-        if (!isValidImageDimension(asset.width, asset.height)) {
-          Alert.alert("Error", "Invalid image dimensions. Please choose a different image.");
           return;
         }
         setSelectedFile({
@@ -176,7 +169,6 @@ export default function VerificationScreen(): React.ReactElement {
 
       const result = await ImagePicker.launchCameraAsync({
         allowsEditing: true,
-        aspect: [4, 3],
         quality: 0.8,
       });
 
@@ -185,10 +177,6 @@ export default function VerificationScreen(): React.ReactElement {
         const validation = await validateVerificationFile(asset.uri);
         if (!validation.valid) {
           Alert.alert("Error", validation.message);
-          return;
-        }
-        if (!isValidImageDimension(asset.width, asset.height)) {
-          Alert.alert("Error", "Invalid image dimensions. Please choose a different image.");
           return;
         }
         setSelectedFile({
@@ -296,10 +284,10 @@ export default function VerificationScreen(): React.ReactElement {
 
   if (loading) {
     return (
-      <View style={styles.centerContainer}>
+      <SafeAreaView style={styles.centerContainer} edges={['top', 'left', 'right']}>
         <ActivityIndicator size="large" color="#667eea" />
         <Text style={styles.loadingText}>Loading verification status...</Text>
-      </View>
+      </SafeAreaView>
     );
   }
 
@@ -310,7 +298,8 @@ export default function VerificationScreen(): React.ReactElement {
     verificationStatus?.kycStatus === "complete";
 
   return (
-    <ScrollView style={styles.container}>
+    <SafeAreaView style={styles.container} edges={['top', 'left', 'right']}>
+      <ScrollView style={styles.container}>
       {/* Header */}
       <LinearGradient colors={["#667eea", "#A78BFA"]} style={styles.header}>
         <TouchableOpacity
@@ -588,7 +577,8 @@ export default function VerificationScreen(): React.ReactElement {
 
         <View style={styles.bottomPadding} />
       </View>
-    </ScrollView>
+      </ScrollView>
+    </SafeAreaView>
   );
 }
 

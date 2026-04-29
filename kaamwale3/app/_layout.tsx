@@ -8,6 +8,7 @@ import { registerForPushNotificationsAsync } from '../services/notification';
 import { LanguageProvider } from '../context/LanguageContext';
 import { AuthProvider } from '../context/AuthContext';
 import { API_BASE } from '../utils/config';
+import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 // ******************** 1st step 
 // Prevent splash screen from auto-hiding
@@ -153,111 +154,113 @@ export default function RootLayout() {
   }, []);
 
   return (
-    <AuthProvider>
-      <LanguageProvider>
-        <View style={{ flex: 1 }}>
-          <Stack screenOptions={{ headerShown: false }}>
-            {/* Login/Auth screen is the entry point */}
-            <Stack.Screen name="index" />
-            
-            {/* Forgot Password screens */}
-            <Stack.Screen name="forgot-password" />
-            <Stack.Screen name="forgot-password-otp" />
-            <Stack.Screen name="forgot-password-reset" />
-            
-            {/* Home with role-based routing */}
-            <Stack.Screen name="home" />
-            
-            {/* Other screens */}
-            <Stack.Screen name="register" />
-            <Stack.Screen name="waiting" />
-            <Stack.Screen name="verify-otp" />
-            <Stack.Screen name="dashboard/index" />
-            <Stack.Screen name="ActivityHistory" />
-            <Stack.Screen name="DocumentsAndPolicies" />
-            <Stack.Screen name="GigHistory" />
-            <Stack.Screen name="HelpCentre" />
-            <Stack.Screen name="NotificationHistory" />
-            <Stack.Screen name="PaymentHistory" />
-            <Stack.Screen name="Settings" />
-            <Stack.Screen name="SupportTickets" />
-            <Stack.Screen name="Verification" />
-            <Stack.Screen name="VideosAndTutorials" />
-          </Stack>
+    <SafeAreaProvider>
+      <AuthProvider>
+        <LanguageProvider>
+          <View style={{ flex: 1 }}>
+            <Stack screenOptions={{ headerShown: false }}>
+              {/* Login/Auth screen is the entry point */}
+              <Stack.Screen name="index" />
+              
+              {/* Forgot Password screens */}
+              <Stack.Screen name="forgot-password" />
+              <Stack.Screen name="forgot-password-otp" />
+              <Stack.Screen name="forgot-password-reset" />
+              
+              {/* Home with role-based routing */}
+              <Stack.Screen name="home" />
+              
+              {/* Other screens */}
+              <Stack.Screen name="register" />
+              <Stack.Screen name="waiting" />
+              <Stack.Screen name="verify-otp" />
+              <Stack.Screen name="dashboard/index" />
+              <Stack.Screen name="ActivityHistory" />
+              <Stack.Screen name="DocumentsAndPolicies" />
+              <Stack.Screen name="GigHistory" />
+              <Stack.Screen name="HelpCentre" />
+              <Stack.Screen name="NotificationHistory" />
+              <Stack.Screen name="PaymentHistory" />
+              <Stack.Screen name="Settings" />
+              <Stack.Screen name="SupportTickets" />
+              <Stack.Screen name="Verification" />
+              <Stack.Screen name="VideosAndTutorials" />
+            </Stack>
 
-          <Modal
-            visible={modalVisible}
-            transparent
-            animationType="fade"
-            onRequestClose={() => {
-              if (modalOptions?.cancelable === false) return;
-              setModalVisible(false);
-              modalOptions?.onDismiss?.();
-            }}
-          >
-            <View
-              style={{
-                flex: 1,
-                backgroundColor: 'rgba(0,0,0,0.45)',
-                justifyContent: 'center',
-                alignItems: 'center',
-                paddingHorizontal: 18,
+            <Modal
+              visible={modalVisible}
+              transparent
+              animationType="fade"
+              onRequestClose={() => {
+                if (modalOptions?.cancelable === false) return;
+                setModalVisible(false);
+                modalOptions?.onDismiss?.();
               }}
             >
-              <TouchableOpacity
-                activeOpacity={1}
-                onPress={dismissAlert}
-                style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }}
-              />
               <View
                 style={{
-                  width: '100%',
-                  maxWidth: 360,
-                  backgroundColor: '#ffffff',
-                  borderRadius: 14,
-                  padding: 18,
-                  borderWidth: 1,
-                  borderColor: '#e5e7eb',
+                  flex: 1,
+                  backgroundColor: 'rgba(0,0,0,0.45)',
+                  justifyContent: 'center',
+                  alignItems: 'center',
+                  paddingHorizontal: 18,
                 }}
               >
-                <Text style={{ fontSize: 18, fontWeight: '700', color: '#0f172a', marginBottom: 8 }}>
-                  {modalTitle || 'Notice'}
-                </Text>
-                <Text style={{ fontSize: 14, color: '#334155', lineHeight: 20, marginBottom: 16 }}>
-                  {modalMessage || ''}
-                </Text>
+                <TouchableOpacity
+                  activeOpacity={1}
+                  onPress={dismissAlert}
+                  style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }}
+                />
+                <View
+                  style={{
+                    width: '100%',
+                    maxWidth: 360,
+                    backgroundColor: '#ffffff',
+                    borderRadius: 14,
+                    padding: 18,
+                    borderWidth: 1,
+                    borderColor: '#e5e7eb',
+                  }}
+                >
+                  <Text style={{ fontSize: 18, fontWeight: '700', color: '#0f172a', marginBottom: 8 }}>
+                    {modalTitle || 'Notice'}
+                  </Text>
+                  <Text style={{ fontSize: 14, color: '#334155', lineHeight: 20, marginBottom: 16 }}>
+                    {modalMessage || ''}
+                  </Text>
 
-                <View style={{ flexDirection: 'row', justifyContent: 'flex-end' }}>
-                  {modalButtons.map((button, idx) => {
-                    const isCancel = button.style === 'cancel';
-                    const isDestructive = button.style === 'destructive';
-                    return (
-                      <TouchableOpacity
-                        key={`${button.text}-${idx}`}
-                        style={{
-                          paddingHorizontal: 14,
-                          paddingVertical: 10,
-                          borderRadius: 8,
-                          marginLeft: 8,
-                          backgroundColor: isCancel ? '#f1f5f9' : isDestructive ? '#ef4444' : '#1a2f4d',
-                        }}
-                        onPress={() => {
-                          setModalVisible(false);
-                          button.onPress?.();
-                        }}
-                      >
-                        <Text style={{ color: isCancel ? '#0f172a' : '#ffffff', fontWeight: '700', fontSize: 13 }}>
-                          {button.text || 'OK'}
-                        </Text>
-                      </TouchableOpacity>
-                    );
-                  })}
+                  <View style={{ flexDirection: 'row', justifyContent: 'flex-end' }}>
+                    {modalButtons.map((button, idx) => {
+                      const isCancel = button.style === 'cancel';
+                      const isDestructive = button.style === 'destructive';
+                      return (
+                        <TouchableOpacity
+                          key={`${button.text}-${idx}`}
+                          style={{
+                            paddingHorizontal: 14,
+                            paddingVertical: 10,
+                            borderRadius: 8,
+                            marginLeft: 8,
+                            backgroundColor: isCancel ? '#f1f5f9' : isDestructive ? '#ef4444' : '#1a2f4d',
+                          }}
+                          onPress={() => {
+                            setModalVisible(false);
+                            button.onPress?.();
+                          }}
+                        >
+                          <Text style={{ color: isCancel ? '#0f172a' : '#ffffff', fontWeight: '700', fontSize: 13 }}>
+                            {button.text || 'OK'}
+                          </Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
                 </View>
               </View>
-            </View>
-          </Modal>
-        </View>
-      </LanguageProvider>
-    </AuthProvider>
+            </Modal>
+          </View>
+        </LanguageProvider>
+      </AuthProvider>
+    </SafeAreaProvider>
   );
 }

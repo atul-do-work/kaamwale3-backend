@@ -31,16 +31,9 @@ export default function PremiumPlansModal({
   const [plansLoading, setPlansLoading] = React.useState(false);
   const [walletBalance, setWalletBalance] = React.useState(0);
   const [plans, setPlans] = React.useState<Array<{ id: string; name: string; price: number; features: string[]; popular?: boolean }>>([]);
+  const [paymentSuccess, setPaymentSuccess] = useState(false);
+  const [successMessage, setSuccessMessage] = useState("")
   const subscribeInFlightRef = useRef(false);
-
-  // Fetch wallet balance when modal opens
-  React.useEffect(() => {
-    if (visible) {
-      setError("");
-      fetchWalletBalance();
-      fetchPlans();
-    }
-  }, [visible]);
 
   const fetchWalletBalance = async () => {
     try {
@@ -72,12 +65,24 @@ export default function PremiumPlansModal({
     }
   };
 
+  // Fetch plans and wallet balance when modal becomes visible
+  React.useEffect(() => {
+    if (visible) {
+      setError("");
+      setPaymentSuccess(false);
+      fetchPlans();
+      fetchWalletBalance();
+    }
+  }, [visible]);
+
   const handleSubscribe = async (planId: string) => {
     if (subscribeInFlightRef.current || subscribing) return;
 
     try {
       subscribeInFlightRef.current = true;
       setError("");
+      setPaymentSuccess(false);
+      setSuccessMessage("");
       setSubscribing(true);
       setSubscribingPlanId(planId);
       const idempotencyKey = `premium_${planId}_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
@@ -96,8 +101,21 @@ export default function PremiumPlansModal({
           console.log("✅ Premium activated instantly:", data.premiumPlan);
         }
 
+        // ✅ Show success state instead of immediately closing
+        const selectedPlan = plans.find(p => p.id === planId);
+        setSuccessMessage(`Successfully subscribed to ${selectedPlan?.name || planId}!`);
+        setPaymentSuccess(true);
+
+        // Refresh wallet balance to show updated amount
+        await fetchWalletBalance();
+
+        // Call onPlanSelected but don't close modal yet
         await onPlanSelected(planId);
-        onClose();
+
+        // Auto-close after showing success for 3 seconds
+        setTimeout(() => {
+          onClose();
+        }, 3000);
       } else {
         setError(data.message || "Subscription failed");
       }
@@ -132,11 +150,15 @@ export default function PremiumPlansModal({
           <View style={{ paddingHorizontal: 20, marginBottom: 15 }}>
             <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
               <View>
-                <Text style={{ fontSize: 20, fontWeight: "bold", color: "#333" }}>Choose Plan</Text>
-                <Text style={{ fontSize: 12, color: "#666", marginTop: 4 }}>Wallet Balance: {"\u20B9"}{walletBalance}</Text>
+                <Text style={{ fontSize: 20, fontWeight: "bold", color: "#333" }}>
+                  {paymentSuccess ? "Payment Successful" : "Choose Plan"}
+                </Text>
+                <Text style={{ fontSize: 12, color: "#666", marginTop: 4 }}>
+                  Wallet Balance: {"\u20B9"}{walletBalance}
+                </Text>
               </View>
-              <TouchableOpacity onPress={onClose} disabled={subscribing}>
-                <MaterialIcons name="close" size={24} color="#666" />
+              <TouchableOpacity onPress={onClose} disabled={subscribing || paymentSuccess}>
+                <MaterialIcons name="close" size={24} color={subscribing || paymentSuccess ? "#ccc" : "#666"} />
               </TouchableOpacity>
             </View>
           </View>
@@ -154,6 +176,32 @@ export default function PremiumPlansModal({
               }}
             >
               <Text style={{ color: "#d32f2f", fontSize: 13, fontWeight: "500" }}>{error}</Text>
+            </View>
+          ) : null}
+
+          {paymentSuccess ? (
+            <View
+              style={{
+                backgroundColor: "#e8f5e8",
+                borderLeftWidth: 4,
+                borderLeftColor: "#2e7d32",
+                padding: 12,
+                marginHorizontal: 15,
+                marginBottom: 12,
+                borderRadius: 4,
+                alignItems: "center",
+              }}
+            >
+              <MaterialIcons name="check-circle" size={32} color="#2e7d32" />
+              <Text style={{ color: "#2e7d32", fontSize: 16, fontWeight: "bold", marginTop: 8 }}>
+                Payment Successful!
+              </Text>
+              <Text style={{ color: "#2e7d32", fontSize: 14, textAlign: "center", marginTop: 4 }}>
+                {successMessage}
+              </Text>
+              <Text style={{ color: "#666", fontSize: 12, marginTop: 8 }}>
+                This modal will close automatically...
+              </Text>
             </View>
           ) : null}
 
@@ -186,7 +234,7 @@ export default function PremiumPlansModal({
             ) : null}
 
             {plans.map((plan) => {
-              const hasSufficientBalance = walletBalance >= plan.price;
+              // ✅ REMOVED: Frontend balance check - backend handles this securely
               return (
               <LinearGradient
                 key={plan.id}
@@ -254,25 +302,45 @@ export default function PremiumPlansModal({
 
                   <TouchableOpacity
                     onPress={() => handleSubscribe(plan.id)}
-                    disabled={subscribing || plansLoading || !hasSufficientBalance}
+                    disabled={subscribing || plansLoading || paymentSuccess}
                     style={{
                       backgroundColor: plan.popular ? "#FFD700" : "#2E8B57",
                       paddingVertical: 10,
                       borderRadius: 6,
-                      opacity: subscribing || plansLoading || !hasSufficientBalance ? 0.6 : 1,
+                      opacity: subscribing || plansLoading || paymentSuccess ? 0.6 : 1,
                     }}
                   >
                     {subscribing && subscribingPlanId === plan.id ? (
                       <ActivityIndicator color={plan.popular ? "#333" : "#fff"} size="small" />
+                    ) : subscribing ? (
+                      <Text
+                        style={{
+                          textAlign: "center",
+                          fontWeight: "bold",
+                          color: plan.popular ? "#333" : "#fff",
+                        }}
+                      >
+                        Processing...
+                      </Text>
+                    ) : paymentSuccess ? (
+                      <Text
+                        style={{
+                          textAlign: "center",
+                          fontWeight: "bold",
+                          color: plan.popular ? "#333" : "#fff",
+                        }}
+                      >
+                        ✓ Subscribed
+                      </Text>
                     ) : (
                       <Text
                         style={{
                           textAlign: "center",
                           fontWeight: "bold",
-                          color: !hasSufficientBalance ? "#f8f8f8" : plan.popular ? "#333" : "#fff",
+                          color: plan.popular ? "#333" : "#fff",
                         }}
                       >
-                        {hasSufficientBalance ? "Choose Plan" : "Insufficient Wallet Balance"}
+                        Choose Plan
                       </Text>
                     )}
                   </TouchableOpacity>
@@ -283,14 +351,14 @@ export default function PremiumPlansModal({
 
             <TouchableOpacity
               onPress={onClose}
-              disabled={subscribing}
+              disabled={subscribing || paymentSuccess}
               style={{
                 paddingVertical: 12,
                 marginBottom: 20,
                 borderTopWidth: 1,
                 borderTopColor: "#eee",
                 marginTop: 10,
-                opacity: subscribing ? 0.6 : 1,
+                opacity: subscribing || paymentSuccess ? 0.6 : 1,
               }}
             >
               <Text
@@ -301,7 +369,7 @@ export default function PremiumPlansModal({
                   fontSize: 14,
                 }}
               >
-                Cancel
+                {paymentSuccess ? "Close" : "Cancel"}
               </Text>
             </TouchableOpacity>
           </ScrollView>

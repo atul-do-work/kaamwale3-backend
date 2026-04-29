@@ -2,8 +2,8 @@ import React, { createContext, useContext, useEffect, useState, ReactNode } from
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { secureSet, secureGet, secureDelete } from '../utils/secureStore';
 import { socket } from '../utils/socket';
-import { API_BASE } from '../utils/config';
 import { premiumCacheManager } from '../utils/premiumCacheManager';
+import { isPremiumPlanActive, mergePremiumPlan } from '../utils/premiumPlanState';
 
 type AuthContextType = {
   accessToken: string | null;
@@ -11,13 +11,7 @@ type AuthContextType = {
   loading: boolean;
   saveTokens: (accessToken: string | null, refreshToken?: string | null, user?: any) => Promise<void>;
   logout: () => Promise<void>;
-  /**
-   * ✅ Update user premium status instantly (called when premium subscription received)
-   */
   updateUserPremium: (premiumPlan: any) => Promise<void>;
-  /**
-   * ✅ Generic update for any user field (profilePhoto, etc.)
-   */
   updateUserField: (field: string, value: any) => Promise<void>;
 };
 
@@ -28,30 +22,68 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const [user, setUser] = useState<any | null>(null);
   const [loading, setLoading] = useState(true);
 
-  // ✅ Listen for premium subscription updates via socket
-  useEffect(() => {
-    socket.on('premiumSubscriptionUpdate', async (data: any) => {
-      console.log('📡 Received premium subscription update:', data);
+  const persistUser = React.useCallback(async (nextUser: any | null) => {
+    setUser(nextUser);
+    if (nextUser) {
+      await AsyncStorage.setItem('user', JSON.stringify(nextUser));
+    } else {
+      await AsyncStorage.removeItem('user');
+    }
+  }, []);
 
-      // ✅ FIXED: Invalidate cache but don't immediately fetch - let components fetch when needed
+  const syncPremiumCache = React.useCallback((plan: any) => {
+    if (!plan) {
+      premiumCacheManager.invalidate();
+      return;
+    }
+
+    premiumCacheManager.setCache({
+      success: true,
+      isActive: isPremiumPlanActive(plan),
+      premiumPlan: plan.type || 'free',
+      premiumDetails: plan,
+      entitlements: plan.entitlements || null,
+    });
+  }, []);
+
+  useEffect(() => {
+    const handlePremiumSubscriptionUpdate = async (data: any) => {
+      console.log('Received premium subscription update:', data);
       premiumCacheManager.invalidate();
 
-      // Update current user if it's them (don't make API call)
-      if (user && user.phone === data.contractorPhone) {
-        // Just update the local user object with new status if available
-        if (data.planType) {
-          const updatedUser = { ...user, premiumPlan: { ...user.premiumPlan, type: data.planType } };
-          setUser(updatedUser);
-          await AsyncStorage.setItem('user', JSON.stringify(updatedUser));
-          console.log('✅ Premium status updated instantly via socket');
-        }
+      if (!data?.contractorPhone || !data?.planType) {
+        return;
       }
-    });
 
-    return () => {
-      socket.off('premiumSubscriptionUpdate');
+      setUser((currentUser: any | null) => {
+        if (!currentUser || currentUser.phone !== data.contractorPhone) {
+          return currentUser;
+        }
+
+        const updatedPlan = mergePremiumPlan(currentUser.premiumPlan, data.premiumPlan || {
+          type: data.planType,
+          expiryDate: data.expiryDate || currentUser.premiumPlan?.expiryDate || null,
+          graceUntil: data.graceUntil || currentUser.premiumPlan?.graceUntil || null,
+          status: data.status || (data.planType === 'free' ? 'inactive' : currentUser.premiumPlan?.status || 'active'),
+          entitlements: data.entitlements || currentUser.premiumPlan?.entitlements || null,
+          subscriptionId: data.subscriptionId || currentUser.premiumPlan?.subscriptionId || null,
+        });
+        const updatedUser = { ...currentUser, premiumPlan: updatedPlan };
+
+        AsyncStorage.setItem('user', JSON.stringify(updatedUser)).catch((err) =>
+          console.warn('Failed to persist socket premium update', err)
+        );
+        syncPremiumCache(updatedPlan);
+        return updatedUser;
+      });
+      console.log('Premium status updated instantly via socket');
     };
-  }, [user]);
+
+    socket.on('premiumSubscriptionUpdate', handlePremiumSubscriptionUpdate);
+    return () => {
+      socket.off('premiumSubscriptionUpdate', handlePremiumSubscriptionUpdate);
+    };
+  }, [syncPremiumCache]);
 
   useEffect(() => {
     (async () => {
@@ -59,8 +91,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         const a = await AsyncStorage.getItem('accessToken');
         const u = await AsyncStorage.getItem('user');
         const refresh = await secureGet('refreshToken');
-        // If refresh exists but accessToken missing, leave null (will refresh on demand)
-        // Migrate refreshToken from AsyncStorage (if present) into SecureStore
+
         if (!refresh) {
           const oldRefresh = await AsyncStorage.getItem('refreshToken');
           if (oldRefresh) {
@@ -73,24 +104,28 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
             }
           }
         }
-        setAccessToken(a);
-        setUser(u ? JSON.parse(u) : null);
 
-        // ✅ ON APP STARTUP: Fetch fresh premium status (don't trust cached login data)
+        const parsedUser = u ? JSON.parse(u) : null;
+
+        setAccessToken(a);
+        setUser(parsedUser);
+
+        if (parsedUser?.premiumPlan) {
+          syncPremiumCache(parsedUser.premiumPlan);
+        }
+
         if (a) {
-          console.log('🚀 App started: Fetching fresh premium status...');
+          console.log('App started: Fetching fresh premium status...');
           const freshStatus = await premiumCacheManager.forceFresh(a);
           const freshPremiumDetails = freshStatus?.premiumDetails;
-          if (freshPremiumDetails) {
-            if (u) {
-              const parsedUser = JSON.parse(u);
-              parsedUser.premiumPlan = freshPremiumDetails;
-              setUser(parsedUser);
-              await AsyncStorage.setItem('user', JSON.stringify(parsedUser));
-              console.log('✅ User updated with fresh premium status on startup');
-            } else {
-              console.log('⚠️ No cached user found on startup. Premium status refreshed in cache only.');
-            }
+          if (freshPremiumDetails && parsedUser) {
+            const updatedUser = {
+              ...parsedUser,
+              premiumPlan: mergePremiumPlan(parsedUser.premiumPlan, freshPremiumDetails),
+            };
+            await persistUser(updatedUser);
+            syncPremiumCache(updatedUser.premiumPlan);
+            console.log('User updated with fresh premium status on startup');
           }
         }
       } catch (e) {
@@ -99,7 +134,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         setLoading(false);
       }
     })();
-  }, []);
+  }, [persistUser, syncPremiumCache]);
 
   const saveTokens = async (aToken: string | null, refreshToken?: string | null, userObj?: any) => {
     try {
@@ -111,41 +146,37 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       else if (refreshToken === null) await secureDelete('refreshToken');
 
       if (userObj) {
-        setUser(userObj);
-        await AsyncStorage.setItem('user', JSON.stringify(userObj));
+        await persistUser(userObj);
+        if (userObj.premiumPlan) {
+          syncPremiumCache(userObj.premiumPlan);
+        }
       }
     } catch (e) {
       console.warn('saveTokens error', e);
     }
   };
 
-  /**
-   * ✅ Update user premium instantly when subscription completes
-   */
   const updateUserPremium = async (premiumPlan: any) => {
     try {
-      if (user) {
-        const updatedUser = { ...user, premiumPlan };
-        setUser(updatedUser);
-        await AsyncStorage.setItem('user', JSON.stringify(updatedUser));
-        console.log('✅ User premium status updated in AuthContext');
-      }
+      if (!user) return;
+
+      const updatedPlan = mergePremiumPlan(user.premiumPlan, premiumPlan);
+      const updatedUser = { ...user, premiumPlan: updatedPlan };
+      await persistUser(updatedUser);
+      syncPremiumCache(updatedPlan);
+      console.log('User premium status updated in AuthContext');
     } catch (e) {
       console.warn('updateUserPremium error', e);
     }
   };
 
-  /**
-   * ✅ Generic update for any user field (profilePhoto, name, etc.)
-   */
   const updateUserField = async (field: string, value: any) => {
     try {
-      if (user) {
-        const updatedUser = { ...user, [field]: value };
-        setUser(updatedUser);
-        await AsyncStorage.setItem('user', JSON.stringify(updatedUser));
-        console.log(`✅ User ${field} updated in AuthContext:`, value);
-      }
+      if (!user) return;
+
+      const updatedUser = { ...user, [field]: value };
+      await persistUser(updatedUser);
+      console.log(`User ${field} updated in AuthContext:`, value);
     } catch (e) {
       console.warn(`updateUserField error for ${field}:`, e);
     }
@@ -155,6 +186,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     try {
       setAccessToken(null);
       setUser(null);
+      premiumCacheManager.clear();
       await AsyncStorage.removeItem('accessToken');
       await AsyncStorage.removeItem('user');
       await secureDelete('refreshToken');

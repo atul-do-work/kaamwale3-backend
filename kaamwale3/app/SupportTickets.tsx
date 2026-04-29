@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from "react";
+import React, { useEffect, useState, useCallback, useRef } from "react";
 import { useLanguage } from "../context/LanguageContext";
 import {
   View,
@@ -14,6 +14,8 @@ import {
   Image,
   RefreshControl,
 } from "react-native";
+
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialIcons, Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import { useRouter, useFocusEffect } from "expo-router";
@@ -83,9 +85,12 @@ export default function SupportTicketsScreen(): React.ReactElement {
     screenshots: [] as string[],
   });
   const [creating, setCreating] = useState(false);
+  const isFetchingRef = useRef(false);
 
-  // Fetch tickets
+  // Fetch tickets (locked to avoid duplicate concurrent calls)
   const fetchTickets = useCallback(async () => {
+    if (isFetchingRef.current) return;
+    isFetchingRef.current = true;
     try {
       if (!accessToken) {
         Alert.alert(t('support_error_title'), t('support_error_no_token'));
@@ -96,8 +101,9 @@ export default function SupportTicketsScreen(): React.ReactElement {
       const data = res.data;
 
       if (data.success) {
-        setTickets(data.tickets || []);
-        console.log(`📋 Loaded ${data.tickets.length} support tickets`);
+        const next = data.tickets || [];
+        setTickets((prev) => (JSON.stringify(prev) !== JSON.stringify(next) ? next : prev));
+        console.log(`📋 Loaded ${next.length} support tickets`);
       } else {
         Alert.alert(t('support_error_title'), data.message || t('support_error_load'));
       }
@@ -105,19 +111,15 @@ export default function SupportTicketsScreen(): React.ReactElement {
       console.error("Fetch tickets error:", error);
       Alert.alert(t('support_error_title'), t('support_error_load'));
     } finally {
+      isFetchingRef.current = false;
       setLoading(false);
     }
   }, [accessToken]);
 
-  // Initial load
-  useEffect(() => {
-    setLoading(true);
-    fetchTickets();
-  }, [fetchTickets]);
-
-  // Reload on focus
+  // Load on focus (covers first mount and when returning to screen)
   useFocusEffect(
     useCallback(() => {
+      setLoading(true);
       fetchTickets();
     }, [fetchTickets])
   );
@@ -220,14 +222,13 @@ export default function SupportTicketsScreen(): React.ReactElement {
         throw new Error(t('support_error_no_token') || 'Authentication required');
       }
 
-      const screenshots = [] as string[];
-      for (const uri of newTicket.screenshots) {
-        const screenshotUrl = await uploadSupportScreenshot(uri);
-        if (!screenshotUrl) {
-          throw new Error('Screenshot upload failed');
-        }
-        screenshots.push(screenshotUrl);
-      }
+      const screenshots = await Promise.all(
+        newTicket.screenshots.map(async (uri) => {
+          const screenshotUrl = await uploadSupportScreenshot(uri);
+          if (!screenshotUrl) throw new Error('Screenshot upload failed');
+          return screenshotUrl;
+        })
+      );
 
       const res = await api.post(`/support/create`, {
         type: newTicket.type,
@@ -343,7 +344,7 @@ export default function SupportTicketsScreen(): React.ReactElement {
   }
 
   return (
-    <View style={styles.container}>
+    <SafeAreaView style={styles.container}>
       {/* Header */}
       <LinearGradient colors={["#667eea", "#A78BFA"]} style={styles.header}>
         <View style={styles.headerTop}>
@@ -631,7 +632,7 @@ export default function SupportTicketsScreen(): React.ReactElement {
           </View>
         </Modal>
       )}
-    </View>
+    </SafeAreaView>
   );
 }
 

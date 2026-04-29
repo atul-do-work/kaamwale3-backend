@@ -16,7 +16,6 @@ import ViewWorkersModal from "../../../components/ViewWorkersModal";
 import { useContractorStats } from '../../../hooks/useContractorStats'; // ✅ Real-time earnings/stats
 import { useLeaderboard } from '../../../hooks/useLeaderboard'; // ✅ Real-time rank
 import { statsCacheManager } from '../../../utils/statsCacheManager'; // ✅ BUG #5: Invalidate contractor profile cache
-import { uploadToCloudinaryDirect } from '../../../utils/cloudinaryDirectUpload';
 import * as Progress from 'react-native-progress';
 
 // ✅ Decorative Bubble Component
@@ -369,8 +368,8 @@ export default function ContractorProfile(): React.ReactElement {
   // ✅ Show custom logout confirmation modal
   const handleLogout = () => {
     setModalType("confirm");
-    setModalTitle("Logout");
-    setModalMessage("Are you sure you want to logout?");
+    setModalTitle(t('logout'));
+    setModalMessage(t('confirmLogout'));
     setPendingAction(() => async () => {
       try {
         await clearAllUserData();
@@ -396,20 +395,31 @@ export default function ContractorProfile(): React.ReactElement {
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (status !== "granted") {
       setModalType("info");
-      setModalTitle("Permission Denied");
-      setModalMessage("Camera roll permission is required.");
+      setModalTitle(t('permissionDenied'));
+      setModalMessage(t('cameraRollPermissionRequired'));
       setLogoutModalVisible(true);
       return;
     }
 
     const result: any = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ['images'],
       allowsEditing: true,
-      aspect: [1, 1],
       quality: 1,
     });
 
     if (!result.canceled && result.assets?.length > 0) {
-      const uri = result.assets[0].uri;
+      const asset = result.assets[0];
+      const uri = asset.uri;
+      const previousPhoto = profilePhoto;
+      console.log('[profile-upload] contractor picker result', {
+        phone: authUser?.phone || null,
+        uri,
+        mimeType: asset.mimeType || null,
+        fileName: asset.fileName || null,
+        fileSize: asset.fileSize || null,
+        width: asset.width || null,
+        height: asset.height || null,
+      });
       
       // Show temporary local preview
       setProfilePhoto(uri);
@@ -418,44 +428,42 @@ export default function ContractorProfile(): React.ReactElement {
       // Upload to backend
       if (accessToken) {
         try {
-          // Step 1: Upload directly to Cloudinary with progress tracking
-          const uploadResult = await uploadToCloudinaryDirect(
+          console.log('[profile-upload] contractor auth resolved', {
+            phone: authUser?.phone || null,
+            hasAccessToken: Boolean(accessToken),
+          });
+          setUploadProgress(25);
+          const formData = new FormData();
+          formData.append("file", {
             uri,
-            'kaamwale/profiles',
-            `contractor-${authUser?.phone}-${Date.now()}`,
-            {
-              onProgress: (progress) => {
-                const percent = Math.round((progress.loaded / progress.total) * 100);
-                setUploadProgress(percent);
-              },
-              uploadType: 'profile',
-              authToken: accessToken,
-              maxRetries: 3,
-            }
-          );
+            name: asset.fileName || `contractor-${authUser?.phone}-${Date.now()}.jpg`,
+            type: asset.mimeType || "image/jpeg",
+          } as any);
+          formData.append("type", "profilePhoto");
 
-          if (!uploadResult.success) {
-            setModalType("error");
-            setModalTitle("Upload Failed");
-            setModalMessage(uploadResult.error || "Failed to upload profile photo");
-            setLogoutModalVisible(true);
-            return;
-          }
-
-          // Step 2: Save the URL to backend
-          const response = await fetch(`${API_BASE}/users/photo`, {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              Authorization: `Bearer ${accessToken}`,
-            },
-            body: JSON.stringify({
-              fileUrl: uploadResult.fileUrl || uploadResult.url,
-              cloudinaryPublicId: uploadResult.publicId
-            }),
+          console.log('[profile-upload] contractor multipart upload start', {
+            phone: authUser?.phone || null,
+            fileName: asset.fileName || null,
+            mimeType: asset.mimeType || "image/jpeg",
           });
 
+          const response = await fetch(`${API_BASE}/upload/upload`, {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${accessToken}`,
+            },
+            body: formData,
+          });
+          setUploadProgress(90);
+
           const data = await response.json();
+          console.log('[profile-upload] contractor /upload/upload response', {
+            phone: authUser?.phone || null,
+            status: response.status,
+            success: data?.success,
+            hasProfilePhoto: Boolean(data?.profilePhoto),
+            message: data?.message || null,
+          });
           if (data.success) {
             // ✅ Use backend URL only - update both local state and AuthContext
             setProfilePhoto(data.profilePhoto);
@@ -474,21 +482,31 @@ export default function ContractorProfile(): React.ReactElement {
             }
             
             setModalType("info");
-            setModalTitle("Success");
-            setModalMessage("Profile photo updated successfully");
+            setModalTitle(t('success'));
+            setModalMessage(t('profilePhotoUpdatedSuccess'));
             setLogoutModalVisible(true);
           } else {
+            setProfilePhoto(previousPhoto || authUser?.profilePhoto || null);
             setModalType("info");
-            setModalTitle("Error");
-            setModalMessage(data.message || "Failed to upload profile photo");
+            setModalTitle(t('error'));
+            setModalMessage(data.message || t('photoUploadError'));
             setLogoutModalVisible(true);
           }
         } catch (err) {
           console.error("Profile photo upload error:", err);
+          console.error('[profile-upload] contractor multipart failure', {
+            phone: authUser?.phone || null,
+            message: (err as any)?.message || 'unknown error',
+            responseStatus: (err as any)?.response?.status || null,
+            responseData: (err as any)?.response?.data || null,
+          });
+          setProfilePhoto(previousPhoto || authUser?.profilePhoto || null);
           setModalType("info");
-          setModalTitle("Error");
-          setModalMessage("Failed to upload profile photo. Please try again.");
+          setModalTitle(t('error'));
+          setModalMessage(t('photoUploadRetry'));
           setLogoutModalVisible(true);
+        } finally {
+          setUploadProgress(0);
         }
       }
     }
@@ -505,7 +523,7 @@ export default function ContractorProfile(): React.ReactElement {
 
   const infoCards = [
     {
-      header: "Job Manager",
+      header: t('jobManager'),
       icon: "work-outline",
       color: "#667eea",
       options: [
@@ -513,20 +531,20 @@ export default function ContractorProfile(): React.ReactElement {
       ],
     },
     {
-      header: "Finance",
+      header: t('finance'),
       icon: "payments",
       color: "#2ECC71",
       options: [
-        { name: "Transaction History", icon: "history", screen: "/PaymentHistory" },
+        { name: t('transactionHistory'), icon: "history", screen: "/PaymentHistory" },
       ],
     },
     {
-      header: "Account",
+      header: t('account'),
       icon: "account-circle",
       color: "#F39C12",
       options: [
-        { name: "Settings", icon: "settings", screen: "/Settings" },
-        { name: "Help Centre", icon: "help", screen: "/HelpCentre" },
+        { name: t('settings'), icon: "settings", screen: "/Settings" },
+        { name: t('helpCentre'), icon: "help", screen: "/HelpCentre" },
       ],
     },
   ];
@@ -620,7 +638,7 @@ export default function ContractorProfile(): React.ReactElement {
       {/* Logout Button */}
       <TouchableOpacity style={styles.logoutButton} onPress={handleLogout}>
         <MaterialIcons name="logout" size={20} color="#fff" />
-        <Text style={styles.logoutText}>Logout</Text>
+        <Text style={styles.logoutText}>{t('logout')}</Text>
       </TouchableOpacity>
     </ScrollView>
 
@@ -693,13 +711,13 @@ export default function ContractorProfile(): React.ReactElement {
                 style={[styles.modalButton, { backgroundColor: "#E0E0E0" }]}
                 onPress={() => setLogoutModalVisible(false)}
               >
-                <Text style={[styles.modalButtonText, { color: "#333" }]}>Cancel</Text>
+                  <Text style={[styles.modalButtonText, { color: "#333" }]}>{t('cancel')}</Text>
               </TouchableOpacity>
               <TouchableOpacity
                 style={[styles.modalButton, { backgroundColor: "#FF6B6B" }]}
                 onPress={handleModalConfirm}
               >
-                <Text style={styles.modalButtonText}>Logout</Text>
+                <Text style={styles.modalButtonText}>{t('logout')}</Text>
               </TouchableOpacity>
             </View>
           ) : (
@@ -707,7 +725,7 @@ export default function ContractorProfile(): React.ReactElement {
               style={[styles.modalButton, { backgroundColor: "#2196F3", marginHorizontal: 20, marginBottom: 20 }]}
               onPress={() => setLogoutModalVisible(false)}
             >
-              <Text style={styles.modalButtonText}>OK</Text>
+              <Text style={styles.modalButtonText}>{t('ok')}</Text>
             </TouchableOpacity>
           )}
         </View>

@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import {
   View,
   Text,
@@ -10,19 +10,25 @@ import {
   TextInput,
   ActivityIndicator,
 } from "react-native";
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { MaterialIcons, Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import { useRouter } from "expo-router";
 import { useLanguage } from "../context/LanguageContext";
+import { useAuth } from "../context/AuthContext";
 import { Language } from "../constants/translations";
 import api from "../utils/api";
+import { SafeAreaView } from "react-native-safe-area-context";
 
 export default function SettingsScreen(): React.ReactElement {
   const router = useRouter();
-  const { language: appLanguage, setLanguage, t } = useLanguage();
+  const { logout } = useAuth();
+  const { setLanguage, t } = useLanguage();
   const [notifications, setNotifications] = useState(true);
   const [emailAlerts, setEmailAlerts] = useState(true);
-  const [darkMode, setDarkMode] = useState(false);
+  const [language, setLanguageState] = useState<Language>('en');
+  const [isLoadingPreferences, setIsLoadingPreferences] = useState(true);
+  const [isSavingSettings, setIsSavingSettings] = useState(false);
   const [bankAccount, setBankAccount] = useState<any>(null);
   const [upiAccount, setUpiAccount] = useState<any>(null);
   const [payoutMethod, setPayoutMethod] = useState<"bank" | "upi">("bank");
@@ -31,10 +37,14 @@ export default function SettingsScreen(): React.ReactElement {
   const [showAddUpi, setShowAddUpi] = useState(false);
   const [showBankInfo, setShowBankInfo] = useState(true);
   const [showUpiInfo, setShowUpiInfo] = useState(true);
+  const [showPayoutConfirmModal, setShowPayoutConfirmModal] = useState(false);
+  const [pendingPayoutMethod, setPendingPayoutMethod] = useState<"bank" | "upi" | null>(null);
+  const [showDeleteAccountModal, setShowDeleteAccountModal] = useState(false);
   const [upiIdInput, setUpiIdInput] = useState("");
   const [isSavingBank, setIsSavingBank] = useState(false);
   const [isSavingUpi, setIsSavingUpi] = useState(false);
   const [isSavingPayoutMethod, setIsSavingPayoutMethod] = useState(false);
+  const [isDeletingAccount, setIsDeletingAccount] = useState(false);
   const [isPayoutAllowed, setIsPayoutAllowed] = useState(true);
   const [bankDetails, setBankDetails] = useState({
     accountHolderName: "",
@@ -42,7 +52,6 @@ export default function SettingsScreen(): React.ReactElement {
     accountNumberConfirm: "",
     ifscCode: "",
     bankName: "",
-    accountType: "savings",
   });
   
   // ✅ Modal state for alerts
@@ -65,48 +74,172 @@ export default function SettingsScreen(): React.ReactElement {
     setModalVisible(true);
   };
 
-  const handleLanguageChange = async (lang: Language) => {
-    await setLanguage(lang);
+  const SETTINGS_STORAGE_KEY = "userSettings";
+
+  const persistLocalSettings = async (settings: { notifications: boolean; emailAlerts: boolean; }) => {
+    try {
+      const json = JSON.stringify(settings);
+      await AsyncStorage.setItem(SETTINGS_STORAGE_KEY, json);
+    } catch (error) {
+      console.error("Error saving local settings:", error);
+    }
   };
 
-  const handleSave = () => {
-    showStatusModal("success", t("success"), t("settingsSaved"));
+  const loadLocalSettings = async () => {
+    try {
+      const stored = await AsyncStorage.getItem(SETTINGS_STORAGE_KEY);
+      if (stored) {
+        try {
+          const parsed = JSON.parse(stored);
+          setNotifications(parsed.notifications ?? true);
+          setEmailAlerts(parsed.emailAlerts ?? true);
+        } catch (parseErr) {
+          console.warn('Corrupted local settings, clearing storage');
+          await AsyncStorage.removeItem(SETTINGS_STORAGE_KEY);
+        }
+      }
+    } catch (error) {
+      console.error("Error loading local settings:", error);
+    }
   };
 
-  React.useEffect(() => {
-    fetchBankAccount();
-    fetchUpiAccount();
-    fetchPayoutMethod();
+  const loadPreferences = async (signal?: AbortSignal) => {
+    setIsLoadingPreferences(true);
+    try {
+      const res = await api.get(`/users/preferences`, { signal });
+      if (res.data?.success && res.data.preferences) {
+        if (signal?.aborted) return;
+        setNotifications(res.data.preferences.notifications ?? true);
+        setEmailAlerts(res.data.preferences.emailAlerts ?? true);
+        setLanguageState(res.data.preferences.language ?? 'en');
+        await persistLocalSettings(res.data.preferences);
+        return;
+      }
+    } catch (err: any) {
+      if (err?.name === 'CanceledError' || err?.code === 'ERR_CANCELED') {
+        console.log('loadPreferences aborted');
+        return;
+      }
+      console.error("Error fetching user preferences:", err);
+    } finally {
+      await loadLocalSettings();
+      setIsLoadingPreferences(false);
+    }
+  };
+
+  const handleSave = async () => {
+    if (isSavingSettings) return;
+    setIsSavingSettings(true);
+    try {
+      const payload = {
+        notifications,
+        emailAlerts,
+        language,
+      };
+      const res = await api.post(`/users/preferences`, payload);
+      if (res.data?.success) {
+        await persistLocalSettings(payload);
+        setLanguage(language);
+        showStatusModal("success", t("success"), t("settingsSaved"));
+      } else {
+        showStatusModal("error", t("error"), res.data?.message || tx("serverError", "Something went wrong"));
+      }
+    } catch (err: any) {
+      showStatusModal("error", t("error"), err.response?.data?.message || tx("serverError", "Something went wrong"));
+    } finally {
+      setIsSavingSettings(false);
+    }
+  };
+
+  const handleLanguageChange = (lang: Language) => {
+    setLanguageState(lang);
+  };
+
+  const handleDeleteAccount = async () => {
+    if (isDeletingAccount) return;
+    setIsDeletingAccount(true);
+    try {
+      const res = await api.delete(`/users/account`);
+      if (res.data?.success) {
+        setShowDeleteAccountModal(false);
+        await AsyncStorage.multiRemove([
+          "token",
+          "profilePhoto",
+          "userSettings",
+          "locationProvidedOnLogin",
+          "tempRegistration",
+          "fcmToken",
+          "lastKnownLocation",
+          "leaderboard",
+          "myRank",
+          "myScore",
+        ]);
+        await logout();
+        router.replace("/");
+        return;
+      }
+      showStatusModal("error", t("error"), res.data?.message || "Failed to delete account");
+    } catch (err: any) {
+      showStatusModal("error", t("error"), err.response?.data?.message || "Failed to delete account");
+    } finally {
+      setIsDeletingAccount(false);
+    }
+  };
+
+  useEffect(() => {
+    let isMounted = true;
+    const controller = new AbortController();
+
+    const init = async () => {
+      // sequence calls to avoid races and loading flicker
+      await loadPreferences(controller.signal);
+      if (!isMounted) return;
+      await fetchBankAccount(controller.signal);
+      if (!isMounted) return;
+      await fetchUpiAccount(controller.signal);
+      if (!isMounted) return;
+      await fetchPayoutMethod(controller.signal);
+    };
+
+    init();
+
+    return () => {
+      isMounted = false;
+      controller.abort();
+    };
   }, []);
 
-  const fetchBankAccount = async () => {
+  const fetchBankAccount = async (signal?: AbortSignal) => {
     try {
-      const res = await api.get(`/wallet/bank-account`);
+      const res = await api.get(`/wallet/bank-account`, { signal });
       if (res.data.success) setBankAccount(res.data.bankAccount);
     } catch (err: any) {
+      if (err?.name === 'CanceledError' || err?.code === 'ERR_CANCELED') return;
       if (err?.response?.status === 403) setIsPayoutAllowed(false);
       console.error("Error fetching bank account:", err);
     }
   };
 
-  const fetchUpiAccount = async () => {
+  const fetchUpiAccount = async (signal?: AbortSignal) => {
     try {
-      const res = await api.get(`/wallet/upi`);
+      const res = await api.get(`/wallet/upi`, { signal });
       if (res.data.success) setUpiAccount(res.data.upi || null);
     } catch (err: any) {
+      if (err?.name === 'CanceledError' || err?.code === 'ERR_CANCELED') return;
       if (err?.response?.status === 403) setIsPayoutAllowed(false);
       console.error("Error fetching UPI details:", err);
     }
   };
 
-  const fetchPayoutMethod = async () => {
+  const fetchPayoutMethod = async (signal?: AbortSignal) => {
     try {
-      const res = await api.get(`/wallet/payout-method`);
+      const res = await api.get(`/wallet/payout-method`, { signal });
       if (res.data?.success && ["bank", "upi"].includes(res.data.payoutMethod)) {
         setPayoutMethod(res.data.payoutMethod);
       }
       setIsPayoutAllowed(true);
     } catch (err: any) {
+      if (err?.name === 'CanceledError' || err?.code === 'ERR_CANCELED') return;
       if (err?.response?.status === 403) {
         setIsPayoutAllowed(false);
         return;
@@ -116,14 +249,32 @@ export default function SettingsScreen(): React.ReactElement {
   };
 
   const persistPayoutMethod = async (method: "bank" | "upi") => {
+    setPendingPayoutMethod(method);
+    setShowPayoutConfirmModal(true);
+  };
+
+  const confirmPayoutMethodChange = async () => {
+    if (!pendingPayoutMethod) return;
+    
+    setShowPayoutConfirmModal(false);
     setIsSavingPayoutMethod(true);
+    const method = pendingPayoutMethod;
+    setPendingPayoutMethod(null);
+    
+    const previousMethod = payoutMethod;
     try {
       const res = await api.post(`/wallet/payout-method`, { method });
       if (res.data?.success) {
-        setPayoutMethod(res.data.payoutMethod || method);
+        const updatedMethod = res.data.payoutMethod || method;
+        setPayoutMethod(updatedMethod);
+        showStatusModal("success", t("success"), res.data?.message || tx("settingsSaved", "Payout method updated"));
+        return true;
       }
-      return true;
+      setPayoutMethod(previousMethod);
+      showStatusModal("error", t("error"), res.data?.message || tx("serverError", "Failed to update payout method"));
+      return false;
     } catch (err: any) {
+      setPayoutMethod(previousMethod);
       showStatusModal("error", t("error"), err.response?.data?.message || tx("serverError", "Something went wrong"));
       return false;
     } finally {
@@ -156,6 +307,13 @@ export default function SettingsScreen(): React.ReactElement {
 
     setIsSavingBank(true);
     try {
+      // Ensure we're using HTTPS for sensitive bank requests
+      const base = (api as any)?.defaults?.baseURL || '';
+      if (base && !base.startsWith('https://')) {
+        showStatusModal('error', t('error'), tx('insecureConnection', 'Insecure connection. Please use HTTPS'));
+        setIsSavingBank(false);
+        return;
+      }
       const res = await api.post(`/wallet/bank-account/add`, bankDetails);
       if (res.data.success) {
         setBankAccount(res.data.bankAccount);
@@ -168,7 +326,6 @@ export default function SettingsScreen(): React.ReactElement {
           accountNumberConfirm: "",
           ifscCode: "",
           bankName: "",
-          accountType: "savings",
         });
         await persistPayoutMethod("bank");
         showStatusModal("success", t("success"), tx("bankSaved", "Bank account saved"));
@@ -231,30 +388,16 @@ export default function SettingsScreen(): React.ReactElement {
       items: [
         {
           label: t('notifications'),
-          desc: "Receive job alerts and updates",
+          desc: tx('notificationSettingsDesc', 'Receive job alerts and updates'),
           value: notifications,
           onChange: setNotifications,
           type: "toggle",
         },
         {
-          label: "Email Alerts",
-          desc: "Get email updates for important events",
+          label: t('emailAlerts'),
+          desc: tx('emailAlertsDesc', 'Get email updates for important events'),
           value: emailAlerts,
           onChange: setEmailAlerts,
-          type: "toggle",
-        },
-      ],
-    },
-    {
-      title: "Display",
-      icon: "brightness-4",
-      color: "#4ECDC4",
-      items: [
-        {
-          label: "Dark Mode",
-          desc: "Easy on the eyes",
-          value: darkMode,
-          onChange: setDarkMode,
           type: "toggle",
         },
       ],
@@ -266,19 +409,19 @@ export default function SettingsScreen(): React.ReactElement {
       items: [
         {
           label: t('english'),
-          value: appLanguage === "en",
+          value: language === "en",
           onChange: () => handleLanguageChange("en"),
           type: "radio",
         },
         {
           label: t('hindi'),
-          value: appLanguage === "hi",
+          value: language === "hi",
           onChange: () => handleLanguageChange("hi"),
           type: "radio",
         },
         {
           label: t('marathi'),
-          value: appLanguage === "mr",
+          value: language === "mr",
           onChange: () => handleLanguageChange("mr"),
           type: "radio",
         },
@@ -286,8 +429,22 @@ export default function SettingsScreen(): React.ReactElement {
     },
   ];
 
+  if (isLoadingPreferences) {
+    return (
+      <SafeAreaView style={styles.centerContainer} edges={['top', 'left', 'right']}>
+        <ActivityIndicator size="large" color="#6C63FF" />
+        <Text style={styles.loadingText}>{t('loading')}</Text>
+      </SafeAreaView>
+    );
+  }
+
   return (
-    <ScrollView style={styles.container} contentContainerStyle={styles.contentContainer}>
+    <SafeAreaView style={styles.safeArea} edges={['top', 'left', 'right']}>
+      <ScrollView
+        style={styles.container}
+        contentContainerStyle={styles.contentContainer}
+        showsVerticalScrollIndicator={false}
+      >
       {/* Header */}
       <LinearGradient colors={["#6C63FF", "#A78BFA"]} style={styles.header}>
         <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}>
@@ -351,9 +508,15 @@ export default function SettingsScreen(): React.ReactElement {
         </TouchableOpacity>
 
         {/* Save Button */}
-        <TouchableOpacity style={[styles.saveButton, styles.rowButton]} onPress={handleSave}>
-          <MaterialIcons name="save" size={18} color="#fff" />
-          <Text style={styles.rowButtonText}>{t('save')} Settings</Text>
+        <TouchableOpacity style={[styles.saveButton, styles.rowButton]} onPress={handleSave} disabled={isSavingSettings}>
+          {isSavingSettings ? (
+            <ActivityIndicator size="small" color="#fff" />
+          ) : (
+            <>
+              <MaterialIcons name="save" size={18} color="#fff" />
+              <Text style={styles.rowButtonText}>{t('saveSettings')}</Text>
+            </>
+          )}
         </TouchableOpacity>
       </View>
 
@@ -374,6 +537,21 @@ export default function SettingsScreen(): React.ReactElement {
           )}
         </TouchableOpacity>
       )}
+
+      <View style={styles.accountActionsCard}>
+        <Text style={styles.accountActionsTitle}>Account</Text>
+        <Text style={styles.accountActionsText}>
+          Delete your account and permanently remove your linked data.
+        </Text>
+        <TouchableOpacity
+          style={[styles.deleteAccountButton, isDeletingAccount && styles.buttonDisabled]}
+          onPress={() => setShowDeleteAccountModal(true)}
+          disabled={isDeletingAccount}
+        >
+          <MaterialIcons name="delete-outline" size={18} color="#fff" />
+          <Text style={styles.deleteAccountButtonText}>Delete Account</Text>
+        </TouchableOpacity>
+      </View>
 
       {isPayoutAllowed && bankAccount && showBankInfo && (
         <View style={styles.linkedCardBank}>
@@ -482,7 +660,6 @@ export default function SettingsScreen(): React.ReactElement {
               disabled={isSavingPayoutMethod}
               onPress={async () => {
                 if (isSavingPayoutMethod) return;
-                setPayoutMethod("bank");
                 setShowPayoutMethodModal(false);
                 if (!bankAccount) {
                   setShowAddBank(true);
@@ -503,7 +680,6 @@ export default function SettingsScreen(): React.ReactElement {
               disabled={isSavingPayoutMethod}
               onPress={async () => {
                 if (isSavingPayoutMethod) return;
-                setPayoutMethod("upi");
                 setShowPayoutMethodModal(false);
                 if (!upiAccount) {
                   setShowAddUpi(true);
@@ -618,65 +794,137 @@ export default function SettingsScreen(): React.ReactElement {
         </View>
       </Modal>
 
+      {/* Payout Method Confirmation Modal */}
+      <Modal visible={showPayoutConfirmModal} transparent animationType="fade">
+        <View style={styles.backdrop}>
+          <View style={styles.payoutModalCard}>
+            <Text style={styles.payoutModalTitle}>{t('confirmPayoutMethod')}</Text>
+            <Text style={styles.confirmModalMessage}>
+              {pendingPayoutMethod === 'bank' 
+                ? `Your earnings will be sent to ${bankAccount?.maskedAccount ? `****${bankAccount.maskedAccount.slice(-4)}` : 'your bank account'}.`
+                : `Your earnings will be sent to ${upiAccount?.maskedUpiId || 'your UPI ID'}.`
+              }
+            </Text>
+            <Text style={styles.confirmModalMessage}>Continue?</Text>
+            <View style={styles.confirmModalButtons}>
+              <TouchableOpacity 
+                style={[styles.confirmModalButton, styles.cancelButton]}
+                onPress={() => {
+                  setShowPayoutConfirmModal(false);
+                  setPendingPayoutMethod(null);
+                }}
+              >
+                <Text style={styles.cancelButtonText}>{t('cancel')}</Text>
+              </TouchableOpacity>
+              <TouchableOpacity 
+                style={[styles.confirmModalButton, styles.confirmButton]}
+                onPress={confirmPayoutMethodChange}
+              >
+                <Text style={styles.confirmButtonText}>{t('ok')}</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal visible={showDeleteAccountModal} transparent animationType="fade">
+        <View style={styles.backdrop}>
+          <View style={styles.deleteModalCard}>
+            <View style={styles.deleteModalIconWrap}>
+              <MaterialIcons name="delete-forever" size={28} color="#DC2626" />
+            </View>
+            <Text style={styles.deleteModalTitle}>Delete Account?</Text>
+            <Text style={styles.deleteModalText}>
+              This action is permanent. Your account and linked data will be removed from the app.
+            </Text>
+            <View style={styles.confirmModalButtons}>
+              <TouchableOpacity
+                style={[styles.confirmModalButton, styles.cancelButton]}
+                onPress={() => setShowDeleteAccountModal(false)}
+                disabled={isDeletingAccount}
+              >
+                <Text style={styles.cancelButtonText}>{t('cancel')}</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.confirmModalButton, styles.deleteConfirmButton, isDeletingAccount && styles.buttonDisabled]}
+                onPress={handleDeleteAccount}
+                disabled={isDeletingAccount}
+              >
+                {isDeletingAccount ? (
+                  <ActivityIndicator size="small" color="#fff" />
+                ) : (
+                  <Text style={styles.deleteConfirmButtonText}>Delete</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
       <View style={styles.spacer} />
-    </ScrollView>
+      </ScrollView>
+    </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
+  safeArea: {
+    flex: 1,
+    backgroundColor: "#6C63FF",
+  },
   container: {
     flex: 1,
     backgroundColor: "#F8F9FA",
   },
   contentContainer: {
-    paddingBottom: 120,
+    paddingBottom: 84,
   },
   header: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    paddingHorizontal: 16,
-    paddingTop: 40,
-    paddingBottom: 20,
+    paddingHorizontal: 14,
+    paddingTop: 6,
+    paddingBottom: 10,
   },
   backBtn: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: "rgba(255,255,255,0.2)",
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: "rgba(255,255,255,0.16)",
     justifyContent: "center",
     alignItems: "center",
   },
   headerTitle: {
-    fontSize: 20,
+    fontSize: 18,
     fontWeight: "700",
     color: "#fff",
   },
   sectionContainer: {
     backgroundColor: "#fff",
-    marginHorizontal: 16,
-    marginTop: 16,
-    borderRadius: 12,
+    marginHorizontal: 14,
+    marginTop: 14,
+    borderRadius: 10,
     overflow: "hidden",
   },
   sectionHeader: {
     flexDirection: "row",
     alignItems: "center",
-    paddingHorizontal: 16,
-    paddingVertical: 14,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
     borderBottomWidth: 1,
     borderBottomColor: "#F0F0F0",
   },
   iconBg: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
+    width: 32,
+    height: 32,
+    borderRadius: 16,
     justifyContent: "center",
     alignItems: "center",
-    marginRight: 12,
+    marginRight: 10,
   },
   sectionTitle: {
-    fontSize: 16,
+    fontSize: 17,
     fontWeight: "600",
     color: "#1A1A1A",
   },
@@ -684,48 +932,49 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    paddingHorizontal: 16,
-    paddingVertical: 14,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
   },
   settingInfo: {
     flex: 1,
+    paddingRight: 10,
   },
   settingLabel: {
-    fontSize: 15,
-    fontWeight: "500",
+    fontSize: 16,
+    fontWeight: "600",
     color: "#333",
   },
   settingDesc: {
-    fontSize: 12,
-    color: "#999",
-    marginTop: 4,
+    fontSize: 13,
+    color: "#7C8493",
+    marginTop: 3,
   },
   radioBtn: {
-    width: 24,
-    height: 24,
-    borderRadius: 12,
-    borderWidth: 2,
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    borderWidth: 1.5,
     borderColor: "#D3D3D3",
     justifyContent: "center",
     alignItems: "center",
   },
   radioDot: {
-    width: 12,
-    height: 12,
-    borderRadius: 6,
+    width: 10,
+    height: 10,
+    borderRadius: 5,
   },
   divider: {
     height: 1,
     backgroundColor: "#F5F5F5",
-    marginLeft: 68,
+    marginLeft: 56,
   },
   verificationButton: {
-    marginTop: 24,
+    marginTop: 18,
     flexDirection: "row",
     backgroundColor: "#10B981",
-    borderRadius: 12,
+    borderRadius: 10,
     paddingHorizontal: 12,
-    paddingVertical: 14,
+    paddingVertical: 12,
     justifyContent: "center",
     alignItems: "center",
   },
@@ -757,13 +1006,13 @@ const styles = StyleSheet.create({
     marginLeft: 12,
   },
   saveButton: {
-    marginTop: 24,
+    marginTop: 18,
     backgroundColor: "#6C63FF",
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
-    paddingVertical: 14,
-    borderRadius: 12,
+    paddingVertical: 12,
+    borderRadius: 10,
   },
   saveText: {
     color: "#fff",
@@ -772,14 +1021,14 @@ const styles = StyleSheet.create({
     marginLeft: 8,
   },
   paymentMethodButton: {
-    marginHorizontal: 16,
+    marginHorizontal: 14,
     marginTop: 12,
     marginBottom: 12,
     flexDirection: "row",
     backgroundColor: "#2563EB",
-    borderRadius: 12,
-    paddingHorizontal: 20,
-    paddingVertical: 16,
+    borderRadius: 10,
+    paddingHorizontal: 16,
+    paddingVertical: 13,
     justifyContent: "space-between",
     alignItems: "center",
   },
@@ -788,22 +1037,22 @@ const styles = StyleSheet.create({
     fontWeight: "700",
     color: "#fff",
     flex: 1,
-    marginLeft: 12,
+    marginLeft: 10,
   },
   linkedCardBank: {
-    marginHorizontal: 16,
+    marginHorizontal: 14,
     marginBottom: 10,
-    padding: 14,
-    borderRadius: 12,
+    padding: 12,
+    borderRadius: 10,
     borderWidth: 1,
     borderColor: "#DDE7FF",
     backgroundColor: "#F7FAFF",
   },
   linkedCardUpi: {
-    marginHorizontal: 16,
+    marginHorizontal: 14,
     marginBottom: 12,
-    padding: 14,
-    borderRadius: 12,
+    padding: 12,
+    borderRadius: 10,
     borderWidth: 1,
     borderColor: "#D8F6E8",
     backgroundColor: "#F2FCF7",
@@ -820,7 +1069,7 @@ const styles = StyleSheet.create({
     color: "#1A1A1A",
   },
   linkedCardText: {
-    fontSize: 13,
+    fontSize: 14,
     color: "#333",
     marginBottom: 4,
   },
@@ -855,6 +1104,38 @@ const styles = StyleSheet.create({
     padding: 16,
     zIndex: 1,
   },
+  deleteModalCard: {
+    width: "100%",
+    maxWidth: 340,
+    borderRadius: 16,
+    backgroundColor: "#fff",
+    padding: 18,
+    zIndex: 1,
+  },
+  deleteModalIconWrap: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: "#FEE2E2",
+    alignItems: "center",
+    justifyContent: "center",
+    alignSelf: "center",
+    marginBottom: 12,
+  },
+  deleteModalTitle: {
+    fontSize: 18,
+    fontWeight: "700",
+    color: "#111827",
+    textAlign: "center",
+    marginBottom: 8,
+  },
+  deleteModalText: {
+    fontSize: 14,
+    color: "#6B7280",
+    lineHeight: 20,
+    textAlign: "center",
+    marginBottom: 10,
+  },
   payoutModalTitle: {
     fontSize: 17,
     fontWeight: "700",
@@ -873,13 +1154,13 @@ const styles = StyleSheet.create({
     backgroundColor: "#F6F9FF",
   },
   methodTitle: {
-    fontSize: 14,
+    fontSize: 15,
     fontWeight: "700",
     color: "#111827",
     marginBottom: 4,
   },
   methodDesc: {
-    fontSize: 12,
+    fontSize: 13,
     color: "#6B7280",
   },
   fullModal: {
@@ -908,7 +1189,7 @@ const styles = StyleSheet.create({
     padding: 16,
   },
   inputLabel: {
-    fontSize: 13,
+    fontSize: 14,
     color: "#374151",
     fontWeight: "600",
     marginBottom: 6,
@@ -920,7 +1201,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 11,
     marginBottom: 14,
-    fontSize: 14,
+    fontSize: 15,
     color: "#111827",
     backgroundColor: "#fff",
   },
@@ -941,22 +1222,58 @@ const styles = StyleSheet.create({
     opacity: 0.7,
   },
   spacer: {
-    height: 8,
+    height: 4,
   },
   actionRow: {
     flexDirection: "row",
-    marginHorizontal: 16,
-    columnGap: 10,
+    marginHorizontal: 14,
+    columnGap: 8,
   },
   rowButton: {
     flex: 1,
   },
   rowButtonText: {
     color: "#fff",
+    fontSize: 15,
+    fontWeight: "700",
+    marginLeft: 6,
+    textAlign: "center",
+  },
+  accountActionsCard: {
+    marginHorizontal: 14,
+    marginTop: 4,
+    marginBottom: 12,
+    padding: 14,
+    borderRadius: 10,
+    backgroundColor: "#FFF7F7",
+    borderWidth: 1,
+    borderColor: "#F5CACA",
+  },
+  accountActionsTitle: {
+    fontSize: 16,
+    fontWeight: "700",
+    color: "#111827",
+    marginBottom: 4,
+  },
+  accountActionsText: {
     fontSize: 14,
+    color: "#6B7280",
+    lineHeight: 20,
+    marginBottom: 12,
+  },
+  deleteAccountButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#DC2626",
+    borderRadius: 10,
+    paddingVertical: 12,
+  },
+  deleteAccountButtonText: {
+    color: "#fff",
+    fontSize: 15,
     fontWeight: "700",
     marginLeft: 8,
-    textAlign: "center",
   },
   
   // ✅ Modal Styles
@@ -1024,10 +1341,66 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     alignItems: "center",
   },
-  
+
   modalButtonText: {
     color: "#fff",
     fontSize: 16,
     fontWeight: "700",
+  },
+  
+  confirmModalMessage: {
+    fontSize: 14,
+    color: "#6B7280",
+    textAlign: 'center',
+    marginBottom: 8,
+    lineHeight: 20,
+  },
+  confirmModalButtons: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginTop: 20,
+  },
+  confirmModalButton: {
+    flex: 1,
+    paddingVertical: 12,
+    borderRadius: 8,
+    alignItems: 'center',
+    marginHorizontal: 8,
+  },
+  cancelButton: {
+    backgroundColor: '#F3F4F6',
+  },
+  confirmButton: {
+    backgroundColor: '#2563EB',
+  },
+  deleteConfirmButton: {
+    backgroundColor: '#DC2626',
+  },
+  cancelButtonText: {
+    color: '#374151',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  confirmButtonText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  deleteConfirmButtonText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  centerContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: "#F8F9FA",
+  },
+  loadingText: {
+    marginTop: 16,
+    fontSize: 16,
+    color: "#666",
+    textAlign: 'center',
   },
 });

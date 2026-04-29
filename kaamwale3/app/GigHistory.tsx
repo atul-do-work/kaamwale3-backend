@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -8,27 +8,24 @@ import {
   FlatList,
   RefreshControl,
   Platform,
-  Dimensions,
   Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useRouter, useFocusEffect } from 'expo-router';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useAuth } from '../context/AuthContext';
 import { API_BASE } from '../utils/config';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useLanguage } from '../context/LanguageContext';
+import { connectSocket, socket } from '../utils/socket';
+import { translations } from '../constants/translations';
 
-const { width } = Dimensions.get('window');
-
-// ✅ Utility: Log user activity
 const logActivity = async (token: string | null, action: string, details: string) => {
   try {
     await fetch(`${API_BASE}/activity/log`, {
       method: 'POST',
       headers: {
-        'Authorization': `Bearer ${token}`,
+        Authorization: `Bearer ${token}`,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
@@ -42,7 +39,7 @@ const logActivity = async (token: string | null, action: string, details: string
   }
 };
 
-interface GigHistory {
+interface GigHistoryItem {
   _id: string;
   title: string;
   amount: number;
@@ -68,6 +65,16 @@ interface GigHistory {
   timeSpentMinutes?: number;
 }
 
+interface FiveDayStatus {
+  date: string;
+  jobsCompleted: number;
+  hoursWorked: number;
+  hasCompletedJob: boolean;
+  meetsMinimumHours: boolean;
+  meetsNoDeclines?: boolean;
+  dayQualified?: boolean;
+}
+
 interface IncentiveProgress {
   consecutiveDays: number;
   totalHours: number;
@@ -81,13 +88,7 @@ interface IncentiveProgress {
     allDaysHaveMinHours: boolean;
     startDate: string | null;
     endDate: string | null;
-    dailyStatus: Array<{
-      date: string;
-      jobsCompleted: number;
-      hoursWorked: number;
-      hasCompletedJob: boolean;
-      meetsMinimumHours: boolean;
-    }>;
+    dailyStatus: FiveDayStatus[];
     failedDates: string[];
     failureReason: string | null;
   } | null;
@@ -116,9 +117,16 @@ export default function GigHistory() {
   const router = useRouter();
   const { t } = useLanguage();
   const { accessToken } = useAuth();
-  
-  // ✅ State management
-  const [gigs, setGigs] = useState<GigHistory[]>([]);
+
+  const tx = useCallback(
+    (key: keyof typeof translations.en, fallback: string) => {
+      const value = t(key);
+      return value === key ? fallback : value;
+    },
+    [t]
+  );
+
+  const [gigs, setGigs] = useState<GigHistoryItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [incentiveData, setIncentiveData] = useState<IncentiveProgress | null>(null);
@@ -129,60 +137,65 @@ export default function GigHistory() {
   const [page, setPage] = useState(1);
   const [hasMore, setHasMore] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
-  const [claimingId, setClaimingId] = useState<string | null>(null); // ✅ Prevent claim race condition
+  const [claimingId, setClaimingId] = useState<string | null>(null);
+  const [isLiveRefreshing, setIsLiveRefreshing] = useState(false);
+  const [lastUpdatedAt, setLastUpdatedAt] = useState<Date | null>(null);
   const [milestones, setMilestones] = useState<Milestone[]>([
-    { id: '5days', days: 5, reward: 50, icon: 'fire', color: '#FF6B6B', completed: false, claimed: false, progress: 0 },
+    { id: '5days', days: 5, reward: 50, icon: 'local-fire-department', color: '#FF6B6B', completed: false, claimed: false, progress: 0 },
     { id: '10days', days: 10, reward: 150, icon: 'star', color: '#FFD93D', completed: false, claimed: false, progress: 0 },
     { id: '20days', days: 20, reward: 300, icon: 'favorite', color: '#FF1493', completed: false, claimed: false, progress: 0 },
   ]);
 
-  const buildFallbackIncentiveData = (reason?: string): IncentiveProgress => ({
-    consecutiveDays: 0,
-    totalHours: 0,
-    cancellationsInWindow: 0,
-    requiredDailyHours: 8,
-    requiredDaysFor5: 5,
-    fiveDayWindow: {
-      requiredDays: 5,
-      requiredDailyHours: 8,
-      daysMetMinimumHours: 0,
-      allDaysHaveMinHours: false,
-      startDate: null,
-      endDate: null,
-      dailyStatus: [],
-      failedDates: [],
-      failureReason: reason || 'No completed paid job history found',
-    },
-    eligibleFor5Days: false,
-    eligibleFor10Days: false,
-    eligibleFor20Days: false,
-    unlockedMilestones: [],
-    claimedMilestones: [],
-    availableMilestones: [],
-    lastWorkDate: null,
-  });
-
-  // ✅ Refs for cleanup (separate controllers for gigs vs incentive)
   const gigsAbortRef = useRef<AbortController | null>(null);
   const incentiveAbortRef = useRef<AbortController | null>(null);
+  const realtimeRefreshTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const isRealtimeRefreshingRef = useRef(false);
   const isMountedRef = useRef(true);
 
-  // ✅ Cleanup on unmount (abort both controllers)
+  const buildFallbackIncentiveData = useCallback(
+    (reason?: string): IncentiveProgress => ({
+      consecutiveDays: 0,
+      totalHours: 0,
+      cancellationsInWindow: 0,
+      requiredDailyHours: 8,
+      requiredDaysFor5: 5,
+      fiveDayWindow: {
+        requiredDays: 5,
+        requiredDailyHours: 8,
+        daysMetMinimumHours: 0,
+        allDaysHaveMinHours: false,
+        startDate: null,
+        endDate: null,
+        dailyStatus: [],
+        failedDates: [],
+        failureReason: reason || tx('noCompletedPaidJobHistoryFound', 'No completed paid job history found'),
+      },
+      eligibleFor5Days: false,
+      eligibleFor10Days: false,
+      eligibleFor20Days: false,
+      unlockedMilestones: [],
+      claimedMilestones: [],
+      availableMilestones: [],
+      lastWorkDate: null,
+    }),
+    [tx]
+  );
+
   useEffect(() => {
     return () => {
       isMountedRef.current = false;
       if (gigsAbortRef.current) gigsAbortRef.current.abort();
       if (incentiveAbortRef.current) incentiveAbortRef.current.abort();
+      if (realtimeRefreshTimeoutRef.current) clearTimeout(realtimeRefreshTimeoutRef.current);
     };
   }, []);
 
-  // Re-render at local midnight so today's hours reset automatically.
   useEffect(() => {
     const now = new Date();
     const nextMidnight = new Date(now);
     nextMidnight.setHours(24, 0, 0, 0);
     const ms = Math.max(1000, nextMidnight.getTime() - now.getTime());
-    const timer = setTimeout(() => setDayTick((v) => v + 1), ms);
+    const timer = setTimeout(() => setDayTick((value) => value + 1), ms);
     return () => clearTimeout(timer);
   }, [dayTick]);
 
@@ -193,18 +206,18 @@ export default function GigHistory() {
     return `${hours}.${String(minutes).padStart(2, '0')}`;
   };
 
-  const getGigPaymentStatus = (gig: GigHistory): 'paid' | 'pending' => {
+  const getGigPaymentStatus = (gig: GigHistoryItem): 'paid' | 'pending' => {
     if (Array.isArray(gig.acceptedWorkers) && gig.acceptedWorkers.length > 0) {
-      return gig.acceptedWorkers.every((w) => String(w?.paymentStatus || '').toLowerCase() === 'paid') ? 'paid' : 'pending';
+      return gig.acceptedWorkers.every((worker) => String(worker?.paymentStatus || '').toLowerCase() === 'paid') ? 'paid' : 'pending';
     }
     return String(gig.paymentStatus || '').toLowerCase() === 'paid' ? 'paid' : 'pending';
   };
 
-  const todayWorkedMinutes = React.useMemo(() => {
+  const todayWorkedMinutes = useMemo(() => {
     const now = new Date();
-    const y = now.getFullYear();
-    const m = now.getMonth();
-    const d = now.getDate();
+    const year = now.getFullYear();
+    const month = now.getMonth();
+    const day = now.getDate();
 
     return gigs.reduce((sum, gig) => {
       const isPaid = getGigPaymentStatus(gig) === 'paid';
@@ -213,242 +226,312 @@ export default function GigHistory() {
 
       const sourceDate = gig.paymentTime || gig.date || gig.acceptedAt;
       if (!sourceDate) return sum;
-      const ts = new Date(sourceDate);
-      if (Number.isNaN(ts.getTime())) return sum;
-      if (ts.getFullYear() !== y || ts.getMonth() !== m || ts.getDate() !== d) return sum;
+      const timestamp = new Date(sourceDate);
+      if (Number.isNaN(timestamp.getTime())) return sum;
+      if (timestamp.getFullYear() !== year || timestamp.getMonth() !== month || timestamp.getDate() !== day) return sum;
 
       const explicitMinutes = Number(gig.timeSpentMinutes || 0);
       if (explicitMinutes > 0) return sum + explicitMinutes;
-      const fallbackMinutes = Math.round((Number(gig.hoursWorked || 0) || 0) * 60);
-      return sum + Math.max(0, fallbackMinutes);
+      return sum + Math.max(0, Math.round((Number(gig.hoursWorked || 0) || 0) * 60));
     }, 0);
   }, [gigs, dayTick]);
 
-  // ✅ Fetch gigs and incentive progress when screen focuses
-  useFocusEffect(
-    React.useCallback(() => {
-      isMountedRef.current = true;
-      fetchGigHistory();
-      fetchIncentiveProgress();
-      return () => {
-        isMountedRef.current = false;
-      };
-    }, [accessToken])
+  const fetchGigHistory = useCallback(
+    async (pageNum: number = 1, isFresh: boolean = true) => {
+      try {
+        if (isFresh) setLoading(true);
+        else setLoadingMore(true);
+        setGigError(null);
+
+        if (!accessToken) {
+          setGigError(tx('notAuthenticated', 'Not authenticated'));
+          return;
+        }
+
+        gigsAbortRef.current = new AbortController();
+
+        const response = await fetch(`${API_BASE}/jobs/my-accepted?page=${pageNum}&limit=20`, {
+          headers: { Authorization: `Bearer ${accessToken}` },
+          signal: gigsAbortRef.current.signal,
+        });
+
+        if (response.status === 401) {
+          if (isMountedRef.current) {
+            const message = tx('sessionExpiredPleaseLoginAgain', 'Your session has expired. Please log in again.');
+            setGigError(message);
+            Alert.alert(tx('sessionExpiredTitle', 'Session Expired'), message, [
+              { text: tx('ok', 'OK'), onPress: () => router.push('/') },
+            ]);
+          }
+          return;
+        }
+
+        if (!response.ok) {
+          if (isMountedRef.current) {
+            setGigError(tx('failedToLoadGigsPullToRefresh', 'Failed to load gigs. Pull to refresh.'));
+          }
+          return;
+        }
+
+        const data = await response.json();
+        if (!isMountedRef.current) return;
+
+        const gigsData = data.gigs || (Array.isArray(data) ? data : []);
+        if (isFresh) setGigs(gigsData);
+        else setGigs((prev) => [...prev, ...gigsData]);
+
+        setHasMore(data.hasMore !== undefined ? data.hasMore : gigsData.length === 20);
+        setPage(pageNum);
+        setLastUpdatedAt(new Date());
+
+        await logActivity(accessToken, 'GIG_HISTORY_VIEWED', 'User viewed their gig history');
+      } catch (err: any) {
+        if (err.name === 'AbortError') return;
+        if (isMountedRef.current) {
+          console.error('Error fetching gig history:', err);
+          setGigError(tx('failedToLoadGigsPullToRefresh', 'Failed to load gigs. Pull to refresh.'));
+        }
+      } finally {
+        if (isMountedRef.current) {
+          setLoading(false);
+          setLoadingMore(false);
+        }
+      }
+    },
+    [accessToken, router, tx]
   );
 
-  // ✅ Fetch gigs with pagination
-  const fetchGigHistory = async (pageNum: number = 1, isFresh: boolean = true) => {
-    try {
-      if (isFresh) setLoading(true);
-      else setLoadingMore(true);
-      setGigError(null);
-
-      if (!accessToken) {
-        setGigError('Not authenticated');
-        return;
-      }
-
-      // ✅ Create new AbortController for gigs request
-      gigsAbortRef.current = new AbortController();
-
-      const res = await fetch(`${API_BASE}/jobs/my-accepted?page=${pageNum}&limit=20`, {
-        headers: { Authorization: `Bearer ${accessToken}` },
-        signal: gigsAbortRef.current.signal,
-      });
-
-      // ✅ Handle authentication errors
-      if (res.status === 401) {
-        if (isMountedRef.current) {
-          setGigError('Session expired. Please log in again.');
-          Alert.alert('Session Expired', 'Your session has expired. Please log in again.', [
-            { text: 'OK', onPress: () => router.push('/') }
-          ]);
-        }
-        return;
-      }
-
-      if (res.ok) {
-        const data = await res.json();
-        
-        if (isMountedRef.current) {
-          // ✅ Handle both new format (with gigs property) and legacy format (array)
-          const gigsData = data.gigs || (Array.isArray(data) ? data : []);
-          
-          if (isFresh) {
-            setGigs(gigsData);
-          } else {
-            setGigs(prev => [...prev, ...gigsData]);
-          }
-          
-          // ✅ Check if more pages available
-          setHasMore(data.hasMore !== undefined ? data.hasMore : gigsData.length === 20);
-          setPage(pageNum);
-          
-          await logActivity(accessToken, 'GIG_HISTORY_VIEWED', 'User viewed their gig history');
-        }
-      }
-    } catch (err: any) {
-      if (err.name === 'AbortError') {
-        console.log('Fetch aborted');
-        return; // ✅ Request was cancelled
-      }
-      
-      if (isMountedRef.current) {
-        console.error('Error fetching gig history:', err);
-        setGigError('Failed to load gigs. Pull to refresh.');
-      }
-    } finally {
-      if (isMountedRef.current) {
-        setLoading(false);
-        setLoadingMore(false);
-      }
-    }
-  };
-
-  // ✅ Fetch incentive progress from backend (NOT calculated on frontend)
-  const fetchIncentiveProgress = async () => {
+  const fetchIncentiveProgress = useCallback(async () => {
     try {
       setIncentiveLoading(true);
       setIncentiveError(null);
 
       if (!accessToken) {
-        setIncentiveData(buildFallbackIncentiveData('Not authenticated'));
-        setIncentiveError(null);
+        setIncentiveData(buildFallbackIncentiveData(tx('notAuthenticated', 'Not authenticated')));
         return;
       }
 
-      // ✅ Create new AbortController for incentive request
       incentiveAbortRef.current = new AbortController();
 
-      const res = await fetch(`${API_BASE}/incentives/progress`, {
+      const response = await fetch(`${API_BASE}/incentives/progress`, {
         headers: { Authorization: `Bearer ${accessToken}` },
         signal: incentiveAbortRef.current.signal,
       });
 
-      // ✅ Handle authentication errors
-      if (res.status === 401) {
+      if (response.status === 401) {
         if (isMountedRef.current) {
-          setIncentiveData(buildFallbackIncentiveData('Please log in to view incentives'));
-          setIncentiveError(null);
+          setIncentiveData(buildFallbackIncentiveData(tx('pleaseLoginToViewIncentives', 'Please log in to view incentives')));
         }
         return;
       }
 
-      if (res.ok) {
-        const data: IncentiveProgress = await res.json();
-        
-        if (isMountedRef.current) {
-          setIncentiveData(data);
-          setIncentiveError(null);
+      if (response.ok) {
+        const data: IncentiveProgress = await response.json();
+        if (!isMountedRef.current) return;
 
-          // ✅ Update milestones based on backend data (functional update to avoid stale closure)
-          setMilestones(prev => prev.map(m => {
-            const isClaimed = data.claimedMilestones?.includes(m.id) || false;
-            const isEligible = data.unlockedMilestones?.includes(m.id) || false;
-            
-            return {
-              ...m,
-              progress: Math.min(data.consecutiveDays / m.days, 1),
-              completed: isEligible,
-              claimed: isClaimed,
-            };
-          }));
-        }
-      } else {
-        const errData = await res.json().catch(() => ({}));
-        if (isMountedRef.current) {
-          setIncentiveData(buildFallbackIncentiveData(errData.message || 'Failed to load incentive data'));
-          setIncentiveError(null);
-        }
+        setIncentiveData(data);
+        setLastUpdatedAt(new Date());
+        setMilestones((prev) =>
+          prev.map((milestone) => ({
+            ...milestone,
+            progress: Math.min(data.consecutiveDays / milestone.days, 1),
+            completed: data.unlockedMilestones?.includes(milestone.id) || false,
+            claimed: data.claimedMilestones?.includes(milestone.id) || false,
+          }))
+        );
+        return;
+      }
+
+      const errData = await response.json().catch(() => ({}));
+      if (isMountedRef.current) {
+        setIncentiveData(buildFallbackIncentiveData(errData.message || tx('failedToLoadIncentiveData', 'Failed to load incentive data')));
       }
     } catch (err: any) {
-      if (err.name === 'AbortError') {
-        return; // ✅ Request was cancelled
-      }
-      
+      if (err.name === 'AbortError') return;
       if (isMountedRef.current) {
         console.error('Error fetching incentive progress:', err);
-        setIncentiveData(buildFallbackIncentiveData('Failed to load incentive data'));
-        setIncentiveError(null);
+        setIncentiveData(buildFallbackIncentiveData(tx('failedToLoadIncentiveData', 'Failed to load incentive data')));
       }
     } finally {
       if (isMountedRef.current) {
         setIncentiveLoading(false);
       }
     }
-  };
+  }, [accessToken, buildFallbackIncentiveData, tx]);
 
-  // ✅ Handle infinite scroll - load more gigs
+  const refreshAll = useCallback(
+    async ({ showPullRefresh = false, showLiveRefresh = false }: { showPullRefresh?: boolean; showLiveRefresh?: boolean } = {}) => {
+      if (showPullRefresh && isMountedRef.current) setRefreshing(true);
+      if (showLiveRefresh && isMountedRef.current) setIsLiveRefreshing(true);
+
+      try {
+        setPage(1);
+        await Promise.all([fetchGigHistory(1, true), fetchIncentiveProgress()]);
+      } finally {
+        if (isMountedRef.current) {
+          if (showPullRefresh) setRefreshing(false);
+          if (showLiveRefresh) setIsLiveRefreshing(false);
+        }
+      }
+    },
+    [fetchGigHistory, fetchIncentiveProgress]
+  );
+
+  const scheduleRealtimeRefresh = useCallback(() => {
+    if (isRealtimeRefreshingRef.current) return;
+    if (realtimeRefreshTimeoutRef.current) clearTimeout(realtimeRefreshTimeoutRef.current);
+
+    realtimeRefreshTimeoutRef.current = setTimeout(async () => {
+      isRealtimeRefreshingRef.current = true;
+      try {
+        await refreshAll({ showLiveRefresh: true });
+      } finally {
+        isRealtimeRefreshingRef.current = false;
+      }
+    }, 500);
+  }, [refreshAll]);
+
+  useFocusEffect(
+    useCallback(() => {
+      isMountedRef.current = true;
+      refreshAll();
+      return () => {
+        isMountedRef.current = false;
+      };
+    }, [refreshAll])
+  );
+
+  useEffect(() => {
+    if (!accessToken) return;
+
+    connectSocket();
+
+    const handleLiveRefresh = () => {
+      if (!isMountedRef.current) return;
+      scheduleRealtimeRefresh();
+    };
+
+    socket.on('jobUpdated', handleLiveRefresh);
+    socket.on('walletUpdated', handleLiveRefresh);
+    socket.on('workerStatusUpdate', handleLiveRefresh);
+
+    return () => {
+      socket.off('jobUpdated', handleLiveRefresh);
+      socket.off('walletUpdated', handleLiveRefresh);
+      socket.off('workerStatusUpdate', handleLiveRefresh);
+    };
+  }, [accessToken, scheduleRealtimeRefresh]);
+
   const handleLoadMore = () => {
     if (!loadingMore && hasMore) {
       fetchGigHistory(page + 1, false);
     }
   };
 
-  // ✅ Handle refresh
   const onRefresh = async () => {
-    setRefreshing(true);
-    setPage(1);
-    await Promise.all([
-      fetchGigHistory(1, true),
-      fetchIncentiveProgress(),
-    ]);
-    setRefreshing(false);
+    await refreshAll({ showPullRefresh: true });
   };
 
-  // ✅ Claim milestone reward
   const claimMilestone = async (milestoneId: string) => {
-    // ✅ Prevent race condition - don't allow concurrent claims
     if (claimingId) {
-      Alert.alert('Processing', 'Please wait for the current claim to complete');
+      Alert.alert(tx('processing', 'Processing'), tx('pleaseWaitCurrentClaim', 'Please wait for the current claim to complete'));
       return;
     }
 
-    try {
-      Alert.alert('Claim Reward', `Claim ₹${milestones.find(m => m.id === milestoneId)?.reward || 0} reward?`, [
-        { text: 'Cancel' },
-        {
-          text: 'Claim',
-          onPress: async () => {
-            // ✅ Lock: Mark this milestone as claiming
-            setClaimingId(milestoneId);
-            
-            try {
-              const res = await fetch(`${API_BASE}/incentives/claim/${milestoneId}`, {
-                method: 'POST',
-                headers: { Authorization: `Bearer ${accessToken}` },
-              });
+    const rewardAmount = milestones.find((milestone) => milestone.id === milestoneId)?.reward || 0;
 
-              if (res.status === 401) {
-                Alert.alert('Session Expired', 'Please log in again', [
-                  { text: 'OK', onPress: () => router.push('/') }
-                ]);
-                return;
-              }
+    Alert.alert(tx('claimReward', 'Claim Reward'), `${tx('claimRewardPrompt', 'Claim')} ₹${rewardAmount} ${tx('reward', 'reward')}?`, [
+      { text: t('cancel') },
+      {
+        text: tx('claim', 'Claim'),
+        onPress: async () => {
+          setClaimingId(milestoneId);
+          try {
+            const response = await fetch(`${API_BASE}/incentives/claim/${milestoneId}`, {
+              method: 'POST',
+              headers: { Authorization: `Bearer ${accessToken}` },
+            });
 
-              const data = await res.json();
-              
-              if (data.success) {
-                Alert.alert('Success', `₹${data.rewardAmount} added to your wallet!`);
-                await fetchIncentiveProgress(); // ✅ Refresh eligibility
-              } else if (res.status === 403) {
-                Alert.alert('Not Eligible', data.message || 'You are not eligible for this reward yet');
-              } else {
-                Alert.alert('Error', data.message || 'Failed to claim reward');
-              }
-            } catch (err) {
-              Alert.alert('Error', 'Failed to claim reward');
-              console.error(err);
-            } finally {
-              // ✅ Unlock: Clear claiming lock
-              setClaimingId(null);
+            if (response.status === 401) {
+              Alert.alert(tx('sessionExpiredTitle', 'Session Expired'), tx('pleaseLoginAgain', 'Please log in again'), [
+                { text: tx('ok', 'OK'), onPress: () => router.push('/') },
+              ]);
+              return;
             }
+
+            const data = await response.json();
+            if (data.success) {
+              Alert.alert(tx('success', 'Success'), `₹${data.rewardAmount} ${tx('addedToWallet', 'added to your wallet!')}`);
+              await refreshAll({ showLiveRefresh: true });
+            } else if (response.status === 403) {
+              Alert.alert(tx('notEligible', 'Not Eligible'), data.message || tx('notEligibleForRewardYet', 'You are not eligible for this reward yet'));
+            } else {
+              Alert.alert(tx('error', 'Error'), data.message || tx('failedToClaimReward', 'Failed to claim reward'));
+            }
+          } catch (err) {
+            console.error('Error claiming milestone:', err);
+            Alert.alert(tx('error', 'Error'), tx('failedToClaimReward', 'Failed to claim reward'));
+          } finally {
+            setClaimingId(null);
           }
-        }
-      ]);
-    } catch (err) {
-      console.error('Error claiming milestone:', err);
+        },
+      },
+    ]);
+  };
+
+  const formatDate = (date: string) => {
+    try {
+      return new Date(date).toLocaleDateString('en-IN', {
+        day: '2-digit',
+        month: 'short',
+        year: 'numeric',
+      });
+    } catch {
+      return tx('notAvailable', 'N/A');
     }
+  };
+
+  const getStatusColor = (status: string) => {
+    switch ((status || '').toLowerCase()) {
+      case 'paid':
+      case 'completed':
+        return '#27AE60';
+      case 'pending':
+        return '#F39C12';
+      case 'cancelled':
+        return '#E74C3C';
+      default:
+        return '#95A5A6';
+    }
+  };
+
+  const getStatusIcon = (status: string) => {
+    switch ((status || '').toLowerCase()) {
+      case 'paid':
+      case 'completed':
+        return 'check-circle';
+      case 'pending':
+        return 'schedule';
+      case 'cancelled':
+        return 'cancel';
+      default:
+        return 'info';
+    }
+  };
+
+  const getFiveDayFailureMessage = (data: IncentiveProgress) => {
+    const fiveDayWindow = data.fiveDayWindow;
+    if (!fiveDayWindow) return null;
+    if (data.cancellationsInWindow > 0) {
+      return `${tx('declinesCancellationsInWindow', 'Declines/cancellations in streak window')}: ${data.cancellationsInWindow}`;
+    }
+    if (fiveDayWindow.failedDates?.length) {
+      return `${tx('dailyMinimumNotMetOn', 'Daily minimum not met on')}: ${fiveDayWindow.failedDates.join(', ')}`;
+    }
+    if (fiveDayWindow.failureReason && fiveDayWindow.failureReason.toLowerCase().includes('no completed')) {
+      return tx('noCompletedPaidJobHistoryFound', 'No completed paid job history found');
+    }
+    return fiveDayWindow.failureReason || null;
   };
 
   const renderIncentiveHeader = () => (
@@ -460,18 +543,17 @@ export default function GigHistory() {
     >
       <View style={styles.incentiveContent}>
         <View style={styles.incentiveInfo}>
-          <Text style={styles.incentiveTitle}>🎁 {t('earnIncentives')}</Text>
+          <Text style={styles.incentiveTitle}>{t('earnIncentives')}</Text>
           <Text style={styles.incentiveSubtitle}>{t('completeTasksToUnlockRewards')}</Text>
         </View>
+
         {incentiveLoading ? (
           <ActivityIndicator color="#fff" />
-        ) : incentiveError ? (
-          <Text style={styles.incentiveError}>{incentiveError}</Text>
         ) : incentiveData ? (
           <View style={styles.incentiveStats}>
             <View style={styles.statItem}>
               <Text style={styles.statValue}>{incentiveData.consecutiveDays}</Text>
-              <Text style={styles.statLabel}>Days</Text>
+              <Text style={styles.statLabel}>{tx('days', 'Days')}</Text>
             </View>
             <View style={styles.statDivider} />
             <View style={styles.statItem}>
@@ -480,114 +562,105 @@ export default function GigHistory() {
             </View>
           </View>
         ) : null}
+
+        <View style={styles.liveRow}>
+          <View style={styles.liveBadge}>
+            <View style={[styles.liveDot, isLiveRefreshing ? styles.liveDotRefreshing : null]} />
+            <Text style={styles.liveBadgeText}>
+              {isLiveRefreshing ? tx('refreshingLive', 'Refreshing live...') : tx('liveUpdatesOn', 'Live updates on')}
+            </Text>
+          </View>
+          {lastUpdatedAt ? (
+            <Text style={styles.lastUpdatedText}>
+              {tx('updatedNow', 'Updated')} {lastUpdatedAt.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}
+            </Text>
+          ) : null}
+        </View>
       </View>
     </LinearGradient>
   );
 
   const renderConditionsCard = () => {
-    const safeIncentiveData: IncentiveProgress = incentiveData || buildFallbackIncentiveData(incentiveError || undefined);
+    const safeIncentiveData = incentiveData || buildFallbackIncentiveData(incentiveError || undefined);
+    const fiveDayWindow = safeIncentiveData.fiveDayWindow;
+    const failureMessage = getFiveDayFailureMessage(safeIncentiveData);
 
     return (
       <View style={styles.conditionsCard}>
-        <Text style={styles.conditionsTitle}>✓ {t('requirementsStatus')} - 5 Day Milestone</Text>
+        <Text style={styles.conditionsTitle}>
+          {t('requirementsStatus')} - 5 {tx('day', 'Day')} {tx('milestone', 'Milestone')}
+        </Text>
+
         <View style={styles.conditionsList}>
-          {/* 5 Days Requirement */}
           <View style={[styles.condition, { borderLeftColor: safeIncentiveData.consecutiveDays >= 5 ? '#27AE60' : '#BDC3C7' }]}>
-            <MaterialIcons 
-              name={safeIncentiveData.consecutiveDays >= 5 ? 'check-circle' : 'cancel'} 
-              size={24} 
+            <MaterialIcons
+              name={safeIncentiveData.consecutiveDays >= 5 ? 'check-circle' : 'cancel'}
+              size={24}
               color={safeIncentiveData.consecutiveDays >= 5 ? '#27AE60' : '#E74C3C'}
             />
             <View style={styles.conditionText}>
-              <Text style={styles.conditionLabel}>📅 {t('consecutiveDays')}</Text>
-              <Text style={styles.conditionValue}>{safeIncentiveData.consecutiveDays}/5 days ({Math.round((Math.min(safeIncentiveData.consecutiveDays / 5, 1)) * 100)}%)</Text>
+              <Text style={styles.conditionLabel}>{t('consecutiveDays')}</Text>
+              <Text style={styles.conditionValue}>
+                {safeIncentiveData.consecutiveDays}/5 {tx('days', 'days')}
+              </Text>
             </View>
           </View>
 
-          {/* 8 Hours Per Day Requirement */}
-          <View style={[styles.condition, { borderLeftColor: (safeIncentiveData.fiveDayWindow?.allDaysHaveMinHours || false) ? '#27AE60' : '#BDC3C7' }]}>
-            <MaterialIcons 
-              name={(safeIncentiveData.fiveDayWindow?.allDaysHaveMinHours || false) ? 'check-circle' : 'cancel'} 
-              size={24} 
-              color={(safeIncentiveData.fiveDayWindow?.allDaysHaveMinHours || false) ? '#27AE60' : '#E74C3C'}
+          <View style={[styles.condition, { borderLeftColor: fiveDayWindow?.allDaysHaveMinHours ? '#27AE60' : '#BDC3C7' }]}>
+            <MaterialIcons
+              name={fiveDayWindow?.allDaysHaveMinHours ? 'check-circle' : 'cancel'}
+              size={24}
+              color={fiveDayWindow?.allDaysHaveMinHours ? '#27AE60' : '#E74C3C'}
             />
             <View style={styles.conditionText}>
-              <Text style={styles.conditionLabel}>⏰ 8 Hours Per Day</Text>
+              <Text style={styles.conditionLabel}>{t('hoursPerDay')}</Text>
               <Text style={styles.conditionValue}>
-                {(safeIncentiveData.fiveDayWindow?.daysMetMinimumHours || 0)}/{safeIncentiveData.requiredDaysFor5 || 5} days met ({safeIncentiveData.requiredDailyHours || 8}h/day)
+                {fiveDayWindow?.daysMetMinimumHours || 0}/{safeIncentiveData.requiredDaysFor5 || 5} {tx('days', 'days')} {tx('metMinimum', 'met')} ({safeIncentiveData.requiredDailyHours || 8}{tx('hoursPerDayShort', 'h/day')})
               </Text>
-              {!!safeIncentiveData.fiveDayWindow?.failureReason && (
-                <Text style={[styles.conditionValue, { color: '#E74C3C' }]}>{safeIncentiveData.fiveDayWindow.failureReason}</Text>
-              )}
+              {failureMessage ? <Text style={styles.conditionError}>{failureMessage}</Text> : null}
             </View>
           </View>
 
-          {/* NO Declines Requirement */}
           <View style={[styles.condition, { borderLeftColor: safeIncentiveData.cancellationsInWindow === 0 ? '#27AE60' : '#BDC3C7' }]}>
-            <MaterialIcons 
-              name={safeIncentiveData.cancellationsInWindow === 0 ? 'check-circle' : 'cancel'} 
-              size={24} 
+            <MaterialIcons
+              name={safeIncentiveData.cancellationsInWindow === 0 ? 'check-circle' : 'cancel'}
+              size={24}
               color={safeIncentiveData.cancellationsInWindow === 0 ? '#27AE60' : '#E74C3C'}
             />
             <View style={styles.conditionText}>
-              <Text style={styles.conditionLabel}>🚫 No Declines in Period</Text>
-              <Text style={styles.conditionValue}>{safeIncentiveData.cancellationsInWindow} job declines ({safeIncentiveData.cancellationsInWindow === 0 ? '✔ Pass' : '✗ Failed'})</Text>
+              <Text style={styles.conditionLabel}>{tx('noDeclinesOrCancellations', 'No Declines/Cancellations')}</Text>
+              <Text style={styles.conditionValue}>
+                {safeIncentiveData.cancellationsInWindow} {tx('jobDeclinesOrCancellations', 'job declines/cancellations')} ({safeIncentiveData.cancellationsInWindow === 0 ? tx('pass', 'Pass') : tx('failed', 'Failed')})
+              </Text>
             </View>
           </View>
         </View>
 
+        {fiveDayWindow?.dailyStatus?.length ? (
+          <View style={styles.dailyBreakdown}>
+            <Text style={styles.dailyBreakdownTitle}>{tx('recent5DayBreakdown', 'Recent 5-day breakdown')}</Text>
+            {fiveDayWindow.dailyStatus.map((dayStatus) => {
+              const isQualified = Boolean(dayStatus.dayQualified ?? (dayStatus.meetsMinimumHours && dayStatus.meetsNoDeclines !== false));
+              return (
+                <View key={dayStatus.date} style={styles.dailyRow}>
+                  <Text style={styles.dailyDate}>{formatDate(dayStatus.date)}</Text>
+                  <Text style={[styles.dailyHours, { color: isQualified ? '#27AE60' : '#E74C3C' }]}>
+                    {Number(dayStatus.hoursWorked || 0).toFixed(1)}
+                    {tx('hoursShort', 'h')} · {isQualified ? tx('qualified', 'Qualified') : tx('notQualified', 'Not Qualified')}
+                  </Text>
+                </View>
+              );
+            })}
+          </View>
+        ) : null}
       </View>
     );
   };
 
-  // ✅ Utility functions
-  const formatDate = (date: string) => {
-    try {
-      return new Date(date).toLocaleDateString('en-IN', {
-        day: '2-digit',
-        month: 'short',
-        year: 'numeric',
-      });
-    } catch {
-      return 'N/A';
-    }
-  };
-
-  const getStatusColor = (status: string) => {
-    switch ((status || '').toLowerCase()) {
-      case 'paid':
-        return '#27AE60';
-      case 'pending':
-        return '#F39C12';
-      case 'cancelled':
-        return '#E74C3C';
-      case 'completed':
-        return '#27AE60';
-      default:
-        return '#95A5A6';
-    }
-  };
-
-  const getStatusIcon = (status: string) => {
-    switch ((status || '').toLowerCase()) {
-      case 'paid':
-        return 'check-circle';
-      case 'pending':
-        return 'schedule';
-      case 'cancelled':
-        return 'cancel';
-      case 'completed':
-        return 'check-circle';
-      default:
-        return 'info';
-    }
-  };
-
-  // ✅ Render milestone card with claim button
   const renderMilestoneCard = (milestone: Milestone) => (
     <View key={milestone.id} style={styles.milestoneCard}>
       <LinearGradient
-        colors={[milestone.color + '20', milestone.color + '05']}
+        colors={[`${milestone.color}20`, `${milestone.color}08`]}
         start={{ x: 0, y: 0 }}
         end={{ x: 1, y: 1 }}
         style={styles.milestoneGradient}
@@ -600,14 +673,14 @@ export default function GigHistory() {
             <Text style={styles.milestoneTitle}>{milestone.days} {t('daysChallenge')}</Text>
             <Text style={styles.milestoneReward}>₹{milestone.reward} {t('reward')}</Text>
           </View>
-          {milestone.claimed && (
+          {milestone.claimed ? (
             <View style={styles.completedBadge}>
               <MaterialIcons name="check-circle" size={28} color="#27AE60" />
             </View>
-          )}
+          ) : null}
         </View>
 
-        {!milestone.claimed && (
+        {!milestone.claimed ? (
           <>
             <View style={styles.progressSection}>
               <View style={styles.progressBar}>
@@ -622,11 +695,15 @@ export default function GigHistory() {
                 />
               </View>
               <Text style={styles.progressText}>
-                {Math.round(milestone.progress * 100)}% Complete
+                {Math.round(milestone.progress * 100)}% {tx('complete', 'Complete')}
               </Text>
             </View>
 
-            {milestone.completed && !milestone.claimed && (
+            <Text style={styles.ruleText}>
+              {tx('streakRuleShort', 'Needs consecutive 8h days with no declines/cancellations')}
+            </Text>
+
+            {milestone.completed ? (
               <TouchableOpacity
                 style={[
                   styles.claimButton,
@@ -638,38 +715,32 @@ export default function GigHistory() {
                 onPress={() => claimMilestone(milestone.id)}
                 disabled={claimingId === milestone.id}
               >
-                <MaterialIcons
-                  name="card-giftcard"
-                  size={20}
-                  color="#fff"
-                />
+                <MaterialIcons name="card-giftcard" size={20} color="#fff" />
                 <Text style={styles.claimButtonText}>
-                  {claimingId === milestone.id ? 'Claiming...' : `Claim ₹${milestone.reward}`}
+                  {claimingId === milestone.id ? tx('claiming', 'Claiming...') : `${tx('claim', 'Claim')} ₹${milestone.reward}`}
                 </Text>
               </TouchableOpacity>
-            )}
+            ) : null}
           </>
-        )}
-
-        {milestone.claimed && (
+        ) : (
           <View style={styles.completedStatus}>
-            <Text style={styles.completedText}>🎉 {t('rewardUnlocked')}! ₹{milestone.reward}</Text>
+            <Text style={styles.completedText}>{t('rewardUnlocked')} ₹{milestone.reward}</Text>
           </View>
         )}
       </LinearGradient>
     </View>
   );
 
-  // ✅ Render single gig card
-  const renderGigCard = ({ item: gig }: { item: GigHistory }) => {
+  const renderGigCard = ({ item: gig }: { item: GigHistoryItem }) => {
     const paymentStatus = getGigPaymentStatus(gig);
-    const displayStatus = paymentStatus === 'paid' ? t('completed') : t('pending');
+    const isCancelled = String(gig.status || '').toLowerCase() === 'cancelled';
+    const displayStatus = isCancelled ? t('cancelled') : paymentStatus === 'paid' ? t('completed') : t('pending');
+    const statusKey = isCancelled ? 'cancelled' : paymentStatus;
     const workHours =
       Number(gig.hoursWorked || 0) > 0
         ? Number(gig.hoursWorked || 0)
         : Math.round(((Number(gig.timeSpentMinutes || 0) / 60) || 0) * 10) / 10;
     const has8Hours = workHours >= 8;
-    const isCancelled = String(gig.status || '').toLowerCase() === 'cancelled';
 
     return (
       <View style={styles.gigCard}>
@@ -678,113 +749,92 @@ export default function GigHistory() {
             <Text style={styles.gigTitle} numberOfLines={2}>
               {gig.title}
             </Text>
-            <Text style={styles.contractorName}>
-              👤 {gig.contractorName}
-            </Text>
+            <Text style={styles.contractorName}>{gig.contractorName}</Text>
           </View>
-          <View
-            style={[
-              styles.statusBadge,
-              { backgroundColor: getStatusColor(paymentStatus) },
-            ]}
-          >
-            <MaterialIcons name={getStatusIcon(paymentStatus) as any} size={16} color="#fff" />
+          <View style={[styles.statusBadge, { backgroundColor: getStatusColor(statusKey) }]}>
+            <MaterialIcons name={getStatusIcon(statusKey) as any} size={16} color="#fff" />
             <Text style={styles.statusBadgeText}>{displayStatus}</Text>
           </View>
         </View>
 
         <View style={styles.gigDetails}>
           <View style={styles.detailItem}>
-            <MaterialIcons name="attach-money" size={18} color="#27AE60" />
+            <MaterialIcons name="currency-rupee" size={18} color="#27AE60" />
             <Text style={styles.detailText}>₹{gig.amount}</Text>
           </View>
           <View style={styles.detailItem}>
-            <MaterialIcons name="calendar-today" size={18} color="#3498db" />
+            <MaterialIcons name="calendar-today" size={18} color="#3498DB" />
             <Text style={styles.detailText}>{formatDate(gig.date)}</Text>
           </View>
-          {gig.rating && (
+          {gig.rating ? (
             <View style={styles.detailItem}>
               <MaterialIcons name="star" size={18} color="#F39C12" />
-              <Text style={styles.detailText}>{gig.rating.stars} ⭐</Text>
+              <Text style={styles.detailText}>{gig.rating.stars} ★</Text>
             </View>
-          )}
+          ) : null}
         </View>
 
-        {/* ✅ Work Hours & Requirement Status */}
         <View style={styles.requirementsRow}>
           <View style={[styles.requirementBadge, { borderColor: has8Hours ? '#27AE60' : '#E74C3C' }]}>
-            <MaterialIcons 
-              name={has8Hours ? 'check-circle' : 'cancel'} 
-              size={18} 
-              color={has8Hours ? '#27AE60' : '#E74C3C'} 
-            />
+            <MaterialIcons name={has8Hours ? 'check-circle' : 'cancel'} size={18} color={has8Hours ? '#27AE60' : '#E74C3C'} />
             <Text style={[styles.requirementText, { color: has8Hours ? '#27AE60' : '#E74C3C' }]}>
-              {workHours > 0 ? `${workHours}h` : 'N/A'} {has8Hours ? '✔' : '✗'}
+              {workHours > 0 ? `${workHours}${tx('hoursShort', 'h')}` : tx('notAvailable', 'N/A')}
             </Text>
           </View>
-          
-          {isCancelled && (
-            <View style={[styles.requirementBadge, { borderColor: '#E74C3C', backgroundColor: '#FFEBEE' }]}>
+
+          {isCancelled ? (
+            <View style={[styles.requirementBadge, styles.requirementDangerBadge]}>
               <MaterialIcons name="cancel" size={18} color="#E74C3C" />
-              <Text style={[styles.requirementText, { color: '#E74C3C' }]}>{t('cancelled')} ✗</Text>
+              <Text style={[styles.requirementText, { color: '#E74C3C' }]}>{t('cancelled')}</Text>
             </View>
-          )}
-          
-          {paymentStatus === 'paid' && !isCancelled && (
-            <View style={[styles.requirementBadge, { borderColor: '#27AE60', backgroundColor: '#E8F5E9' }]}> 
+          ) : null}
+
+          {paymentStatus === 'paid' && !isCancelled ? (
+            <View style={[styles.requirementBadge, styles.requirementSuccessBadge]}>
               <MaterialIcons name="check-circle" size={18} color="#27AE60" />
-              <Text style={[styles.requirementText, { color: '#27AE60' }]}>{t('completed')} ✔</Text>
+              <Text style={[styles.requirementText, { color: '#27AE60' }]}>{t('completed')}</Text>
             </View>
-          )}
+          ) : null}
         </View>
 
-        {gig.rating && (
+        {gig.rating ? (
           <View style={styles.ratingBox}>
-            <Text style={styles.ratingLabel}>💬 {t('feedback')}</Text>
+            <Text style={styles.ratingLabel}>{t('feedback')}</Text>
             <Text style={styles.ratingText}>{gig.rating.feedback || t('noFeedbackProvided')}</Text>
           </View>
-        )}
+        ) : null}
       </View>
     );
   };
 
-  // ✅ Memoize gig counts with single-pass optimization (avoid 3 separate filter calls)
-  const { completedCount, pendingCount, cancelledCount } = React.useMemo(() => {
+  const { completedCount, pendingCount, cancelledCount } = useMemo(() => {
     let completed = 0;
     let pending = 0;
     let cancelled = 0;
 
-    gigs.forEach(g => {
-      if (String(g.status || '').toLowerCase() === 'cancelled') {
-        cancelled++;
-      } else if (getGigPaymentStatus(g) === 'paid') {
-        completed++;
-      } else {
-        pending++;
-      }
+    gigs.forEach((gig) => {
+      if (String(gig.status || '').toLowerCase() === 'cancelled') cancelled += 1;
+      else if (getGigPaymentStatus(gig) === 'paid') completed += 1;
+      else pending += 1;
     });
 
     return { completedCount: completed, pendingCount: pending, cancelledCount: cancelled };
   }, [gigs]);
 
-  // ✅ FlatList header component
-  // ✅ Memoize ListHeader to prevent unnecessary FlatList re-renders
-  const ListHeader = React.useMemo(
+  const ListHeader = useMemo(
     () => (
       <>
-        {/* Incentive Header */}
         {renderIncentiveHeader()}
-
-        {/* Conditions Card */}
         {renderConditionsCard()}
 
-        {/* Milestones Section */}
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>📊 {t('milestones')}</Text>
-          {milestones.map(milestone => renderMilestoneCard(milestone))}
+          <Text style={styles.sectionTitle}>{t('milestones')}</Text>
+          {milestones.map((milestone) => renderMilestoneCard(milestone))}
+          <Text style={styles.streakRuleText}>
+            {tx('streakRuleSummary', 'Rewards unlock only after consecutive workdays with at least 8 hours and no declines/cancellations.')}
+          </Text>
         </View>
 
-        {/* Gig Status Overview */}
         <View style={styles.statusOverview}>
           <View style={styles.statusOverviewCard}>
             <View style={styles.statusOverviewIcon}>
@@ -810,13 +860,11 @@ export default function GigHistory() {
             <Text style={styles.statusOverviewLabel}>{t('cancelled')}</Text>
           </View>
         </View>
-
       </>
     ),
-    [incentiveData, milestones, completedCount, pendingCount, cancelledCount, t, renderIncentiveHeader, renderConditionsCard, renderMilestoneCard]
+    [cancelledCount, claimingId, completedCount, incentiveData, incentiveLoading, isLiveRefreshing, lastUpdatedAt, milestones, pendingCount, t, todayWorkedMinutes, tx]
   );
 
-  // ✅ FlatList empty component
   const ListEmpty = () => (
     <View style={styles.emptyState}>
       <MaterialIcons name="work-outline" size={64} color="#BDC3C7" />
@@ -825,17 +873,15 @@ export default function GigHistory() {
     </View>
   );
 
-  // ✅ FlatList footer for load more
-  const ListFooter = () => {
-    if (!hasMore) return <View style={{ height: 30 }} />;
-    if (!loadingMore) return <View style={{ height: 10 }} />;
-    return <ActivityIndicator size="small" color="#667EEA" style={{ marginVertical: 20 }} />;
-  };
+  const ListFooter = () => (
+    <View style={styles.listFooter}>
+      {loadingMore ? <ActivityIndicator size="small" color="#667EEA" style={{ marginVertical: 12 }} /> : null}
+    </View>
+  );
 
   return (
     <SafeAreaView edges={['top', 'left', 'right', 'bottom']} style={[styles.container, { paddingTop: Platform.OS === 'ios' ? 12 : 8 }]}>
-      {/* Header */}
-      <View style={[styles.header, { paddingTop: Platform.OS === 'ios' ? 12 : 8 }]}>
+      <View style={styles.header}>
         <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
           <MaterialIcons name="arrow-back" size={28} color="#000" />
         </TouchableOpacity>
@@ -850,21 +896,23 @@ export default function GigHistory() {
       ) : (
         <>
           {gigError ? (
-            <View style={{ marginHorizontal: 16, marginVertical: 8, backgroundColor: '#FEE2E2', borderRadius: 8, padding: 10 }}>
-              <Text style={{ color: '#991B1B', fontWeight: '600' }}>{gigError}</Text>
+            <View style={styles.errorBanner}>
+              <Text style={styles.errorBannerText}>{gigError}</Text>
             </View>
           ) : null}
           <FlatList
-            data={[]}
+            data={gigs}
             renderItem={renderGigCard}
             keyExtractor={(item) => item._id}
             ListHeaderComponent={ListHeader}
-            ListEmptyComponent={null}
-            refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+            ListEmptyComponent={ListEmpty}
+            ListFooterComponent={ListFooter}
+            onEndReached={handleLoadMore}
+            onEndReachedThreshold={0.5}
+            refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} title={tx('pullToRefresh', 'Pull to refresh')} />}
             showsVerticalScrollIndicator={false}
-            scrollIndicatorInsets={{ right: 1 }}
-            contentContainerStyle={{ flexGrow: 1 }}
-            removeClippedSubviews={true}
+            contentContainerStyle={{ flexGrow: 1, paddingBottom: 20 }}
+            removeClippedSubviews
             initialNumToRender={10}
             maxToRenderPerBatch={20}
           />
@@ -887,7 +935,7 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     backgroundColor: '#fff',
     borderBottomWidth: 1,
-    borderBottomColor: '#e0e0e0',
+    borderBottomColor: '#E5E7EB',
   },
   backButton: {
     padding: 8,
@@ -897,7 +945,7 @@ const styles = StyleSheet.create({
   headerTitle: {
     fontSize: 18,
     fontWeight: '700',
-    color: '#000',
+    color: '#111827',
     flex: 1,
     textAlign: 'center',
   },
@@ -906,21 +954,26 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
-  // Incentive Header Styles
+  errorBanner: {
+    marginHorizontal: 16,
+    marginTop: 10,
+    backgroundColor: '#FEE2E2',
+    borderRadius: 10,
+    padding: 10,
+  },
+  errorBannerText: {
+    color: '#991B1B',
+    fontWeight: '600',
+  },
   incentiveHeader: {
     paddingHorizontal: 16,
-    paddingVertical: 20,
+    paddingVertical: 18,
     marginHorizontal: 12,
     marginTop: 12,
-    borderRadius: 12,
-    shadowColor: '#667EEA',
-    shadowOpacity: 0.3,
-    shadowOffset: { width: 0, height: 4 },
-    shadowRadius: 8,
-    elevation: 5,
+    borderRadius: 14,
   },
   incentiveContent: {
-    gap: 16,
+    gap: 14,
   },
   incentiveInfo: {
     gap: 4,
@@ -960,14 +1013,48 @@ const styles = StyleSheet.create({
     height: 40,
     backgroundColor: '#E8EAFF',
   },
-  // Conditions Card
+  liveRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  liveBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: 'rgba(255,255,255,0.14)',
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  liveDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: '#86EFAC',
+  },
+  liveDotRefreshing: {
+    backgroundColor: '#FDE68A',
+  },
+  liveBadgeText: {
+    fontSize: 11,
+    color: '#fff',
+    fontWeight: '700',
+  },
+  lastUpdatedText: {
+    fontSize: 11,
+    color: '#E8EAFF',
+    fontWeight: '600',
+  },
   conditionsCard: {
     backgroundColor: '#fff',
     marginHorizontal: 12,
     marginTop: 12,
     paddingHorizontal: 16,
     paddingVertical: 16,
-    borderRadius: 12,
+    borderRadius: 14,
     shadowColor: '#000',
     shadowOpacity: 0.08,
     shadowOffset: { width: 0, height: 2 },
@@ -977,7 +1064,7 @@ const styles = StyleSheet.create({
   conditionsTitle: {
     fontSize: 15,
     fontWeight: '700',
-    color: '#000',
+    color: '#111827',
     marginBottom: 12,
   },
   conditionsList: {
@@ -993,23 +1080,28 @@ const styles = StyleSheet.create({
   },
   conditionText: {
     flex: 1,
-    gap: 2,
+    gap: 3,
   },
   conditionLabel: {
     fontSize: 13,
     fontWeight: '600',
-    color: '#000',
+    color: '#111827',
   },
   conditionValue: {
     fontSize: 11,
-    color: '#7F8C8D',
+    color: '#6B7280',
     fontWeight: '500',
+  },
+  conditionError: {
+    fontSize: 11,
+    color: '#E74C3C',
+    fontWeight: '600',
   },
   dailyBreakdown: {
     marginTop: 12,
     paddingTop: 10,
     borderTopWidth: 1,
-    borderTopColor: '#f0f0f0',
+    borderTopColor: '#F3F4F6',
     gap: 8,
   },
   dailyBreakdownTitle: {
@@ -1021,6 +1113,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
+    gap: 8,
   },
   dailyDate: {
     fontSize: 12,
@@ -1031,7 +1124,6 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '700',
   },
-  // Milestone Styles
   section: {
     paddingHorizontal: 12,
     paddingTop: 20,
@@ -1040,20 +1132,20 @@ const styles = StyleSheet.create({
   sectionTitle: {
     fontSize: 16,
     fontWeight: '700',
-    color: '#000',
+    color: '#111827',
     marginBottom: 12,
   },
   milestoneCard: {
     marginBottom: 12,
-    borderRadius: 12,
+    borderRadius: 14,
     overflow: 'hidden',
   },
   milestoneGradient: {
     paddingHorizontal: 16,
     paddingVertical: 14,
-    borderRadius: 12,
+    borderRadius: 14,
     borderWidth: 1,
-    borderColor: '#E8EAFF',
+    borderColor: '#E5E7EB',
   },
   milestoneHeader: {
     flexDirection: 'row',
@@ -1064,7 +1156,7 @@ const styles = StyleSheet.create({
   milestoneIcon: {
     width: 48,
     height: 48,
-    borderRadius: 10,
+    borderRadius: 12,
     justifyContent: 'center',
     alignItems: 'center',
   },
@@ -1075,11 +1167,11 @@ const styles = StyleSheet.create({
   milestoneTitle: {
     fontSize: 14,
     fontWeight: '700',
-    color: '#000',
+    color: '#111827',
   },
   milestoneReward: {
     fontSize: 12,
-    color: '#7F8C8D',
+    color: '#6B7280',
     fontWeight: '500',
   },
   completedBadge: {
@@ -1093,7 +1185,7 @@ const styles = StyleSheet.create({
   },
   progressBar: {
     height: 6,
-    backgroundColor: '#E8EAFF',
+    backgroundColor: '#E5E7EB',
     borderRadius: 3,
     overflow: 'hidden',
   },
@@ -1103,9 +1195,36 @@ const styles = StyleSheet.create({
   },
   progressText: {
     fontSize: 11,
-    color: '#7F8C8D',
+    color: '#6B7280',
     fontWeight: '600',
     textAlign: 'right',
+  },
+  ruleText: {
+    marginTop: 8,
+    fontSize: 11,
+    color: '#6B7280',
+    fontWeight: '600',
+  },
+  streakRuleText: {
+    marginTop: 6,
+    fontSize: 12,
+    color: '#6B7280',
+    lineHeight: 18,
+  },
+  claimButton: {
+    marginTop: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    borderRadius: 10,
+    gap: 6,
+  },
+  claimButtonText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#fff',
   },
   completedStatus: {
     marginTop: 8,
@@ -1122,7 +1241,6 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     textAlign: 'center',
   },
-  // Status Overview
   statusOverview: {
     flexDirection: 'row',
     paddingHorizontal: 12,
@@ -1153,19 +1271,19 @@ const styles = StyleSheet.create({
   statusOverviewValue: {
     fontSize: 16,
     fontWeight: '700',
-    color: '#000',
+    color: '#111827',
   },
   statusOverviewLabel: {
     fontSize: 11,
-    color: '#7F8C8D',
+    color: '#6B7280',
     fontWeight: '500',
   },
-  // Gig Card Styles
   gigCard: {
     backgroundColor: '#fff',
-    borderRadius: 12,
+    borderRadius: 14,
     padding: 14,
-    marginBottom: 10,
+    marginHorizontal: 12,
+    marginTop: 10,
     shadowColor: '#000',
     shadowOpacity: 0.08,
     shadowOffset: { width: 0, height: 2 },
@@ -1177,27 +1295,27 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'flex-start',
     marginBottom: 10,
+    gap: 8,
   },
   gigInfo: {
     flex: 1,
-    marginRight: 8,
   },
   gigTitle: {
     fontSize: 15,
     fontWeight: '700',
-    color: '#000',
+    color: '#111827',
     marginBottom: 4,
   },
   contractorName: {
     fontSize: 12,
-    color: '#7F8C8D',
+    color: '#6B7280',
   },
   statusBadge: {
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: 10,
     paddingVertical: 6,
-    borderRadius: 6,
+    borderRadius: 8,
     gap: 4,
   },
   statusBadgeText: {
@@ -1210,7 +1328,7 @@ const styles = StyleSheet.create({
     gap: 12,
     paddingBottom: 10,
     borderBottomWidth: 1,
-    borderBottomColor: '#f0f0f0',
+    borderBottomColor: '#F3F4F6',
     flexWrap: 'wrap',
   },
   detailItem: {
@@ -1220,8 +1338,36 @@ const styles = StyleSheet.create({
   },
   detailText: {
     fontSize: 12,
-    color: '#555',
+    color: '#4B5563',
     fontWeight: '500',
+  },
+  requirementsRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginTop: 10,
+    flexWrap: 'wrap',
+  },
+  requirementBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 8,
+    borderWidth: 1,
+    backgroundColor: '#F9FAFB',
+  },
+  requirementSuccessBadge: {
+    borderColor: '#27AE60',
+    backgroundColor: '#E8F5E9',
+  },
+  requirementDangerBadge: {
+    borderColor: '#E74C3C',
+    backgroundColor: '#FFEBEE',
+  },
+  requirementText: {
+    fontSize: 11,
+    fontWeight: '600',
   },
   ratingBox: {
     marginTop: 10,
@@ -1239,29 +1385,8 @@ const styles = StyleSheet.create({
   },
   ratingText: {
     fontSize: 12,
-    color: '#555',
+    color: '#4B5563',
     lineHeight: 18,
-  },
-  // ✅ New styles for requirement tracking
-  requirementsRow: {
-    flexDirection: 'row',
-    gap: 8,
-    marginTop: 10,
-    flexWrap: 'wrap',
-  },
-  requirementBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 6,
-    borderWidth: 1,
-    backgroundColor: '#f5f5f5',
-  },
-  requirementText: {
-    fontSize: 11,
-    fontWeight: '600',
   },
   emptyState: {
     alignItems: 'center',
@@ -1271,33 +1396,33 @@ const styles = StyleSheet.create({
   emptyTitle: {
     fontSize: 16,
     fontWeight: '700',
-    color: '#000',
+    color: '#111827',
   },
   emptyText: {
     fontSize: 13,
-    color: '#7F8C8D',
+    color: '#6B7280',
     textAlign: 'center',
   },
-  // ✅ Claim button styles
-  claimButton: {
-    marginTop: 10,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 10,
-    paddingHorizontal: 16,
-    borderRadius: 8,
-    gap: 6,
+  listFooter: {
+    paddingHorizontal: 12,
+    paddingTop: 14,
+    paddingBottom: 10,
   },
-  claimButtonText: {
+  footerRefreshButton: {
+    backgroundColor: '#1F6FEB',
+    borderRadius: 12,
+    paddingVertical: 12,
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: 8,
+  },
+  footerRefreshButtonDisabled: {
+    opacity: 0.7,
+  },
+  footerRefreshText: {
+    color: '#fff',
     fontSize: 13,
     fontWeight: '700',
-    color: '#fff',
-  },
-  // ✅ Error styles
-  incentiveError: {
-    fontSize: 12,
-    color: '#E74C3C',
-    fontStyle: 'italic',
   },
 });

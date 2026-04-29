@@ -11,6 +11,7 @@ import { useLanguage } from '../context/LanguageContext';
 import { useAuth } from '../context/AuthContext';
 import LegalModal from '../components/LegalModal';
 import { getOrGenerateDeviceId, getAppVersion, generateTermsHashFallback } from '../utils/deviceInfo';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
 type User = {
   name: string;
@@ -329,7 +330,7 @@ export default function Register() {
   };
 
   return (
-    <View style={styles.container}>
+    <SafeAreaView style={styles.container} edges={['top', 'left', 'right']}>
       <StatusBar barStyle="light-content" />
       <Text style={styles.title}>{t('register')}</Text>
 
@@ -422,7 +423,7 @@ export default function Register() {
 
       {/* ✅ Legal Modal - Terms & Conditions + Privacy Policy */}
       <LegalModal visible={termsModalVisible} onClose={() => setTermsModalVisible(false)} />
-    </View>
+    </SafeAreaView>
   );
 }
 

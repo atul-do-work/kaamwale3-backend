@@ -29,6 +29,7 @@ import {
   cleanupJobAlert,
   initializeAudioSession,
 } from "../../../services/jobNotificationService";
+import { SafeAreaView } from "react-native-safe-area-context";
 
 const WORKER_NAME_FALLBACK = "Test Worker";
 const AUTO_DECLINE_SECONDS = 30;
@@ -278,12 +279,18 @@ function WorkerHome() {
     ]);
   };
 
+  // 🔐 CRITICAL FIX #4: Timer is for UI display ONLY, not for state management
+  // Backend is authoritative for job expiration - don't auto-decline on frontend
   const [timer, setTimer] = useState<number>(AUTO_DECLINE_SECONDS);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const currentJobRef = useRef<Job | null>(null);
   const displayedJobIds = useRef<Set<string>>(new Set()); // ✅ Track displayed jobs to prevent duplicates
   const fetchAbortControllers = useRef<Map<string, AbortController>>(new Map()); // ✅ Track fetch abort controllers
   const profilePhotoWriteTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null); // ✅ Debounce AsyncStorage writes
+  
+  // 🔐 CRITICAL FIX #5: In-memory cache for user object to avoid repeated slow AsyncStorage reads
+  const cachedUserRef = useRef<any>(null);
+  const userCacheWriteTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null); // ✅ Debounce user writes
 
   const ensureSocketConnectedWithToken = (authToken: string | null | undefined): boolean => {
     if (!authToken || authToken.trim() === "") {
@@ -304,6 +311,25 @@ function WorkerHome() {
       socket.connect();
     }
     return true;
+  };
+
+  // 🔐 CRITICAL FIX #5: Helper to update user in cache with debounced AsyncStorage persist
+  const updateCachedUser = (updates: Record<string, any>) => {
+    if (!cachedUserRef.current) {
+      cachedUserRef.current = {};
+    }
+    cachedUserRef.current = { ...cachedUserRef.current, ...updates };
+    
+    // Debounce the AsyncStorage write
+    if (userCacheWriteTimeoutRef.current) {
+      clearTimeout(userCacheWriteTimeoutRef.current);
+    }
+    userCacheWriteTimeoutRef.current = setTimeout(() => {
+      AsyncStorage.setItem('user', JSON.stringify(cachedUserRef.current)).catch(err =>
+        console.warn('Failed to persist user cache:', err)
+      );
+      userCacheWriteTimeoutRef.current = null;
+    }, 500); // Debounce: batch writes within 500ms
   };
 
   useEffect(() => {
@@ -886,9 +912,21 @@ function WorkerHome() {
       try {
         console.log("📩 SOCKET: New job received", data);
         
-        // ✅ FIX: Remove isOnline check - backend already verified worker is available
-        // isOnline is just UI state that loads async; we should trust backend's decision
-        // If job arrived via socket, backend confirmed availability
+        // 🔐 CRITICAL FIX #1: Verify this job is meant for THIS worker
+        // Backend sends jobs to multiple workers, we must verify it's for us
+        if (data._targetedUpdate && Array.isArray(data.targetedFor)) {
+          const targets = data.targetedFor.map((t: any) => t && t.toString());
+          if (!targets.includes(currentUserPhone) && !targets.includes(workerName)) {
+            console.log(`⚠️ Job ${data._id} not targeted for this worker, ignoring`);
+            return;
+          }
+        }
+        
+        // ✅ Verify this is MY job by matching skills if available
+        if (data.requiredSkills && workerType && !data.requiredSkills.includes(workerType)) {
+          console.log(`⚠️ Job ${data._id} requires ${data.requiredSkills}, worker has ${workerType}, ignoring`);
+          return;
+        }
 
         if (!currentLocation) return;
 
@@ -1005,9 +1043,17 @@ function WorkerHome() {
       try {
         console.log("📩 SOCKET: job request received", data);
         
+        // 🔐 CRITICAL FIX #1: Verify this job request is for THIS worker (not another worker)
+        // Backend broadcasts to multiple workers, must verify intent
+        if (!data.recipientPhone || data.recipientPhone !== currentUserPhone) {
+          console.log(`⚠️ Job request not for current user (${data.recipientPhone} !== ${currentUserPhone}), ignoring`);
+          return;
+        }
+        
         // Just update notification count - modal will be shown when bell is clicked
         // The notification will appear in NotificationHistory
         // No need to show modal automatically or trigger alert
+        // Notification count will auto-increment via handleNotificationCountUpdate
         
       } catch (err) {
         console.error("❌ Error handling job request:", err);
@@ -1060,12 +1106,9 @@ function WorkerHome() {
         if (!data || data.phone !== currentUserPhone) return;
         const forcedOnlineState = !!data.isAvailable;
         setIsOnline(forcedOnlineState);
-        AsyncStorage.getItem("user").then((userStr) => {
-          if (!userStr) return;
-          const user = JSON.parse(userStr);
-          user.isAvailable = forcedOnlineState;
-          AsyncStorage.setItem("user", JSON.stringify(user)).catch(() => {});
-        }).catch(() => {});
+        
+        // 🔐 CRITICAL FIX #5: Use cached user instead of repeated AsyncStorage reads
+        updateCachedUser({ isAvailable: forcedOnlineState });
 
         if (forcedOnlineState && currentLocation) {
           socket.emit("registerWorker", {
@@ -1109,6 +1152,14 @@ function WorkerHome() {
       }
     };
 
+    // 🔐 CRITICAL FIX #3: Only register socket listeners AFTER location loads
+    // This prevents job events from arriving before location is ready
+    // If location hasn't loaded yet, don't register listeners
+    if (!currentLocation) {
+      console.log('⏳ Waiting for location before registering socket listeners...');
+      return () => {}; // Early return - no listeners to clean up yet
+    }
+
     socket.on("newJob", handleNewJob);
     socket.on("jobUpdated", handleJobUpdated);
     socket.on("jobAccepted", handleJobAccepted);
@@ -1134,7 +1185,7 @@ function WorkerHome() {
       socket.off("jobRequest", handleJobRequest);
       console.log("[WorkerHome] job listeners removed (unmounted)");
     };
-  }, [currentLocation, workerName, currentUserPhone, workerType]); // ✅ REMOVED currentJob - use currentJobRef instead to prevent re-subscription
+  }, [currentLocation, workerName, currentUserPhone, workerType, currentJob]); // ✅ Track currentJob to re-subscribe when job changes
 
   // ---------------- GET ADDRESS ----------------
   const getAddressFromCoords = async (lat: number, lon: number) => {
@@ -1660,7 +1711,8 @@ function WorkerHome() {
     }
   };
 
-  // ---------------- TIMER ----------------
+  // 🔐 CRITICAL FIX #4: Timer counts down for UI display, but NO auto-decline
+  // Backend manages job expiration - frontend just shows the countdown
   const startTimer = () => {
     if (timerRef.current) clearInterval(timerRef.current);
     setTimer(AUTO_DECLINE_SECONDS);
@@ -1669,12 +1721,12 @@ function WorkerHome() {
       setTimer(prev => {
         if (prev <= 1) {
           if (timerRef.current) clearInterval(timerRef.current);
-          if (currentJobRef.current) {
-            const jobId = currentJobRef.current._id || currentJobRef.current.id || "";
-            if (jobId) handleDecline(jobId, true);
-          }
+          // 🔐 CRITICAL FIX #4: DO NOT auto-decline on frontend
+          // Backend will handle job expiration via scheduler
+          // Frontend just shows the countdown and lets user decide
+          console.log('⏰ Job offer window closed, awaiting backend expiration check');
         }
-        return Math.max(prev - 1, 0); // ✅ Prevent negative timer values
+        return Math.max(prev - 1, 0);
       });
     }, 1000);
   };
@@ -1944,7 +1996,7 @@ function WorkerHome() {
   };
 
   return (
-    <View style={styles.container}>
+    <SafeAreaView style={styles.container} edges={['top', 'left', 'right']}>
       {error && (
         <View style={{ backgroundColor: '#ffebee', padding: 20, margin: 10, borderRadius: 8, borderLeftWidth: 4, borderLeftColor: '#e74c3c' }}>
           <Text style={{ color: '#c62828', fontWeight: 'bold', marginBottom: 8 }}>⚠️ Error Loading Worker Home</Text>
@@ -2517,7 +2569,7 @@ function WorkerHome() {
       />
         </>
       )}
-    </View>
+    </SafeAreaView>
   );
 }
 

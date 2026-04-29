@@ -5,6 +5,7 @@ import { useAuth } from '../context/AuthContext';
 import { useRouter } from 'expo-router';
 import { API_BASE } from '../utils/config';
 import styles from '../styles/LoginScreenStyles';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
 export default function VerifyOtpScreen() {
   const router = useRouter();
@@ -110,7 +111,7 @@ export default function VerifyOtpScreen() {
   };
 
   return (
-    <View style={styles.container}>
+    <SafeAreaView style={styles.container} edges={['top', 'left', 'right']}>
       <StatusBar barStyle="light-content" />
       <Text style={styles.title}>Verify OTP</Text>
       <Text style={{ color: '#999', marginBottom: 12 }}>Enter the 6-digit code sent to</Text>
@@ -136,6 +137,6 @@ export default function VerifyOtpScreen() {
       <TouchableOpacity style={[styles.registerButton, { marginTop: 22 }]} onPress={() => router.replace('/') }>
         <Text style={styles.registerText}>Back to login</Text>
       </TouchableOpacity>
-    </View>
+    </SafeAreaView>
   );
 }

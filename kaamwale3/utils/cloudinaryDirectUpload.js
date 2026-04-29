@@ -11,7 +11,6 @@
  * - Rate limiting
  */
 
-import * as FileSystem from 'expo-file-system';
 import * as ImageManipulator from 'expo-image-manipulator';
 import { API_BASE } from '../utils/config';
 import {
@@ -22,11 +21,11 @@ import {
   SIGNATURE_EXPIRY_BUFFER,
   UPLOAD_ERROR_CODES,
   ERROR_MESSAGES,
-  IMAGE_CONSTRAINTS,
   LogLevel,
 } from './uploadConfig';
 import { uploadTelemetry } from './uploadTelemetry';
 import { uploadRateLimiter } from './uploadRateLimiter';
+import fileSystemUtils from './fileSystem';
 
 /**
  * @typedef {{ loaded: number; total: number; percent?: number }} CloudinaryUploadProgress
@@ -59,43 +58,23 @@ async function getMimeType(fileUri) {
     jpeg: 'image/jpeg',
     png: 'image/png',
     webp: 'image/webp',
+    heic: 'image/heic',
+    heif: 'image/heif',
     pdf: 'application/pdf',
   };
   return mimeMap[extension] || 'image/jpeg';
 }
 
 /**
- * Get file size in bytes
+ * Get file size in bytes - Using modern utility
+ * ✅ Fixed: Replaced deprecated getInfoAsync() with utility function
  */
 async function getFileSize(fileUri) {
   try {
-    const fileInfo = await FileSystem.getInfoAsync(fileUri);
-    return fileInfo.size || 0;
-  } catch {
-    try {
-      const base64 = await FileSystem.readAsStringAsync(fileUri, {
-        encoding: FileSystem.EncodingType.Base64,
-      });
-      return Math.ceil((base64.length * 3) / 4);
-    } catch {
-      return 0;
-    }
-  }
-}
-
-/**
- * Get image dimensions
- */
-async function getImageDimensions(fileUri) {
-  try {
-    const result = await ImageManipulator.manipulateAsync(fileUri, [], {
-      compress: 1,
-      format: 'jpeg',
-    });
-    return { width: result.width, height: result.height };
+    return await fileSystemUtils.getFileSizeBytes(fileUri);
   } catch (error) {
-    uploadTelemetry.log('validation', LogLevel.WARN, 'Failed to get image dimensions', { error });
-    return { width: 0, height: 0 };
+    console.warn('Error getting file size:', error?.message);
+    return 0;
   }
 }
 
@@ -132,13 +111,7 @@ async function validateFile(fileUri, uploadType = 'other', mimeType = null) {
     }
 
     if (detectedMimeType.startsWith('image/')) {
-      const { width, height } = await getImageDimensions(fileUri);
-      if (width < IMAGE_CONSTRAINTS.MIN_WIDTH || height < IMAGE_CONSTRAINTS.MIN_HEIGHT) {
-        return { valid: false, error: ERROR_MESSAGES.INVALID_DIMENSIONS, errorCode: UPLOAD_ERROR_CODES.INVALID_DIMENSIONS };
-      }
-      if (width > IMAGE_CONSTRAINTS.MAX_WIDTH || height > IMAGE_CONSTRAINTS.MAX_HEIGHT) {
-        return { valid: false, error: ERROR_MESSAGES.INVALID_DIMENSIONS, errorCode: UPLOAD_ERROR_CODES.INVALID_DIMENSIONS };
-      }
+      // Removed dimension validation as requested
     }
 
     return { valid: true };
@@ -161,6 +134,12 @@ async function getUploadSignature(authToken, folder, publicId) {
     throw new Error('Missing authentication token');
   }
 
+  console.log('[profile-upload] requesting cloudinary signature', {
+    folder,
+    publicId,
+    hasAuthToken: Boolean(authToken),
+  });
+
   const response = await fetch(`${API_BASE}/upload/cloudinary-signature`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
@@ -175,6 +154,12 @@ async function getUploadSignature(authToken, folder, publicId) {
   if (!data?.success) {
     throw new Error(data.message || 'Signature request failed');
   }
+
+  console.log('[profile-upload] cloudinary signature success', {
+    cloudName: data.cloudName,
+    folder: data.folder,
+    publicId: data.publicId,
+  });
 
   return { signature: data, expiresAt: Date.now() + (data.signatureExpiry || 3600) * 1000 };
 }
@@ -218,6 +203,15 @@ export async function uploadToCloudinaryDirect(fileUri, folder = 'kaamwale/uploa
   let currentFileUri = fileUri;
 
   try {
+    console.log('[profile-upload] direct upload start', {
+      uploadId,
+      fileUri: currentFileUri,
+      folder,
+      publicId: finalPublicId,
+      uploadType,
+      mimeType,
+    });
+
     // Step 1: Check rate limit
     uploadTelemetry.log(uploadId, LogLevel.DEBUG, 'Checking rate limit');
     const rateLimitCheck = await uploadRateLimiter.canUpload();
@@ -256,6 +250,7 @@ export async function uploadToCloudinaryDirect(fileUri, folder = 'kaamwale/uploa
 
     const fileSize = await getFileSize(currentFileUri);
     uploadTelemetry.log(uploadId, LogLevel.INFO, 'File validated', { fileSize, mimeType: detectedMimeType });
+    console.log('[profile-upload] file validated', { uploadId, fileSize, detectedMimeType });
 
     // Step 3: Get signature from backend with retry
     uploadTelemetry.log(uploadId, LogLevel.DEBUG, 'Requesting upload signature');
@@ -280,6 +275,57 @@ export async function uploadToCloudinaryDirect(fileUri, folder = 'kaamwale/uploa
 
     if (!signature) {
       uploadTelemetry.log(uploadId, LogLevel.ERROR, 'Failed to get signature after retries');
+
+      // FALLBACK: If server-side Cloudinary signing is not available (e.g. Cloudinary not configured),
+      // try a backend multipart upload endpoint as a last-resort compatibility path.
+      const signatureMsg = signatureError?.message || '';
+      if (signatureMsg.toLowerCase().includes('cloudinary is not configured') || signatureMsg.toLowerCase().includes('signature request failed') || signatureMsg.toLowerCase().includes('failed to get upload signature')) {
+        uploadTelemetry.log(uploadId, LogLevel.WARN, 'Attempting backend multipart upload fallback', { reason: signatureMsg });
+        try {
+          // Create form data compatible with RN fetch
+          const formData = new FormData();
+          const fileName = `${finalPublicId}${await getExtensionFromUri(currentFileUri)}`;
+          const detectedMimeType = mimeType || (await getMimeType(currentFileUri));
+          formData.append('file', { uri: currentFileUri, name: fileName, type: detectedMimeType });
+          formData.append('type', uploadType || 'document');
+
+          const resp = await fetch(`${API_BASE}/upload/upload`, {
+            method: 'POST',
+            body: formData,
+            headers: {
+              Authorization: `Bearer ${authToken}`,
+              // NOTE: Do not set Content-Type; fetch will set multipart boundary
+            },
+          });
+
+          const payload = await resp.json().catch(() => null);
+          if (!resp.ok || !payload) {
+            const reason = payload?.message || `Backend upload HTTP ${resp.status}`;
+            uploadTelemetry.log(uploadId, LogLevel.ERROR, 'Backend multipart upload failed', { reason, payload });
+            return { success: false, error: reason, errorCode: UPLOAD_ERROR_CODES.UPLOAD_FAILED };
+          }
+
+          const fileUrl = payload.fileUrl || payload.upload?.fileUrl;
+          const public_id = payload.upload?.cloudinaryPublicId || payload.cloudinaryPublicId || payload.publicId || finalPublicId;
+
+          if (!fileUrl) {
+            uploadTelemetry.log(uploadId, LogLevel.ERROR, 'Backend upload succeeded but no fileUrl returned', { payload });
+            return { success: false, error: 'Backend upload missing file URL', errorCode: UPLOAD_ERROR_CODES.UPLOAD_FAILED };
+          }
+
+        uploadTelemetry.log(uploadId, LogLevel.INFO, 'Backend multipart upload successful', { fileUrl, public_id });
+        console.log('[profile-upload] backend fallback upload success', { uploadId, fileUrl, publicId: public_id });
+          // Record upload rate and return success
+          await uploadRateLimiter.recordUpload(fileSize);
+          const durationFallback = uploadTelemetry.getDuration(uploadId);
+          uploadTelemetry.log(uploadId, LogLevel.INFO, 'Upload completed via backend fallback', { duration: durationFallback });
+          return { success: true, url: fileUrl, fileUrl, publicId: public_id };
+        } catch (backendErr) {
+          uploadTelemetry.log(uploadId, LogLevel.ERROR, 'Backend multipart upload fallback failed', { error: backendErr?.message });
+          return { success: false, error: ERROR_MESSAGES.UPLOAD_FAILED, errorCode: UPLOAD_ERROR_CODES.UPLOAD_FAILED };
+        }
+      }
+
       return { success: false, error: ERROR_MESSAGES.SIGNATURE_EXPIRED, errorCode: UPLOAD_ERROR_CODES.SIGNATURE_EXPIRED };
     }
 
@@ -295,15 +341,30 @@ export async function uploadToCloudinaryDirect(fileUri, folder = 'kaamwale/uploa
 
     // Step 5: Upload with retry logic
     uploadTelemetry.log(uploadId, LogLevel.INFO, 'Starting upload to Cloudinary', { totalSize: fileSize });
+    console.log('[profile-upload] uploading to cloudinary', {
+      uploadId,
+      cloudName: signature.signature.cloudName,
+      folder: signature.signature.folder,
+      publicId: signature.signature.publicId || finalPublicId,
+    });
     let uploadResult;
     let uploadError;
 
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
       try {
         onProgress?.({ loaded: 0, total: fileSize, percent: 0 });
+        const attemptStartedAt = Date.now();
 
         const timeoutPromise = new Promise((_, reject) =>
-          setTimeout(() => reject(new Error(`Upload timeout after ${timeout}ms`)), timeout)
+          setTimeout(() => {
+            console.error('[profile-upload] cloudinary timeout fired', {
+              uploadId,
+              attempt: attempt + 1,
+              timeout,
+              elapsedMs: Date.now() - attemptStartedAt,
+            });
+            reject(new Error(`Upload timeout after ${timeout}ms`));
+          }, timeout)
         );
 
         const uploadPromise = fetch(`https://api.cloudinary.com/v1_1/${signature.signature.cloudName}/image/upload`, {
@@ -311,7 +372,22 @@ export async function uploadToCloudinaryDirect(fileUri, folder = 'kaamwale/uploa
           body: formData,
         }).then(async (r) => {
           const payload = await r.json().catch(() => null);
+          console.log('[profile-upload] cloudinary http response', {
+            uploadId,
+            attempt: attempt + 1,
+            status: r.status,
+            ok: r.ok,
+            elapsedMs: Date.now() - attemptStartedAt,
+            hasSecureUrl: Boolean(payload?.secure_url),
+            errorMessage: payload?.error?.message || null,
+          });
           if (!r.ok) {
+            console.error('[profile-upload] cloudinary non-200 payload', {
+              uploadId,
+              attempt: attempt + 1,
+              status: r.status,
+              payload,
+            });
             throw new Error(payload?.error?.message || `Cloudinary HTTP ${r.status}`);
           }
           return payload;
@@ -323,9 +399,21 @@ export async function uploadToCloudinaryDirect(fileUri, folder = 'kaamwale/uploa
 
         onProgress?.({ loaded: fileSize, total: fileSize, percent: 100 });
         uploadTelemetry.log(uploadId, LogLevel.INFO, 'Upload successful', { url: uploadResult.secure_url, publicId: uploadResult.public_id });
+        console.log('[profile-upload] cloudinary upload success', {
+          uploadId,
+          fileUrl: uploadResult.secure_url,
+          publicId: uploadResult.public_id,
+        });
         break;
       } catch (error) {
         uploadError = error;
+        console.error('[profile-upload] cloudinary attempt failed', {
+          uploadId,
+          attempt: attempt + 1,
+          elapsedMs: Date.now() - attemptStartedAt,
+          message: error?.message || 'unknown error',
+          stack: error?.stack,
+        });
         uploadTelemetry.log(uploadId, LogLevel.WARN, `Upload failed (attempt ${attempt + 1}/${maxRetries + 1})`, { error: error.message });
         if (attempt < maxRetries) {
           const delay = getBackoffDelay(attempt);
@@ -355,15 +443,27 @@ export async function uploadToCloudinaryDirect(fileUri, folder = 'kaamwale/uploa
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
         body: JSON.stringify({ fileUrl: uploadResult.secure_url, cloudinaryPublicId: uploadResult.public_id, type: uploadType }),
       }).catch(() => uploadTelemetry.log(uploadId, LogLevel.WARN, 'URL save endpoint not available'));
+      console.log('[profile-upload] save-url request completed', { uploadId, publicId: uploadResult.public_id });
     } catch {}
 
     const duration = uploadTelemetry.getDuration(uploadId);
     uploadTelemetry.log(uploadId, LogLevel.INFO, 'Upload completed successfully', { duration, fileSize });
+    console.log('[profile-upload] direct upload finished', {
+      uploadId,
+      duration,
+      fileUrl: uploadResult.secure_url,
+      publicId: uploadResult.public_id,
+    });
 
     return { success: true, url: uploadResult.secure_url, fileUrl: uploadResult.secure_url, publicId: uploadResult.public_id, duration };
   } catch (error) {
     const errorMessage = error?.message || 'Unknown error';
     uploadTelemetry.log(uploadId, LogLevel.ERROR, 'Unexpected error during upload', { error: errorMessage });
+    console.error('[profile-upload] direct upload failed', {
+      uploadId,
+      message: errorMessage,
+      stack: error?.stack,
+    });
     return { success: false, error: ERROR_MESSAGES.UPLOAD_FAILED, errorCode: UPLOAD_ERROR_CODES.UPLOAD_FAILED };
   }
 }

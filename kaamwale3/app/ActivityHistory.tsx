@@ -16,6 +16,7 @@ import { useRouter, useFocusEffect } from "expo-router";
 import { useAuth } from "../context/AuthContext";
 import { SERVER_URL } from "../utils/config";
 import api from "../utils/api";
+import { SafeAreaView } from "react-native-safe-area-context";
 
 interface ActivityLog {
   _id: string;
@@ -217,15 +218,15 @@ export default function ActivityHistoryScreen(): React.ReactElement {
 
   if (loading) {
     return (
-      <View style={styles.centerContainer}>
+      <SafeAreaView style={styles.centerContainer} edges={['top', 'left', 'right']}>
         <ActivityIndicator size="large" color="#6C63FF" />
         <Text style={styles.loadingText}>Loading activity history...</Text>
-      </View>
+      </SafeAreaView>
     );
   }
 
   return (
-    <View style={styles.container}>
+    <SafeAreaView style={styles.container} edges={['top', 'left', 'right']}>
       {/* Header */}
       <LinearGradient colors={["#6C63FF", "#A78BFA"]} style={styles.header}>
         <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}>
@@ -363,7 +364,7 @@ export default function ActivityHistoryScreen(): React.ReactElement {
           </View>
         </View>
       </Modal>
-    </View>
+    </SafeAreaView>
   );
 }
 

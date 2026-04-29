@@ -10,6 +10,7 @@ import { useFocusEffect } from '@react-navigation/native';
 import { useAuth } from '../context/AuthContext';
 import { leaderboardCacheManager } from '../utils/leaderboardCacheManager';
 import { socket } from '../utils/socket';
+import { isPremiumPlanActive } from '../utils/premiumPlanState';
 
 interface UseLeaderboardReturn {
   leaderboard: any[];
@@ -31,6 +32,15 @@ export const useLeaderboard = (): UseLeaderboardReturn => {
   const fetchLeaderboard = async () => {
     if (!accessToken) {
       console.warn('⚠️ useLeaderboard: No access token');
+      setLoading(false);
+      return;
+    }
+
+    if (!isPremiumPlanActive(user?.premiumPlan)) {
+      setLeaderboard([]);
+      setUserRank(null);
+      setUserPoints(null);
+      setError(null);
       setLoading(false);
       return;
     }
@@ -61,7 +71,7 @@ export const useLeaderboard = (): UseLeaderboardReturn => {
     useCallback(() => {
       console.log('🔍 useLeaderboard: Screen focused, fetching rankings');
       fetchLeaderboard();
-    }, [accessToken])
+    }, [accessToken, user?.premiumPlan])
   );
 
   // Listen for socket updates

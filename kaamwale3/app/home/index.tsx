@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Redirect } from 'expo-router';
 import { useAuth } from '../../context/AuthContext';
 import { View, ActivityIndicator, TouchableOpacity, Text } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
 /**
  * Home router - redirects based on user role
@@ -70,8 +71,8 @@ export default function HomeIndex() {
   }
 
   return (
-    <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#fff' }}>
+    <SafeAreaView style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#fff' }} edges={['top', 'left', 'right']}>
       <ActivityIndicator size="large" color="#1a2f4d" />
-    </View>
+    </SafeAreaView>
   );
 }

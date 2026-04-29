@@ -1,6 +1,7 @@
 import { io } from "socket.io-client";
 import { SERVER_URL } from "./config";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import { secureGet } from "./secureStore";
 
 // ⚠️ Do NOT create multiple socket instances.
 // Create only ONE global instance and export it.
@@ -18,21 +19,12 @@ export const socket = io(SOCKET_URL, {
   reconnectionDelayMax: 5000,
 });
 
-// ✅ CRITICAL: Re-apply auth token on reconnection
-socket.on("disconnect", async () => {
-  console.log("🔌 Socket disconnected, will auto-reconnect with auth token");
-  // Retrieve current auth token from the shared accessToken storage key
-  let authToken = await AsyncStorage.getItem("accessToken");
-  if (!authToken) {
-    authToken = await AsyncStorage.getItem("token");
-  }
+const refreshAuthToken = async () => {
+  let authToken = (await AsyncStorage.getItem("accessToken")) || (await AsyncStorage.getItem("token"));
+  const refreshToken = (await secureGet("refreshToken")) || (await AsyncStorage.getItem("refreshToken"));
 
-  // If we have a refresh token, attempt refresh regardless of current token state
-  const refreshToken = await AsyncStorage.getItem("refreshToken");
   if (refreshToken) {
     try {
-      const config = await import("./config");
-      const SERVER_URL = config.SERVER_URL;
       const response = await fetch(`${SERVER_URL}/auth/refresh`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -44,20 +36,35 @@ socket.on("disconnect", async () => {
         if (data.accessToken && typeof data.accessToken === "string") {
           authToken = data.accessToken;
           await AsyncStorage.setItem("accessToken", data.accessToken);
-          console.log("🔄 Token refreshed on disconnect");
+          console.log("🔄 Token refreshed successfully");
         }
       }
     } catch (e) {
       const error = e as Error;
-      console.log("Could not refresh token on disconnect:", error.message);
-      // Continue with old token, will get error on reconnect
+      console.log("Could not refresh token:", error.message);
     }
   }
 
+  return authToken;
+};
+
+const ensureSocketAuth = async () => {
+  const authToken = await refreshAuthToken();
   if (authToken) {
     (socket.auth as any) = { token: authToken };
-    console.log("🔐 Auth token prepared for reconnection");
+    console.log("🔐 Socket auth token applied");
   }
+};
+
+// ✅ CRITICAL: Re-apply auth token on reconnection
+socket.on("disconnect", async () => {
+  console.log("🔌 Socket disconnected, will auto-reconnect with auth token");
+  await ensureSocketAuth();
+});
+
+socket.on("reconnect_attempt", async () => {
+  console.log("🔄 Socket reconnect attempt, refreshing auth token if needed");
+  await ensureSocketAuth();
 });
 
 // Optional listener to track status
@@ -65,15 +72,18 @@ socket.on("connect", () => {
   console.log("✅ Socket connected:", socket.id);
 });
 
-socket.on("connect_error", (err: Error) => {
+socket.on("connect_error", async (err: Error) => {
   console.log("⚠️ Socket connection error:", err.message);
+  await ensureSocketAuth();
 });
 
 // ✅ Handle token expiry notification from server
 socket.on("tokenExpired", async (data: { message: string }) => {
   console.log("⚠️ Server says token expired:", data.message);
-  // Client should handle this by logging out or refreshing token
-  // This is a signal that the current token is no longer valid
+  await ensureSocketAuth();
+  if (!socket.connected) {
+    socket.connect();
+  }
 });
 
 export const connectSocket = () => {

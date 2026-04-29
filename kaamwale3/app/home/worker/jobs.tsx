@@ -132,6 +132,9 @@ export default function Jobs(): React.ReactElement {
   const [submittingContractorRating, setSubmittingContractorRating] = useState<boolean>(false);
   const [cancelModalVisible, setCancelModalVisible] = useState<boolean>(false);
   const [selectedCancelJob, setSelectedCancelJob] = useState<Job | null>(null);
+  const [pastJobsModalVisible, setPastJobsModalVisible] = useState<boolean>(false);
+  const [pastJobsPage, setPastJobsPage] = useState<number>(1);
+  const PAST_JOBS_PAGE_SIZE = 8;
   const [cancelReason, setCancelReason] = useState<string>("");
   const [cancelReasonDescription, setCancelReasonDescription] = useState<string>("");
   const [cancelProcessing, setCancelProcessing] = useState<boolean>(false);
@@ -426,12 +429,12 @@ export default function Jobs(): React.ReactElement {
 
   // ✅ Render individual job card (optimized for FlatList virtualization)
   const workerCancelOptions = [
-    { key: "worker_unavailable", label: "Worker unavailable" },
-    { key: "location_changed", label: "Location changed" },
-    { key: "safety_concern", label: "Safety concern" },
-    { key: "contractor_request", label: "Contractor requested cancellation" },
-    { key: "technical_issue", label: "Technical issue" },
-    { key: "other", label: "Other reason" },
+    { key: "worker_unavailable", label: t('cancelReasonWorkerUnavailable') },
+    { key: "location_changed", label: t('cancelReasonLocationChanged') },
+    { key: "safety_concern", label: t('cancelReasonSafetyConcern') },
+    { key: "contractor_request", label: t('cancelReasonContractorRequested') },
+    { key: "technical_issue", label: t('cancelReasonTechnicalIssue') },
+    { key: "other", label: t('cancelReasonOther') },
   ];
 
   const openCancelModal = (job: Job) => {
@@ -451,10 +454,10 @@ export default function Jobs(): React.ReactElement {
   const submitJobCancellation = async () => {
     if (!selectedCancelJob) return;
     if (!cancelReason) {
-      return Alert.alert("Error", "Please select a cancellation reason.");
+      return Alert.alert(t('error'), t('selectCancellationReason'));
     }
     if (!token) {
-      return Alert.alert("Error", "You are not authenticated.");
+      return Alert.alert(t('error'), t('notAuthenticated'));
     }
 
     setCancelProcessing(true);
@@ -473,15 +476,15 @@ export default function Jobs(): React.ReactElement {
 
       const payload = await response.json();
       if (!response.ok || !payload?.success) {
-        return Alert.alert("Error", payload?.message || "Cancellation failed. Please try again.");
+        return Alert.alert(t('error'), payload?.message || t('cancellationFailedTryAgain'));
       }
 
       setAcceptedJobs((prev) => prev.filter((job) => job._id !== selectedCancelJob._id));
-      Alert.alert("Success", payload?.message || "Job cancelled. A new candidate will be notified.");
+      Alert.alert(t('success'), payload?.message || t('jobCancelledNewCandidate'));
       closeCancelModal();
     } catch (err) {
       console.error("Cancel job error:", err);
-      Alert.alert("Error", "Cancellation failed. Please try again.");
+      Alert.alert(t('error'), t('cancellationFailedTryAgain'));
     } finally {
       setCancelProcessing(false);
     }
@@ -857,7 +860,7 @@ export default function Jobs(): React.ReactElement {
             {!isPaid(job, currentUserPhone) && (job.status === "accepted" || job.status === "in_progress") && job.acceptedBy === currentUserPhone && (
               <View style={{ marginTop: 14 }}>
                 <Text style={{ color: "#b91c1c", fontSize: 12, marginBottom: 8 }}>
-                  "Cancelling a job may affect your rating and can incur penalties if done after the allowed window."
+                  {t('cancelJobCardWarning')}
                 </Text>
                 <TouchableOpacity
                   style={{
@@ -870,7 +873,7 @@ export default function Jobs(): React.ReactElement {
                   onPress={() => openCancelModal(job)}
                 >
                   <Text style={{ color: "#fff", fontSize: 14, fontWeight: "700" }}>
-                    "Cancel job"
+                    {t('cancelJob')}
                   </Text>
                 </TouchableOpacity>
               </View>
@@ -885,6 +888,18 @@ export default function Jobs(): React.ReactElement {
   // 1) payment completed, 2) day expired (past local midnight).
   const pendingJobs = acceptedJobs.filter((job) => !(isPaid(job, currentUserPhone) && isJobDayExpired(job)));
   const previewJobs = pendingJobs.slice(0, 3);
+
+  const pastJobs = acceptedJobs
+    .filter((job) => isPaid(job, currentUserPhone) && isJobDayExpired(job))
+    .sort((a, b) => {
+      const aTime = new Date(a.paymentTime || a.date || a.createdAt || 0).getTime();
+      const bTime = new Date(b.paymentTime || b.date || b.createdAt || 0).getTime();
+      return bTime - aTime;
+    });
+
+  const totalPastJobPages = Math.max(1, Math.ceil(pastJobs.length / PAST_JOBS_PAGE_SIZE));
+  const pagedPastJobs = pastJobs.slice((pastJobsPage - 1) * PAST_JOBS_PAGE_SIZE, pastJobsPage * PAST_JOBS_PAGE_SIZE);
+
   const { weekStart, weekEnd } = getWeekWindow();
   const weeklyJobs = acceptedJobs.filter((job) => {
     const sourceDate = job.paymentTime || job.date || job.createdAt;
@@ -894,13 +909,18 @@ export default function Jobs(): React.ReactElement {
     return d >= weekStart && d < weekEnd;
   });
 
+  const openPastJobsModal = () => {
+    setPastJobsPage(1);
+    setPastJobsModalVisible(true);
+  };
+
   return (
     <SafeAreaView edges={['top', 'left', 'right', 'bottom']} style={{ flex: 1 }}>
       <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 12 }}>
         <Text style={{ fontSize: 20, fontWeight: '800', color: '#111827' }}>{t('acceptedJobs') || 'Accepted Jobs'}</Text>
         <TouchableOpacity
           style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}
-          onPress={() => router.push('/GigHistory' as any)}
+          onPress={openPastJobsModal}
         >
           <MaterialIcons name="history" size={22} color="#1d4ed8" />
           <Text style={{ color: '#1d4ed8', fontWeight: '700' }}>{t('pastJobs') || 'Past Jobs'}</Text>
@@ -927,6 +947,56 @@ export default function Jobs(): React.ReactElement {
       />
 
       <Modal
+        visible={pastJobsModalVisible}
+        animationType="slide"
+        transparent={false}
+        onRequestClose={() => setPastJobsModalVisible(false)}
+      >
+        <SafeAreaView edges={['top', 'left', 'right', 'bottom']} style={{ flex: 1, backgroundColor: '#f9fafb' }}>
+          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 14, backgroundColor: '#ffffff', borderBottomWidth: 1, borderBottomColor: '#e5e7eb' }}>
+            <Text style={{ fontSize: 20, fontWeight: '800', color: '#111827' }}>{t('pastJobs') || 'Past Jobs'}</Text>
+            <TouchableOpacity onPress={() => setPastJobsModalVisible(false)} style={{ padding: 8 }}>
+              <MaterialIcons name="close" size={28} color="#1d4ed8" />
+            </TouchableOpacity>
+          </View>
+
+          <View style={{ flex: 1 }}>
+            <FlatList
+              data={pagedPastJobs}
+              keyExtractor={(item) => item._id}
+              contentContainerStyle={{ paddingBottom: 24, paddingTop: 16 }}
+              ListEmptyComponent={
+                <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', paddingVertical: 40 }}>
+                  <Text style={{ color: '#6b7280', fontSize: 14 }}>{t('noPastJobsYet')}</Text>
+                </View>
+              }
+              renderItem={renderJobCard}
+            />
+          </View>
+
+          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 12, backgroundColor: '#fff', borderTopWidth: 1, borderTopColor: '#e5e7eb' }}>
+            <TouchableOpacity
+              style={{ padding: 12, backgroundColor: pastJobsPage <= 1 ? '#d1d5db' : '#1d4ed8', borderRadius: 10, flex: 1, marginRight: 8, alignItems: 'center' }}
+              disabled={pastJobsPage <= 1}
+              onPress={() => setPastJobsPage((page) => Math.max(1, page - 1))}
+            >
+              <Text style={{ color: '#fff', fontWeight: '700' }}>{t('previous')}</Text>
+            </TouchableOpacity>
+            <View style={{ flex: 1, alignItems: 'center' }}>
+              <Text style={{ color: '#4b5563', fontWeight: '700' }}>{`${t('page')} ${pastJobsPage} / ${totalPastJobPages}`}</Text>
+            </View>
+            <TouchableOpacity
+              style={{ padding: 12, backgroundColor: pastJobsPage >= totalPastJobPages ? '#d1d5db' : '#1d4ed8', borderRadius: 10, flex: 1, marginLeft: 8, alignItems: 'center' }}
+              disabled={pastJobsPage >= totalPastJobPages}
+              onPress={() => setPastJobsPage((page) => Math.min(totalPastJobPages, page + 1))}
+            >
+              <Text style={{ color: '#fff', fontWeight: '700' }}>{t('next')}</Text>
+            </TouchableOpacity>
+          </View>
+        </SafeAreaView>
+      </Modal>
+
+      <Modal
         visible={cancelModalVisible}
         transparent
         animationType="slide"
@@ -935,10 +1005,10 @@ export default function Jobs(): React.ReactElement {
         <View style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.55)", justifyContent: "center", padding: 18 }}>
           <View style={{ backgroundColor: "#fff", borderRadius: 18, padding: 18, maxHeight: "90%" }}>
             <Text style={{ fontSize: 18, fontWeight: "800", color: "#111827", marginBottom: 10 }}>
-              Cancel Job
+              {t('cancelJob')}
             </Text>
             <Text style={{ color: "#374151", fontSize: 13, marginBottom: 18, lineHeight: 20 }}>
-              Select a reason and confirm to cancel the accepted job. This may reopen the job for other workers.
+              {t('cancelJobDescription')}
             </Text>
 
             <View style={{ marginBottom: 14 }}>
@@ -968,7 +1038,7 @@ export default function Jobs(): React.ReactElement {
               <TextInput
                 value={cancelReasonDescription}
                 onChangeText={setCancelReasonDescription}
-                placeholder="Describe why you need to cancel"
+                placeholder={t('describeCancelReason')}
                 placeholderTextColor="#9ca3af"
                 multiline
                 numberOfLines={4}
@@ -986,10 +1056,10 @@ export default function Jobs(): React.ReactElement {
 
             <View style={{ backgroundColor: "#fef3c7", borderRadius: 12, padding: 12, marginBottom: 16 }}>
               <Text style={{ color: "#92400e", fontSize: 12, fontWeight: "600", marginBottom: 6 }}>
-                Important
+                {t('important')}
               </Text>
               <Text style={{ color: "#92400e", fontSize: 12, lineHeight: 18 }}>
-                Worker cancellation is only allowed for accepted or in-progress jobs. Cancelling late may affect your rating and trigger penalties.
+                {t('cancelJobWarning')}
               </Text>
             </View>
 
@@ -1023,7 +1093,7 @@ export default function Jobs(): React.ReactElement {
                 }}
               >
                 <Text style={{ color: "#fff", fontWeight: "700" }}>
-                  {cancelProcessing ? "Processing..." : "Confirm Cancel"}
+                  {cancelProcessing ? t('processing') : t('confirmCancel')}
                 </Text>
               </TouchableOpacity>
             </View>

@@ -1,7 +1,7 @@
 {
   "expo": {
     "name": "indianworker",
-    "slug": "kaamwale3",
+    "slug": "do-work-map",
     "version": "1.0.0",
     "orientation": "portrait",
     "scheme": "kaamwale3",
@@ -53,9 +53,9 @@
     },
     "extra": {
       "eas": {
-        "projectId": "8a6c9f14-6f97-4d37-8daf-a8e8a86487cb"
+        "projectId": "e4907a5d-c026-41c1-8cb5-0ce75ae7bc77"
       }
     },
-    "owner": "atul-dowork"
+    "owner": "mapboxatul_41721"
   }
 }

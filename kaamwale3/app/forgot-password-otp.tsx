@@ -3,6 +3,7 @@ import { View, Text, TextInput, TouchableOpacity, Alert, StatusBar, ActivityIndi
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { API_BASE } from '../utils/config';
 import styles from '../styles/LoginScreenStyles';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
 export default function ForgotPasswordOtpScreen() {
   const router = useRouter();
@@ -68,7 +69,7 @@ export default function ForgotPasswordOtpScreen() {
   };
 
   return (
-    <View style={styles.container}>
+    <SafeAreaView style={styles.container} edges={['top', 'left', 'right']}>
       <StatusBar barStyle="light-content" backgroundColor="#007bff" />
       <View style={{ width: '100%', alignItems: 'center' }}>
         <Text style={styles.title}>Enter OTP</Text>
@@ -100,6 +101,6 @@ export default function ForgotPasswordOtpScreen() {
           <Text style={styles.forgotPasswordText}>Back</Text>
         </TouchableOpacity>
       </View>
-    </View>
+    </SafeAreaView>
   );
 }

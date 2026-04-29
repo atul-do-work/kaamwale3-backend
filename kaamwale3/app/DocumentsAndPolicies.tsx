@@ -16,12 +16,12 @@ import { useRouter } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useAuth } from '../context/AuthContext';
 import * as ImagePicker from 'expo-image-picker';
-import * as FileSystem from 'expo-file-system';
+import { getFileInfo } from '../utils/fileSystem';
 import { API_BASE } from '../utils/config';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { uploadToCloudinaryDirect } from '../utils/cloudinaryDirectUpload';
 
-const VERIFICATION_FILE_SIZE_LIMIT = 2 * 1024 * 1024; // 2MB
+const VERIFICATION_FILE_SIZE_LIMIT = 4 * 1024 * 1024; // 4MB
 
 const logActivity = async (token: string | null, action: string, details: string) => {
   try {
@@ -126,13 +126,19 @@ export default function DocumentsAndPolicies() {
         return;
       }
 
-      const fileInfo = await FileSystem.getInfoAsync(photo.uri);
-      if (!fileInfo.exists || !fileInfo.size) {
+      const fileInfo = await getFileInfo(photo.uri);
+      const fileSize = typeof fileInfo.size === 'number' ? fileInfo.size : 0;
+      if (!fileInfo.exists) {
         showModal('error', 'Upload Failed', 'Unable to read selected file.');
         return;
       }
-      if (fileInfo.size > VERIFICATION_FILE_SIZE_LIMIT) {
-        showModal('error', 'Upload Failed', 'Document too large. Please choose a file smaller than 2MB.');
+      
+      if (!fileSize || fileSize === 0) {
+        showModal('error', 'Upload Failed', 'Unable to read file size. Please try again.');
+        return;
+      }
+      if (fileSize > VERIFICATION_FILE_SIZE_LIMIT) {
+        showModal('error', 'Upload Failed', 'Document too large. Please choose a file smaller than 4MB.');
         return;
       }
 

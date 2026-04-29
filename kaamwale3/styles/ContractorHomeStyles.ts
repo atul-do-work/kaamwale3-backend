@@ -211,12 +211,12 @@ export default StyleSheet.create({
 
   // LEADERBOARD CONTAINER - Modern styling
   leaderboardWrapper: {
-    flex: 1,
     minHeight: isCompactHeight ? 260 : 320,
+    marginTop: 4,
     borderTopLeftRadius: 32,
     borderTopRightRadius: 32,
-    padding: isCompactHeight ? 16 : 24,
-    marginTop: 0,
+    padding: isCompactHeight ? 8 : 12,
+    paddingBottom: 0,
     overflow: 'hidden',
     backgroundColor: '#fff',
     elevation: 12,
@@ -224,7 +224,6 @@ export default StyleSheet.create({
     shadowOpacity: 0.18,
     shadowOffset: { width: 0, height: -8 },
     shadowRadius: 16,
-    position: 'relative',
   },
   leaderboardBackgroundGradient: {
     position: 'absolute',
@@ -237,7 +236,6 @@ export default StyleSheet.create({
     zIndex: 0,
   },
   leaderboardContent: {
-    flex: 1,
     zIndex: 1,
   },
   leaderboardWrapperExpanded: {
@@ -256,11 +254,11 @@ export default StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: isCompactHeight ? 12 : 18,
+    marginBottom: isCompactHeight ? 2 : 4,
     paddingHorizontal: 4,
   },
   expandButton: {
-    padding: 10,
+    padding: 6,
     borderRadius: 14,
     backgroundColor: '#FFF3CD',
     elevation: 2,
@@ -286,18 +284,129 @@ export default StyleSheet.create({
     zIndex: 0,
   },
   leaderboardScroll: { 
-    marginTop: 12, 
+    marginTop: 6, 
     paddingHorizontal: 4,
-    paddingBottom: 20,
+    paddingBottom: 0,
+    paddingTop: isCompactHeight ? 6 : 8,
   },
 
   leaderboardTitle: { 
-    fontSize: isCompactHeight ? 22 : 25, 
-    fontWeight: '900', 
+    fontSize: isCompactHeight ? 18 : 20, 
+    fontWeight: '800', 
     color: '#1a2f4d',
-    letterSpacing: 0.4,
-    lineHeight: isCompactHeight ? 28 : 31,
+    letterSpacing: 0.2,
+    lineHeight: isCompactHeight ? 22 : 24,
   },
+
+  // Top-3 leaderboard UI
+  topThreeContainer: {
+    marginTop: 8,
+    marginBottom: 10,
+    alignItems: 'center',
+  },
+  topThreeInner: {
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    justifyContent: 'center',
+    width: '100%',
+    paddingHorizontal: 12,
+  },
+  topThreeItem: {
+    alignItems: 'center',
+    width: '28%',
+  },
+  topThreeCenter: {
+    width: '44%',
+    marginBottom: -14,
+  },
+  topThreeAvatar: {
+    width: 72,
+    height: 72,
+    borderRadius: 36,
+    borderWidth: 3,
+    borderColor: '#fff',
+    marginBottom: 6,
+    backgroundColor: '#e9e6ff',
+  },
+  topThreeAvatarLarge: {
+    width: 96,
+    height: 96,
+    borderRadius: 48,
+    borderWidth: 4,
+    borderColor: '#fff',
+    marginBottom: 4,
+    backgroundColor: '#fff4e6',
+  },
+  topThreePlaceholder: {
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#7c4dff',
+  },
+  topThreeInitial: { color: '#fff', fontSize: 28, fontWeight: '900' },
+  topThreeName: { fontSize: 13, fontWeight: '800', color: '#1a2f4d', textAlign: 'center' },
+  topThreeNameCenter: { fontSize: 14 },
+  topThreePoints: { fontSize: 12, color: '#6b5bff', fontWeight: '800', marginTop: 6 },
+  topThreePointsCenter: { color: '#ffcf4d' },
+  topThreeRank: { display: 'none' },
+  topThreeRankCenter: { display: 'none' },
+  crownWrapper: {
+    position: 'absolute',
+    top: -8,
+    alignSelf: 'center',
+    zIndex: 5,
+    backgroundColor: 'transparent',
+  },
+  topBadge: {
+    position: 'absolute',
+    backgroundColor: '#7c4dff',
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 10,
+    borderWidth: 2,
+    borderColor: '#fff',
+    elevation: 4,
+  },
+  topBadgeText: { color: '#fff', fontWeight: '900', fontSize: 11 },
+  tableHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 14,
+    marginTop: 8,
+    marginBottom: 8,
+    borderRadius: 12,
+    backgroundColor: 'rgba(124,77,255,0.06)',
+  },
+  tableHeaderText: { color: '#1a2f4d', fontWeight: '900', fontSize: 13 },
+  topThreeItemPlaceholder: { width: '30%' },
+
+  // Purple rounded rows for subsequent ranks
+  purpleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#7c4dff',
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    borderRadius: 14,
+    marginBottom: 12,
+    elevation: 3,
+  },
+  rowLeft: { flexDirection: 'row', alignItems: 'center' },
+  rowRankCircle: {
+    backgroundColor: 'rgba(255,255,255,0.18)',
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderRadius: 16,
+    marginRight: 12,
+  },
+  rowRankText: { color: '#fff', fontWeight: '900' },
+  rowAvatar: { width: 42, height: 42, borderRadius: 21, marginRight: 12, borderWidth: 2, borderColor: 'rgba(255,255,255,0.18)' },
+  rowNameText: { color: '#fff', fontWeight: '800', fontSize: 15 },
+  rowPointsText: { color: '#fff', fontWeight: '900', fontSize: 14 },
 
   // PREMIUM BANNER - Eye-catching design
   premiumBanner: {
@@ -471,6 +580,28 @@ export default StyleSheet.create({
     paddingHorizontal: 20,
   },
 
+  // Load More Button Styles
+  loadMoreButton: {
+    backgroundColor: '#1f3a5f',
+    paddingVertical: 12,
+    paddingHorizontal: 24,
+    borderRadius: 25,
+    marginTop: 16,
+    marginBottom: 16,
+    alignSelf: 'center',
+    elevation: 3,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 4,
+  },
+  loadMoreButtonText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '600',
+    textAlign: 'center',
+  },
+
   premiumText: { color: '#fff', fontSize: 26, fontWeight: '800', marginBottom: 8, letterSpacing: 0.3 },
   premiumSubText: { color: '#fff', fontSize: 16, marginBottom: 18, fontWeight: '500' },
   premiumButton: {
@@ -481,5 +612,4 @@ export default StyleSheet.create({
     elevation: 4,
   },
   premiumButtonText: { color: '#1f3a5f', fontWeight: '800', fontSize: 16, letterSpacing: 0.2 },
-
 });

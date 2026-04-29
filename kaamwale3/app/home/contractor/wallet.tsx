@@ -17,7 +17,7 @@ import { WebView } from "react-native-webview";
 import { MaterialIcons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import axios from "axios";
-import { useFocusEffect } from "@react-navigation/native"; // ✅ ADDED for closing modals on tab blur
+import { useFocusEffect, useIsFocused } from "@react-navigation/native"; // ✅ ADDED for closing modals on tab blur
 import { SERVER_URL, API_BASE } from "../../../utils/config";
 import styles from "../../../styles/ContractorWalletStyles";
 import { socket } from "../../../utils/socket";
@@ -29,8 +29,8 @@ import { useWalletBalance } from "../../../hooks/useWalletBalance"; // ✅ Smart
 
 // Wallet cards data
 const walletCards = [
-  { id: 1, title: "Wallet Summary", amount: 0, date: "This Week", icon: null },
-  { id: 2, title: "Transactions", amount: null, date: "This Week", icon: "account-balance-wallet" },
+  { id: 1, titleKey: "walletSummary", amount: 0, dateKey: "thisWeek", icon: null },
+  { id: 2, titleKey: "transactions", amount: null, dateKey: "thisWeek", icon: "account-balance-wallet" },
 ];
 
 interface Job {
@@ -75,6 +75,7 @@ type AppModalAction = {
 };
 
 export default function ContractorWalletAttendance() {
+  const isFocused = useIsFocused();
   const [activeTab, setActiveTab] = useState<"Wallet" | "Attendance">("Wallet");
   const { t } = useLanguage();
   const { accessToken, user: authUser } = useAuth();
@@ -101,6 +102,9 @@ export default function ContractorWalletAttendance() {
   // NEW UI states
   const [showDepositInput, setShowDepositInput] = useState<boolean>(false);
   const [showWithdrawInput, setShowWithdrawInput] = useState<boolean>(false);
+  const [recentWithdrawal, setRecentWithdrawal] = useState<any>(null);
+  const [withdrawStatus, setWithdrawStatus] = useState<any>(null);
+  const [withdrawBlockedMessage, setWithdrawBlockedMessage] = useState<string>('');
   const [payOptionsTarget, setPayOptionsTarget] = useState<{ jobId: string; workerPhone?: string } | null>(null);
 
   // Rating states
@@ -207,11 +211,74 @@ export default function ContractorWalletAttendance() {
     })();
   }, [accessToken, authUser]);
 
+  const formatDateTime = (date: Date) => {
+    return date.toLocaleString('en-IN', {
+      day: '2-digit',
+      month: 'short',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+  };
+
+  const getWithdrawBlockInfo = () => {
+    if (!recentWithdrawal) {
+      return { isBlocked: false, message: '' };
+    }
+
+    if (String(recentWithdrawal.status || '').toLowerCase() !== 'success') {
+      return {
+        isBlocked: true,
+        message: 'Please wait until your previous withdrawal is completed before requesting a new one.',
+      };
+    }
+
+    const lastCreated = new Date(recentWithdrawal.createdAt || recentWithdrawal.updatedAt || recentWithdrawal.created_at || 0);
+    const oneWeekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+    if (lastCreated >= oneWeekAgo) {
+      const nextAvailable = new Date(lastCreated.getTime() + 7 * 24 * 60 * 60 * 1000);
+      return {
+        isBlocked: true,
+        message: `Only one withdrawal is allowed per week. Next withdrawal available after ${formatDateTime(nextAvailable)}.`,
+      };
+    }
+
+    return { isBlocked: false, message: '' };
+  };
+
+  const fetchRecentWithdrawal = async () => {
+    if (!accessToken) return;
+
+    try {
+      const res = await api.get('/wallet/withdraw/status');
+      if (res.data?.success) {
+        setRecentWithdrawal(res.data.recentWithdrawal || null);
+        setWithdrawStatus(res.data.withdrawStatus || null);
+      }
+    } catch (err) {
+      console.error('Failed to load recent withdrawal:', err);
+    }
+  };
+
+  useEffect(() => {
+    if (accessToken) {
+      fetchRecentWithdrawal();
+    }
+  }, [accessToken]);
+
+  useEffect(() => {
+    const blockInfo = withdrawStatus?.blocked
+      ? { message: withdrawStatus.message }
+      : getWithdrawBlockInfo();
+    setWithdrawBlockedMessage(blockInfo.message);
+  }, [recentWithdrawal, withdrawStatus]);
 
 
   // ✅ Memoize fetchJobs to prevent re-creation on every render
   const fetchJobs = React.useCallback(async () => {
     if (!accessToken) return;
+    if (activeTab !== "Attendance") return;
+    if (!isFocused) return;
 
     setLoading(true);
     try {
@@ -310,16 +377,28 @@ export default function ContractorWalletAttendance() {
     } finally {
       setLoading(false);
     }
-  }, [accessToken, authUser?.phone]);
+  }, [accessToken, activeTab, authUser?.phone, isFocused]);
 
   // SOCKET LISTENER FOR REALTIME UPDATES
   useEffect(() => {
-    fetchJobs();
+    if (activeTab !== "Attendance") {
+      return;
+    }
+
+    if (isFocused) {
+      fetchJobs();
+    }
 
     // ✅ Use named handlers for safe cleanup
-    const handleJobUpdated = () => fetchJobs();
-    const handleJobAccepted = () => fetchJobs();
-    const handleJobCancelled = () => fetchJobs();
+    const handleJobUpdated = () => {
+      if (isFocused) fetchJobs();
+    };
+    const handleJobAccepted = () => {
+      if (isFocused) fetchJobs();
+    };
+    const handleJobCancelled = () => {
+      if (isFocused) fetchJobs();
+    };
 
     socket.on("jobUpdated", handleJobUpdated);
     socket.on("jobAccepted", handleJobAccepted);
@@ -332,21 +411,23 @@ export default function ContractorWalletAttendance() {
       socket.off("jobAccepted", handleJobAccepted);
       socket.off("jobCancelled", handleJobCancelled);
     };
-  }, [fetchJobs, accessToken, authUser?.phone]);
+  }, [activeTab, fetchJobs, isFocused]);
 
   // Refresh attendance list whenever user opens the Attendance tab.
   useEffect(() => {
-    if (activeTab === "Attendance") {
+    if (activeTab === "Attendance" && isFocused) {
       fetchJobs();
     }
-  }, [activeTab, fetchJobs]);
+  }, [activeTab, fetchJobs, isFocused]);
 
   // Refresh on screen focus as fallback when socket event is missed.
   useFocusEffect(
     React.useCallback(() => {
-      fetchJobs();
+      if (activeTab === "Attendance") {
+        fetchJobs();
+      }
       return () => {};
-    }, [fetchJobs])
+    }, [activeTab, fetchJobs])
   );
 
   // Mark attendance
@@ -498,7 +579,7 @@ export default function ContractorWalletAttendance() {
         await Promise.allSettled([fetchJobs(), refreshWallet()]);
         const settledAsPaid = await checkJobPaidOnServer(currentPaymentJobId, currentPaymentWorkerPhone || undefined);
         if (settledAsPaid) {
-          showAppModal("success", t('success'), "Payment was completed successfully. Status has been synced.");
+          showAppModal("success", t('success'), t('paymentSyncedSuccessfully'));
           setCurrentPaymentJobId(null);
           setCurrentPaymentWorkerPhone(null);
           return;
@@ -564,7 +645,7 @@ export default function ContractorWalletAttendance() {
       } else {
         const settledAsPaid = await checkJobPaidOnServer(currentPaymentJobId, currentPaymentWorkerPhone || undefined);
         if (settledAsPaid) {
-          showAppModal("success", t('success'), "Payment was completed successfully. Status has been synced.");
+          showAppModal("success", t('success'), t('paymentSyncedSuccessfully'));
           await Promise.allSettled([fetchJobs(), fetchWallet()]);
           setCurrentPaymentJobId(null);
           setCurrentPaymentWorkerPhone(null);
@@ -578,7 +659,7 @@ export default function ContractorWalletAttendance() {
       await Promise.allSettled([fetchJobs(), fetchWallet()]);
       const settledAsPaid = await checkJobPaidOnServer(currentPaymentJobId, currentPaymentWorkerPhone || undefined);
       if (settledAsPaid) {
-        showAppModal("success", t('success'), "Payment was completed successfully. Status has been synced.");
+        showAppModal("success", t('success'), t('paymentSyncedSuccessfully'));
         setCurrentPaymentJobId(null);
         setCurrentPaymentWorkerPhone(null);
         return;
@@ -693,7 +774,7 @@ export default function ContractorWalletAttendance() {
         setShowAddBank(false);
         setShowBankInfo(true);
         // Show success message with custom modal instead of Alert
-        showAppModal("success", "Success", "Bank account added! Waiting for verification.", [
+        showAppModal("success", t('success'), t('bankAddedWaitingVerification'), [
           {
             text: "OK",
             onPress: () => fetchBankAccount(),
@@ -710,11 +791,11 @@ export default function ContractorWalletAttendance() {
     const upiRegex = /^[a-zA-Z0-9._-]{2,256}@[a-zA-Z]{2,64}$/;
 
     if (!candidate) {
-      showAppModal("error", "Error", "Please enter a UPI ID");
+      showAppModal("error", t('error'), t('enterUpiId'));
       return;
     }
     if (!upiRegex.test(candidate)) {
-      showAppModal("error", "Error", "Please enter a valid UPI ID (example: name@bank)");
+      showAppModal("error", t('error'), t('enterValidUpiId'));
       return;
     }
 
@@ -726,10 +807,10 @@ export default function ContractorWalletAttendance() {
         setShowAddUpi(false);
         setPayoutMethod("upi");
         setShowUpiInfo(true);
-        showAppModal("success", "Success", res.data.message || "UPI ID saved successfully");
+        showAppModal("success", t('success'), res.data.message || t('upiSavedSuccessfully'));
       }
     } catch (err: any) {
-      showAppModal("error", "Error", err.response?.data?.message || "Failed to save UPI ID");
+      showAppModal("error", t('error'), err.response?.data?.message || t('failedSaveUpiId'));
     }
   };
 
@@ -921,6 +1002,17 @@ export default function ContractorWalletAttendance() {
 
   // ✅ Confirm Withdraw
   const confirmWithdraw = async () => {
+    if (withdrawStatus?.blocked) {
+      showAlert(t('error'), withdrawStatus.message || 'Withdrawal is temporarily unavailable.');
+      return;
+    }
+
+    const blockInfo = getWithdrawBlockInfo();
+    if (blockInfo.isBlocked) {
+      showAlert(t('error'), blockInfo.message || 'Withdrawal is temporarily unavailable.');
+      return;
+    }
+
     if (!withdrawAmount || Number(withdrawAmount) <= 0) {
       showAlert(t('error'), t('enterValidWithdrawAmount'));
       return;
@@ -932,7 +1024,7 @@ export default function ContractorWalletAttendance() {
     }
 
     if (Number(withdrawAmount) > withdrawableBalance) {
-      showAlert("Error", "Insufficient balance");
+      showAlert(t('error'), t('insufficientBalance'));
       return;
     }
 
@@ -941,7 +1033,7 @@ export default function ContractorWalletAttendance() {
       return;
     }
     if (payoutMethod === "bank" && bankAccount && !bankAccount.isVerified) {
-      showAlert("Bank Verification Pending", `Status: ${bankAccount.verificationStatus || "pending"}`);
+      showAlert(t('bankVerificationPending'), `${t('status')}: ${bankAccount.verificationStatus || t('pending')}`);
       return;
     }
 
@@ -950,7 +1042,7 @@ export default function ContractorWalletAttendance() {
       return;
     }
     if (payoutMethod === "upi" && upiAccount && !upiAccount.isVerified) {
-      showAlert("UPI Verification Pending", `Status: ${upiAccount.verificationStatus || "pending"}`);
+      showAlert(t('upiVerificationPending'), `${t('status')}: ${upiAccount.verificationStatus || t('pending')}`);
       return;
     }
 
@@ -965,7 +1057,7 @@ export default function ContractorWalletAttendance() {
         showAlert(t('success'), t('withdrawalInitiated') + "!\n\n" + t('amountTransferred'));
         setWithdrawAmount("");
         setShowWithdrawInput(false);
-        
+        await fetchRecentWithdrawal();
       }
     } catch (err: any) {
       const response = err.response?.data;
@@ -1113,14 +1205,14 @@ export default function ContractorWalletAttendance() {
           style={[styles.tabButton, activeTab === "Wallet" && styles.activeTab]}
           onPress={() => setActiveTab("Wallet")}
         >
-          <Text style={styles.tabText}>Wallet</Text>
+          <Text style={styles.tabText}>{t('wallet')}</Text>
         </TouchableOpacity>
 
         <TouchableOpacity
           style={[styles.tabButton, activeTab === "Attendance" && styles.activeTab]}
           onPress={() => setActiveTab("Attendance")}
         >
-          <Text style={styles.tabText}>Attendance</Text>
+          <Text style={styles.tabText}>{t('attendance')}</Text>
         </TouchableOpacity>
       </View>
 
@@ -1245,6 +1337,29 @@ export default function ContractorWalletAttendance() {
                   <Text style={styles.buttonText}>Submit</Text>
                 </TouchableOpacity>
               </View>
+              {recentWithdrawal && (
+                <View style={{ marginHorizontal: 16, marginTop: 12, backgroundColor: "#fff7e6", borderRadius: 10, padding: 12, borderWidth: 1, borderColor: "#f5c260" }}>
+                  <Text style={{ fontSize: 13, fontWeight: "700", color: "#7a4b00", marginBottom: 4 }}>Recent Withdrawal</Text>
+                  <Text style={{ fontSize: 13, color: "#4a2d00" }}>
+                    Amount: ₹{recentWithdrawal.amount || recentWithdrawal.withdrawAmount || "--"}
+                  </Text>
+                  <Text style={{ fontSize: 13, color: "#4a2d00", marginTop: 4 }}>
+                    Status: {String(recentWithdrawal.status || recentWithdrawal.paymentStatus || "Pending").toUpperCase()}
+                  </Text>
+                  {getWithdrawBlockInfo().isBlocked && (
+                    <Text style={{ marginTop: 6, fontSize: 12, color: "#7a4b00" }}>
+                      {getWithdrawBlockInfo().message}
+                    </Text>
+                  )}
+                </View>
+              )}
+              {withdrawStatus?.isRequestPending && (
+                <View style={{ marginHorizontal: 16, marginTop: 12, padding: 10, borderRadius: 10, backgroundColor: '#f0f9ff', borderWidth: 1, borderColor: '#bfdbfe' }}>
+                  <Text style={{ fontSize: 12, color: '#1d4ed8' }}>
+                    One withdrawal per week is allowed. Your current withdrawal request is still in progress, so please wait until it is completed before requesting again.
+                  </Text>
+                </View>
+              )}
             </View>
           )}
 
@@ -1266,7 +1381,7 @@ export default function ContractorWalletAttendance() {
             <View style={{ flexDirection: "row", alignItems: "center" }}>
               <MaterialIcons name="card-giftcard" size={20} color="#fff" />
               <Text style={{ color: "#fff", fontSize: 15, fontWeight: "700", marginLeft: 10 }}>
-                Refer & Earn
+                {t('referAndEarn')}
               </Text>
             </View>
             <MaterialIcons name="arrow-forward" size={20} color="#fff" />
@@ -1278,15 +1393,15 @@ export default function ContractorWalletAttendance() {
               <TouchableOpacity
                 key={card.id}
                 style={styles.cardContainer}
-                onPress={() => console.log("Card clicked", card.title)}
+                onPress={() => console.log("Card clicked", card.titleKey)}
               >
                 {card.amount !== null ? (
                   <Text style={styles.cardAmount}>₹{card.amount}</Text>
                 ) : (
                   <MaterialIcons name={card.icon as any} size={28} color="#1a2f4d" />
                 )}
-                <Text style={styles.cardTitle}>{card.title}</Text>
-                <Text style={styles.cardDate}>{card.date}</Text>
+                <Text style={styles.cardTitle}>{t(card.titleKey as any)}</Text>
+                <Text style={styles.cardDate}>{t(card.dateKey as any)}</Text>
               </TouchableOpacity>
             ))}
           </View>
@@ -1308,7 +1423,7 @@ export default function ContractorWalletAttendance() {
                 ListEmptyComponent={
                   <View style={{ paddingHorizontal: 16, paddingTop: 24 }}>
                     <Text style={{ color: "#6b7280", textAlign: "center" }}>
-                      No attendance jobs found yet.
+                      {t('noAttendanceJobsYet')}
                     </Text>
                   </View>
                 }
@@ -1331,7 +1446,7 @@ export default function ContractorWalletAttendance() {
                   }}
                   onPress={() => setDisplayedCount(prev => prev + 5)} // ✅ Load 5 more cards
                 >
-                  <Text style={{ color: '#fff', fontSize: 14, fontWeight: '600' }}>See More</Text>
+                  <Text style={{ color: '#fff', fontSize: 14, fontWeight: '600' }}>{t('seeMore')}</Text>
                 </TouchableOpacity>
               )}
             </View>
@@ -1344,17 +1459,17 @@ export default function ContractorWalletAttendance() {
         <View style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.5)", justifyContent: "flex-end" }}>
           <View style={{ backgroundColor: "#fff", borderTopLeftRadius: 20, borderTopRightRadius: 20, paddingBottom: 30 }}>
             <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingHorizontal: 16, paddingTop: 20, paddingBottom: 16, borderBottomWidth: 1, borderBottomColor: "#F0F0F0" }}>
-              <Text style={{ fontSize: 18, fontWeight: "700", color: "#1A1A1A" }}>Rate {selectedJobForRating?.acceptedBy}</Text>
+              <Text style={{ fontSize: 18, fontWeight: "700", color: "#1A1A1A" }}>{t('rateWorker')} {selectedJobForRating?.acceptedBy}</Text>
               <TouchableOpacity onPress={() => setRatingModalVisible(false)}>
                 <MaterialIcons name="close" size={24} color="#333" />
               </TouchableOpacity>
             </View>
 
             <View style={{ paddingHorizontal: 16, paddingTop: 16 }}>
-              <Text style={{ fontSize: 14, fontWeight: "600", color: "#666", marginBottom: 16 }}>Job: {selectedJobForRating?.title}</Text>
+              <Text style={{ fontSize: 14, fontWeight: "600", color: "#666", marginBottom: 16 }}>{t('jobLabel')}: {selectedJobForRating?.title}</Text>
 
               <View style={{ marginBottom: 20 }}>
-                <Text style={{ fontSize: 14, fontWeight: "600", color: "#333", marginBottom: 10 }}>Your Rating:</Text>
+                <Text style={{ fontSize: 14, fontWeight: "600", color: "#333", marginBottom: 10 }}>{t('yourRating')}:</Text>
                 <View style={{ flexDirection: "row", gap: 10 }}>
                   {[1, 2, 3, 4, 5].map((star) => (
                     <TouchableOpacity
@@ -1370,10 +1485,10 @@ export default function ContractorWalletAttendance() {
                 </View>
               </View>
 
-              <Text style={{ fontSize: 14, fontWeight: "600", color: "#333", marginBottom: 8 }}>Feedback (Optional):</Text>
+              <Text style={{ fontSize: 14, fontWeight: "600", color: "#333", marginBottom: 8 }}>{t('feedbackOptional')}:</Text>
               <TextInput
                 style={{ borderWidth: 1, borderColor: "#DDD", borderRadius: 8, padding: 12, fontSize: 14, color: "#333", minHeight: 80, textAlignVertical: "top", marginBottom: 20 }}
-                placeholder="Share your feedback about this worker..."
+                placeholder={t('feedbackPlaceholderWorker')}
                 placeholderTextColor="#999"
                 multiline
                 maxLength={200}
@@ -1386,7 +1501,7 @@ export default function ContractorWalletAttendance() {
                   style={{ flex: 1, paddingVertical: 12, borderRadius: 8, backgroundColor: "#F0F0F0", alignItems: "center" }}
                   onPress={() => setRatingModalVisible(false)}
                 >
-                  <Text style={{ color: "#666", fontSize: 14, fontWeight: "600" }}>Cancel</Text>
+                  <Text style={{ color: "#666", fontSize: 14, fontWeight: "600" }}>{t('cancel')}</Text>
                 </TouchableOpacity>
                 <TouchableOpacity
                   style={{ flex: 1, paddingVertical: 12, borderRadius: 8, backgroundColor: "#FF9500", alignItems: "center" }}
@@ -1394,7 +1509,7 @@ export default function ContractorWalletAttendance() {
                   disabled={submittingRating}
                 >
                   <Text style={{ color: "#fff", fontSize: 14, fontWeight: "600" }}>
-                    {submittingRating ? "Submitting..." : "Submit Rating"}
+                    {submittingRating ? t('submitting') : t('submitRating')}
                   </Text>
                 </TouchableOpacity>
               </View>
@@ -1407,7 +1522,7 @@ export default function ContractorWalletAttendance() {
       <Modal visible={razorpayModalVisible} transparent animationType="slide">
         <View style={{ flex: 1, backgroundColor: "#fff" }}>
           <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingTop: 12, paddingHorizontal: 12, borderBottomWidth: 1, borderBottomColor: "#DDD" }}>
-            <Text style={{ fontSize: 16, fontWeight: "600", color: "#333" }}>Payment</Text>
+            <Text style={{ fontSize: 16, fontWeight: "600", color: "#333" }}>{t('payment')}</Text>
             <TouchableOpacity onPress={() => setRazorpayModalVisible(false)}>
               <MaterialIcons name="close" size={28} color="#333" />
             </TouchableOpacity>
@@ -1422,7 +1537,7 @@ export default function ContractorWalletAttendance() {
           ) : (
             <View style={{ flex: 1, justifyContent: "center", alignItems: "center" }}>
               <ActivityIndicator size="large" color="#1a2f4d" />
-              <Text style={{ marginTop: 12, color: "#666" }}>Loading payment...</Text>
+              <Text style={{ marginTop: 12, color: "#666" }}>{t('loadingPayment')}</Text>
             </View>
           )}
         </View>
@@ -1438,14 +1553,14 @@ export default function ContractorWalletAttendance() {
       }}>
         <SafeAreaView edges={['top', 'left', 'right', 'bottom']} style={{ flex: 1, backgroundColor: "#fff" }}>
           <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingTop: 12, paddingHorizontal: 12, paddingBottom: 12, borderBottomWidth: 1, borderBottomColor: "#DDD" }}>
-            <Text style={{ fontSize: 16, fontWeight: "600", color: "#333" }}>Wallet Deposit</Text>
+            <Text style={{ fontSize: 16, fontWeight: "600", color: "#333" }}>{t('walletDeposit')}</Text>
             <TouchableOpacity onPress={() => {
               setDepositModalVisible(false);
               setDepositModalHtml('');
               showAlert(
-                "Deposit in Progress?",
-                "If you just completed payment, it may take a moment to process. Don't close the app.",
-                [{ text: "OK", onPress: () => {
+                t('depositInProgressTitle'),
+                t('depositInProgressMessage'),
+                [{ text: t('ok'), onPress: () => {
                   // ✅ Fallback fetch wallet in case socket failed
                   fetchWallet();
                 } }]
@@ -1476,7 +1591,7 @@ export default function ContractorWalletAttendance() {
           ) : (
             <View style={{ flex: 1, justifyContent: "center", alignItems: "center" }}>
               <ActivityIndicator size="large" color="#1a2f4d" />
-              <Text style={{ marginTop: 12, color: "#666" }}>Loading payment gateway...</Text>
+              <Text style={{ marginTop: 12, color: "#666" }}>{t('loadingPaymentGateway')}</Text>
             </View>
           )}
         </SafeAreaView>
@@ -1492,7 +1607,7 @@ export default function ContractorWalletAttendance() {
           />
           <View style={{ width: "90%", backgroundColor: "#fff", borderRadius: 12, padding: 16 }}>
             <Text style={{ fontSize: 16, fontWeight: "700", color: "#111827", marginBottom: 12 }}>
-              Select Payout Method
+              {t('selectPayoutMethod')}
             </Text>
 
             <TouchableOpacity
@@ -1509,11 +1624,11 @@ export default function ContractorWalletAttendance() {
                 if (!bankAccount) setShowAddBank(true);
               }}
             >
-              <Text style={{ fontWeight: "700", color: "#111827" }}>Bank Account</Text>
+              <Text style={{ fontWeight: "700", color: "#111827" }}>{t('bankAccount')}</Text>
               <Text style={{ color: "#6b7280", marginTop: 2 }}>
                 {bankAccount?.maskedAccount
-                  ? `Linked: ${bankAccount.maskedAccount}${bankAccount?.isVerified ? " (Verified)" : " (Pending)"}`
-                  : "No bank account linked"}
+                  ? `${t('linked')}: ${bankAccount.maskedAccount}${bankAccount?.isVerified ? ` (${t('verified')})` : ` (${t('pending')})`}`
+                  : t('noBankLinked')}
               </Text>
             </TouchableOpacity>
 
@@ -1530,11 +1645,11 @@ export default function ContractorWalletAttendance() {
                 if (!upiAccount) setShowAddUpi(true);
               }}
             >
-              <Text style={{ fontWeight: "700", color: "#111827" }}>UPI ID</Text>
+              <Text style={{ fontWeight: "700", color: "#111827" }}>{t('upiId')}</Text>
               <Text style={{ color: "#6b7280", marginTop: 2 }}>
                 {upiAccount?.maskedUpiId
-                  ? `Linked: ${upiAccount.maskedUpiId}${upiAccount?.isVerified ? " (Verified)" : " (Pending)"}`
-                  : "No UPI ID linked"}
+                  ? `${t('linked')}: ${upiAccount.maskedUpiId}${upiAccount?.isVerified ? ` (${t('verified')})` : ` (${t('pending')})`}`
+                  : t('noUpiLinked')}
               </Text>
             </TouchableOpacity>
           </View>
@@ -1545,29 +1660,29 @@ export default function ContractorWalletAttendance() {
       <Modal visible={showAddUpi && activeTab === "Wallet"} transparent animationType="slide">
         <SafeAreaView edges={['top', 'left', 'right', 'bottom']} style={{ flex: 1, backgroundColor: "#fff" }}>
           <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingTop: 12, paddingHorizontal: 16, paddingBottom: 12, borderBottomWidth: 1, borderBottomColor: "#EEE" }}>
-            <Text style={{ fontSize: 18, fontWeight: "700", color: "#333" }}>Add UPI ID</Text>
+            <Text style={{ fontSize: 18, fontWeight: "700", color: "#333" }}>{t('addUpiId')}</Text>
             <TouchableOpacity onPress={() => setShowAddUpi(false)}>
               <MaterialIcons name="close" size={28} color="#333" />
             </TouchableOpacity>
           </View>
           <View style={{ padding: 16 }}>
-            <Text style={{ fontSize: 14, fontWeight: "600", color: "#333", marginBottom: 8 }}>UPI ID *</Text>
+            <Text style={{ fontSize: 14, fontWeight: "600", color: "#333", marginBottom: 8 }}>{t('upiId')} *</Text>
             <TextInput
               style={{ borderWidth: 1, borderColor: "#DDD", borderRadius: 8, padding: 12, marginBottom: 8, fontSize: 14 }}
-              placeholder="example@bank"
+              placeholder={t('upiPlaceholder')}
               autoCapitalize="none"
               autoCorrect={false}
               value={upiIdInput}
               onChangeText={setUpiIdInput}
             />
             <Text style={{ fontSize: 12, color: "#666", marginBottom: 18 }}>
-              Withdrawals will be sent to this UPI ID.
+              {t('upiWithdrawInfo')}
             </Text>
             <TouchableOpacity
               style={{ backgroundColor: "#1a2f4d", padding: 14, borderRadius: 8, alignItems: "center" }}
               onPress={handleAddUpiId}
             >
-              <Text style={{ color: "#fff", fontWeight: "700", fontSize: 15 }}>Save UPI ID</Text>
+              <Text style={{ color: "#fff", fontWeight: "700", fontSize: 15 }}>{t('saveUpiId')}</Text>
             </TouchableOpacity>
           </View>
         </SafeAreaView>
@@ -1579,7 +1694,7 @@ export default function ContractorWalletAttendance() {
         <SafeAreaView edges={['top', 'left', 'right', 'bottom']} style={{ flex: 1, backgroundColor: "#fff" }}>
           <ScrollView style={{ flex: 1 }}>
             <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingTop: 12, paddingHorizontal: 16, paddingBottom: 12, borderBottomWidth: 1, borderBottomColor: "#EEE" }}>
-              <Text style={{ fontSize: 18, fontWeight: "700", color: "#333" }}>Add Bank Account</Text>
+              <Text style={{ fontSize: 18, fontWeight: "700", color: "#333" }}>{t('addBankAccount')}</Text>
               <TouchableOpacity onPress={() => setShowAddBank(false)}>
                 <MaterialIcons name="close" size={28} color="#333" />
               </TouchableOpacity>
@@ -1587,25 +1702,25 @@ export default function ContractorWalletAttendance() {
 
             <View style={{ padding: 16 }}>
               {/* Account Holder Name */}
-              <Text style={{ fontSize: 14, fontWeight: "600", color: "#333", marginBottom: 8 }}>Account Holder Name *</Text>
+              <Text style={{ fontSize: 14, fontWeight: "600", color: "#333", marginBottom: 8 }}>{t('accountHolderName')} *</Text>
               <TextInput
                 style={{ borderWidth: 1, borderColor: "#DDD", borderRadius: 8, padding: 12, marginBottom: 16, fontSize: 14 }}
-                placeholder="Full name as per bank"
+                placeholder={t('accountHolderNamePlaceholder')}
                 value={bankDetails.accountHolderName}
                 onChangeText={(val) => setBankDetails({ ...bankDetails, accountHolderName: val })}
               />
 
               {/* Bank Name */}
-              <Text style={{ fontSize: 14, fontWeight: "600", color: "#333", marginBottom: 8 }}>Bank Name *</Text>
+              <Text style={{ fontSize: 14, fontWeight: "600", color: "#333", marginBottom: 8 }}>{t('bankName')} *</Text>
               <TextInput
                 style={{ borderWidth: 1, borderColor: "#DDD", borderRadius: 8, padding: 12, marginBottom: 16, fontSize: 14 }}
-                placeholder="e.g., ICICI Bank, HDFC Bank"
+                placeholder={t('bankNamePlaceholder')}
                 value={bankDetails.bankName}
                 onChangeText={(val) => setBankDetails({ ...bankDetails, bankName: val })}
               />
 
               {/* Account Type */}
-              <Text style={{ fontSize: 14, fontWeight: "600", color: "#333", marginBottom: 8 }}>Account Type *</Text>
+              <Text style={{ fontSize: 14, fontWeight: "600", color: "#333", marginBottom: 8 }}>{t('accountType')} *</Text>
               <View style={{ flexDirection: 'row', marginBottom: 16 }}>
                 <TouchableOpacity
                   style={{
@@ -1619,7 +1734,7 @@ export default function ContractorWalletAttendance() {
                   }}
                   onPress={() => setBankDetails({ ...bankDetails, accountType: 'savings' })}
                 >
-                  <Text style={{ fontWeight: bankDetails.accountType === 'savings' ? '700' : '600', color: bankDetails.accountType === 'savings' ? '#1a2f4d' : '#666' }}>Savings</Text>
+                  <Text style={{ fontWeight: bankDetails.accountType === 'savings' ? '700' : '600', color: bankDetails.accountType === 'savings' ? '#1a2f4d' : '#666' }}>{t('savings')}</Text>
                 </TouchableOpacity>
 
                 <TouchableOpacity
@@ -1633,35 +1748,35 @@ export default function ContractorWalletAttendance() {
                   }}
                   onPress={() => setBankDetails({ ...bankDetails, accountType: 'current' })}
                 >
-                  <Text style={{ fontWeight: bankDetails.accountType === 'current' ? '700' : '600', color: bankDetails.accountType === 'current' ? '#1a2f4d' : '#666' }}>Current</Text>
+                  <Text style={{ fontWeight: bankDetails.accountType === 'current' ? '700' : '600', color: bankDetails.accountType === 'current' ? '#1a2f4d' : '#666' }}>{t('current')}</Text>
                 </TouchableOpacity>
               </View>
 
               {/* Account Number */}
-              <Text style={{ fontSize: 14, fontWeight: "600", color: "#333", marginBottom: 8 }}>Account Number *</Text>
+              <Text style={{ fontSize: 14, fontWeight: "600", color: "#333", marginBottom: 8 }}>{t('accountNumber')} *</Text>
               <TextInput
                 style={{ borderWidth: 1, borderColor: "#DDD", borderRadius: 8, padding: 12, marginBottom: 16, fontSize: 14 }}
-                placeholder="Enter account number"
+                placeholder={t('enterAccountNumber')}
                 keyboardType="number-pad"
                 value={bankDetails.accountNumber}
                 onChangeText={(val) => setBankDetails({ ...bankDetails, accountNumber: val })}
               />
 
               {/* Confirm Account Number */}
-              <Text style={{ fontSize: 14, fontWeight: "600", color: "#333", marginBottom: 8 }}>Confirm Account Number *</Text>
+              <Text style={{ fontSize: 14, fontWeight: "600", color: "#333", marginBottom: 8 }}>{t('confirmAccountNumber')} *</Text>
               <TextInput
                 style={{ borderWidth: 1, borderColor: "#DDD", borderRadius: 8, padding: 12, marginBottom: 16, fontSize: 14 }}
-                placeholder="Re-enter account number"
+                placeholder={t('confirmAccountNumberPlaceholder')}
                 keyboardType="number-pad"
                 value={bankDetails.accountNumberConfirm}
                 onChangeText={(val) => setBankDetails({ ...bankDetails, accountNumberConfirm: val })}
               />
 
               {/* IFSC Code */}
-              <Text style={{ fontSize: 14, fontWeight: "600", color: "#333", marginBottom: 8 }}>IFSC Code *</Text>
+              <Text style={{ fontSize: 14, fontWeight: "600", color: "#333", marginBottom: 8 }}>{t('ifscCode')} *</Text>
               <TextInput
                 style={{ borderWidth: 1, borderColor: "#DDD", borderRadius: 8, padding: 12, marginBottom: 24, fontSize: 14 }}
-                placeholder="e.g., ICIC0000001"
+                placeholder={t('ifscPlaceholder')}
                 maxLength={11}
                 value={bankDetails.ifscCode}
                 onChangeText={(val) => setBankDetails({ ...bankDetails, ifscCode: val.toUpperCase() })}
@@ -1672,7 +1787,7 @@ export default function ContractorWalletAttendance() {
                 style={{ backgroundColor: "#1a2f4d", padding: 16, borderRadius: 8, alignItems: 'center', marginBottom: 32 }}
                 onPress={handleAddBankAccount}
               >
-                <Text style={{ color: "#fff", fontWeight: "700", fontSize: 16 }}>Save Bank Account</Text>
+                <Text style={{ color: "#fff", fontWeight: "700", fontSize: 16 }}>{t('saveBankAccount')}</Text>
               </TouchableOpacity>
             </View>
           </ScrollView>
@@ -1706,7 +1821,7 @@ export default function ContractorWalletAttendance() {
       {upiAccount && showUpiInfo && (
         <View style={{ padding: 16, backgroundColor: "#f5f3ff", marginTop: 10, marginHorizontal: 16, borderRadius: 8, borderLeftWidth: 4, borderLeftColor: "#6d28d9" }}>
           <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-            <Text style={{ fontSize: 14, fontWeight: "600", color: "#333" }}>UPI Payout</Text>
+            <Text style={{ fontSize: 14, fontWeight: "600", color: "#333" }}>{t('upiPayout')}</Text>
             <TouchableOpacity onPress={() => setShowUpiInfo(false)}>
               <MaterialIcons name="close" size={20} color="#333" />
             </TouchableOpacity>
@@ -1717,7 +1832,7 @@ export default function ContractorWalletAttendance() {
           </Text>
           <View style={{ marginTop: 12, flexDirection: 'row', justifyContent: 'flex-end' }}>
             <TouchableOpacity onPress={() => setShowAddUpi(true)}>
-              <Text style={{ color: "#6d28d9", fontWeight: "600" }}>Change</Text>
+              <Text style={{ color: "#6d28d9", fontWeight: "600" }}>{t('change')}</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -1734,22 +1849,22 @@ export default function ContractorWalletAttendance() {
           />
 
           <View style={{ width: '90%', backgroundColor: '#fff', borderRadius: 12, padding: 18, elevation: 6 }}>
-            <Text style={{ fontWeight: '700', fontSize: 16, marginBottom: 12 }}>Choose payment method</Text>
+            <Text style={{ fontWeight: '700', fontSize: 16, marginBottom: 12 }}>{t('choosePaymentMethod')}</Text>
 
             <TouchableOpacity
               style={{ padding: 12, borderRadius: 8, backgroundColor: '#f3f4f6', marginBottom: 8 }}
               onPress={() => payOptionsTarget && handlePayOption(payOptionsTarget.jobId, 'Cash', payOptionsTarget.workerPhone)}
             >
-              <Text style={{ fontWeight: '600' }}>Pay via Cash</Text>
-              <Text style={{ color: '#666', marginTop: 4 }}>Worker will be paid cash on site</Text>
+              <Text style={{ fontWeight: '600' }}>{t('payViaCash')}</Text>
+              <Text style={{ color: '#666', marginTop: 4 }}>{t('payViaCashDesc')}</Text>
             </TouchableOpacity>
 
             <TouchableOpacity
               style={{ padding: 12, borderRadius: 8, backgroundColor: '#e6f7ff' }}
               onPress={() => payOptionsTarget && handlePayOption(payOptionsTarget.jobId, 'Online', payOptionsTarget.workerPhone)}
             >
-              <Text style={{ fontWeight: '600' }}>Pay via Online</Text>
-              <Text style={{ color: '#666', marginTop: 4 }}>Use online wallet / UPI</Text>
+              <Text style={{ fontWeight: '600' }}>{t('payViaOnline')}</Text>
+              <Text style={{ color: '#666', marginTop: 4 }}>{t('payViaOnlineDesc')}</Text>
             </TouchableOpacity>
           </View>
         </View>

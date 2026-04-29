@@ -20,6 +20,7 @@ import { useAuth } from '../../context/AuthContext';
 import { API_BASE } from '../../utils/config';
 import { socket } from '../../utils/socket';
 import * as Location from 'expo-location';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
 interface Job {
   _id: string;
@@ -723,7 +724,8 @@ export default function DashboardScreen() {
   if (isAdmin) {
     const webAdminUrl = `${API_BASE}/admin/index.html`;
     return (
-      <ScrollView style={styles.container}>
+      <SafeAreaView style={styles.container} edges={['top', 'left', 'right']}>
+        <ScrollView style={styles.container}>
         <View style={styles.header}>
           <TouchableOpacity onPress={() => router.back()}>
             <MaterialIcons name="arrow-back" size={28} color="#fff" />
@@ -756,7 +758,8 @@ export default function DashboardScreen() {
             </View>
           </View>
         </View>
-      </ScrollView>
+        </ScrollView>
+      </SafeAreaView>
     );
   }
 
@@ -811,7 +814,8 @@ export default function DashboardScreen() {
   const jobsForWeekOrMonth = jobs.filter((j) => isJobInSelectedRange(j));
 
   return (
-    <ScrollView style={styles.container}>
+    <SafeAreaView style={styles.container} edges={['top', 'left', 'right']}>
+      <ScrollView style={styles.container}>
       {/* Header */}
       <View style={styles.header}>
         <TouchableOpacity onPress={() => router.back()}>
@@ -1145,7 +1149,8 @@ export default function DashboardScreen() {
           </View>
         </View>
       </Modal>
-    </ScrollView>
+      </ScrollView>
+    </SafeAreaView>
   );
 }
 

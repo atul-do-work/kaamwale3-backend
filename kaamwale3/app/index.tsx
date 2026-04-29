@@ -16,6 +16,7 @@ import * as Location from 'expo-location';
 import styles from "../styles/LoginScreenStyles";
 import { useLanguage } from '../context/LanguageContext';
 import { useAuth } from '../context/AuthContext';
+import { SafeAreaView } from 'react-native-safe-area-context';
 //*******************2nd step */
 
 // ✅ HELPER: Validate password strength
@@ -273,7 +274,7 @@ export default function LoginScreen() {
   };
 
   return (
-    <View style={styles.container}>
+    <SafeAreaView style={styles.container} edges={['top', 'left', 'right']}>
       <StatusBar barStyle="light-content" />
       <Text style={styles.title}>{t('login')}</Text>
       <Text style={styles.subtitle}>{t('login')} to your account</Text>
@@ -387,7 +388,7 @@ export default function LoginScreen() {
           </View>
         </View>
       </Modal>
-    </View>
+    </SafeAreaView>
   );
 }
 

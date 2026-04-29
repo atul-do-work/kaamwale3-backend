@@ -9,7 +9,7 @@ import {
   Platform,
   Modal,
 } from "react-native";
-import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { MaterialIcons, Ionicons } from "@expo/vector-icons";
 import styles from "../../../styles/WorkerProfileStyles";
 import { LinearGradient } from "expo-linear-gradient";
@@ -18,24 +18,32 @@ import * as ImagePicker from "expo-image-picker";
 import { useRouter, useFocusEffect } from "expo-router";
 import axios from "axios";
 import { API_BASE } from "../../../utils/config";
-import { uploadToCloudinaryDirect } from '../../../utils/cloudinaryDirectUpload';
 import { clearAllUserData } from "../../../utils/socket";
 import ReferralModal from "../../../components/ReferralModal";
 import { useLanguage } from "../../../context/LanguageContext";
 import { useAuth } from "../../../context/AuthContext";
 import * as Progress from 'react-native-progress';
 
-const MAIN_SKILLS = ['Labour', 'Mason', 'Engineer', 'ITI/Technician'];
+const MAIN_SKILLS = ['labour', 'mason', 'engineer', 'itiTechnician'] as const;
 const WAGE_RANGES = [
   { label: '₹400 to ₹550', value: '400-550' },
   { label: '₹550 to ₹700', value: '550-700' },
   { label: '₹700 to Max', value: '700-max' },
 ];
 
+const WAGE_RANGE_KEYS: Record<string, keyof typeof import('../../../constants/translations').translations.en> = {
+  '400-550': 'wageRange400To550',
+  '550-700': 'wageRange550To700',
+  '700-max': 'wageRange700ToMax',
+};
+
 export default function Profile(): React.ReactElement {
   const { t } = useLanguage();
-  const { logout, accessToken } = useAuth();
-  const insets = useSafeAreaInsets();
+  const { logout, accessToken, updateUserField } = useAuth();
+  const tx = (key: keyof typeof import('../../../constants/translations').translations.en, fallback: string) => {
+    const translated = t(key);
+    return translated && translated !== key ? translated : fallback;
+  };
   const [userName, setUserName] = useState<string>("Worker");
   const [workerId, setWorkerId] = useState<string>("0000");
   const [profilePhoto, setProfilePhoto] = useState<string | null>(null);
@@ -62,6 +70,10 @@ export default function Profile(): React.ReactElement {
   const [menuModalVisible, setMenuModalVisible] = useState(false);
   
   const router = useRouter();
+  const wageLabelMap = Object.keys(WAGE_RANGE_KEYS).reduce<Record<string, string>>((acc, value) => {
+    acc[value] = t(WAGE_RANGE_KEYS[value]);
+    return acc;
+  }, {});
 
   // Use central API base
 
@@ -159,40 +171,35 @@ export default function Profile(): React.ReactElement {
     }
   };
 
-  const isValidImageDimension = (width?: number, height?: number) => {
-    if (!width || !height) return false;
-    const minDimension = 300;
-    const ratio = width / height;
-    return width >= minDimension && height >= minDimension && ratio >= 0.75 && ratio <= 1.33;
-  };
-
   const pickImage = async () => {
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (status !== "granted") {
       Alert.alert(
         t('warning'),
-        "Camera roll permission is required to select a profile photo."
+        t('cameraRollPermissionRequired')
       );
       return;
     }
 
     const result: any = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ['images'],
       allowsEditing: true,
-      aspect: [1, 1],
       quality: 1,
     });
 
     if (!result.canceled && result.assets?.length > 0) {
       const asset = result.assets[0];
-      if (!isValidImageDimension(asset.width, asset.height)) {
-        Alert.alert(
-          t('error'),
-          'Invalid image dimensions. Please choose a different image.'
-        );
-        return;
-      }
-
       const uri = asset.uri;
+      const previousPhoto = profilePhoto;
+      console.log('[profile-upload] worker picker result', {
+        workerId,
+        uri,
+        mimeType: asset.mimeType || null,
+        fileName: asset.fileName || null,
+        fileSize: asset.fileSize || null,
+        width: asset.width || null,
+        height: asset.height || null,
+      });
 
       // Show local image immediately
       setProfilePhoto(uri);
@@ -200,62 +207,60 @@ export default function Profile(): React.ReactElement {
 
       try {
         const authToken = accessToken || userToken || await AsyncStorage.getItem("token") || await AsyncStorage.getItem("accessToken");
+        console.log('[profile-upload] worker auth resolved', {
+          workerId,
+          hasContextToken: Boolean(accessToken),
+          hasLocalToken: Boolean(userToken),
+          hasAuthToken: Boolean(authToken),
+        });
         if (!authToken) {
           Alert.alert(t('error'), t('photoUploadError'));
           return;
         }
 
-        // Step 1: Upload directly to Cloudinary with progress tracking
-        const uploadResult = await uploadToCloudinaryDirect(
+        setUploadProgress(25);
+        const formData = new FormData();
+        formData.append("file", {
           uri,
-          'kaamwale/profiles',
-          `worker-${workerId}-${Date.now()}`,
-          {
-            onProgress: (progress) => {
-              const percent = Math.round((progress.loaded / progress.total) * 100);
-              setUploadProgress(percent);
-            },
-            uploadType: 'profile',
-            authToken,
-            maxRetries: 3,
-          }
-        );
+          name: asset.fileName || `worker-${workerId}-${Date.now()}.jpg`,
+          type: asset.mimeType || "image/jpeg",
+        } as any);
+        formData.append("type", "profilePhoto");
 
-        if (!uploadResult.success) {
-          Alert.alert(t('error'), uploadResult.error || 'Failed to upload profile photo');
-          const savedPhoto = await AsyncStorage.getItem("profilePhoto");
-          if (savedPhoto) setProfilePhoto(savedPhoto);
-          return;
-        }
-
-        console.log("📤 Saving profile photo URL to backend:", uploadResult.fileUrl || uploadResult.url);
-
-        // Step 2: Save the URL to backend
-        const response = await axios.post(`${API_BASE}/users/photo`, {
-          fileUrl: uploadResult.fileUrl || uploadResult.url,
-          cloudinaryPublicId: uploadResult.publicId
-        }, {
-          timeout: 30000, // 30 second timeout
-          headers: {
-            Authorization: `Bearer ${userToken}`,
-            "Content-Type": "application/json",
-          },
+        console.log('[profile-upload] worker multipart upload start', {
+          workerId,
+          fileName: asset.fileName || null,
+          mimeType: asset.mimeType || "image/jpeg",
         });
 
+        const response = await axios.post(`${API_BASE}/upload/upload`, formData, {
+          timeout: 30000, // 30 second timeout
+          headers: {
+            Authorization: `Bearer ${authToken}`,
+          },
+        });
+        setUploadProgress(90);
+
         console.log("✅ Upload response:", response.data);
+        console.log('[profile-upload] worker /upload/upload response', {
+          workerId,
+          status: response.status,
+          success: response.data?.success,
+          hasProfilePhoto: Boolean(response.data?.profilePhoto),
+        });
 
         if (response.data.success && response.data.profilePhoto) {
           console.log("✅ Saving profile photo URL:", response.data.profilePhoto);
           setProfilePhoto(response.data.profilePhoto);
           await AsyncStorage.setItem("profilePhoto", response.data.profilePhoto);
+          await updateUserField('profilePhoto', response.data.profilePhoto);
           Alert.alert(t('success'), t('profilePhotoUpdated'));
         } else {
           console.log("❌ Invalid response:", response.data);
           Alert.alert(t('error'), t('serverError'));
-          const savedPhoto = await AsyncStorage.getItem("profilePhoto");
-          if (savedPhoto) setProfilePhoto(savedPhoto);
+          setProfilePhoto(previousPhoto || null);
         }
-      } catch (err: any) {
+        } catch (err: any) {
         const safeError = err || {};
         const responseData = safeError.response?.data;
         const responseStatus = safeError.response?.status;
@@ -265,6 +270,12 @@ export default function Profile(): React.ReactElement {
         console.error("❌ Error response:", responseData);
         console.error("❌ Error status:", responseStatus);
         console.error("❌ Error message:", errorMessage);
+        console.error('[profile-upload] worker multipart failure', {
+          workerId,
+          responseStatus,
+          responseData,
+          errorMessage,
+        });
         
         Alert.alert(
           t('error'),
@@ -272,18 +283,18 @@ export default function Profile(): React.ReactElement {
         );
         
         // Revert to previously saved photo
-        const savedPhoto = await AsyncStorage.getItem("profilePhoto");
-        if (savedPhoto) setProfilePhoto(savedPhoto);
-        else setProfilePhoto(null);
+        setProfilePhoto(previousPhoto || null);
+      } finally {
+        setUploadProgress(0);
       }
     }
   };
 
   const handleLogout = async () => {
     Alert.alert(t('logout'), t('confirmLogout'), [
-      { text: "Cancel", style: "cancel" },
+      { text: t('cancel'), style: "cancel" },
       {
-        text: "Logout",
+        text: t('logout'),
         style: "destructive",
         onPress: async () => {
           try {
@@ -350,31 +361,31 @@ export default function Profile(): React.ReactElement {
 
   const infoCards = [
     {
-      header: "Support",
+      header: tx('supportSection', 'Support'),
       icon: "support-agent",
       options: [
-        { name: "Help Centre", screen: "/HelpCentre" },
-        { name: "Support Ticket", screen: "/SupportTickets" },
+        { name: t('helpCentre'), screen: "/HelpCentre" },
+        { name: tx('supportTicket', 'Support Ticket'), screen: "/SupportTickets" },
       ],
     },
     {
-      header: "Documents & Policies",
+      header: tx('documentsPolicies', 'Documents & Policies'),
       icon: "description",
       options: [
-        { name: "Aadhar Card & 90-Day Policy", screen: "/DocumentsAndPolicies" },
+        { name: tx('aadharAndPolicy', 'Aadhar Card & 90-Day Policy'), screen: "/DocumentsAndPolicies" },
       ],
     },
     {
-      header: "Partner Options",
+      header: tx('partnerOptions', 'Partner Options'),
       icon: "handshake",
       options: [
-        { name: "Videos & Tutorials", screen: "/VideosAndTutorials" },
+        { name: t('videosTutorials'), screen: "/VideosAndTutorials" },
       ],
     },
   ];
 
   return (
-    <View style={{ flex: 1, backgroundColor: "#f5f5f5", paddingTop: insets.top }}>
+    <SafeAreaView style={{ flex: 1, backgroundColor: "#f5f5f5" }} edges={['top', 'left', 'right']}>
       {/* Upload Progress Bar */}
       {uploadProgress > 0 && uploadProgress < 100 && (
         <View style={styles.progressContainer}>
@@ -386,7 +397,7 @@ export default function Profile(): React.ReactElement {
             unfilledColor="#ecf0f1"
             borderWidth={0}
           />
-          <Text style={styles.progressText}>{uploadProgress}% uploading</Text>
+          <Text style={styles.progressText}>{uploadProgress}% {tx('uploadingLabel', 'uploading')}</Text>
         </View>
       )}
       <ScrollView style={styles.container}>
@@ -415,20 +426,20 @@ export default function Profile(): React.ReactElement {
 
             <View style={styles.profileInfo}>
               <Text style={styles.nameText}>{userName}</Text>
-              <Text style={styles.workerId}>Worker ID: {workerId}</Text>
-              <Text style={styles.ratingText}>Rating: {workerRating.toFixed(1)} ⭐ ({totalReviews} reviews)</Text>
+              <Text style={styles.workerId}>{tx('workerIdLabel', 'Worker ID')}: {workerId}</Text>
+              <Text style={styles.ratingText}>{tx('ratingLabel', 'Rating')}: {workerRating.toFixed(1)} ⭐ ({totalReviews} {tx('reviewsLabel', 'reviews')})</Text>
             </View>
           </LinearGradient>
         </View>
 
         <View style={styles.cardsRow}>
         {[
-          { title: "Gig History", icon: "history", route: "/GigHistory" },
-          { title: "Earnings", icon: "attach-money", action: () => {
+          { title: t('gigHistory'), icon: "history", route: "/GigHistory" },
+          { title: t('earnings'), icon: "attach-money", action: () => {
             fetchEarningsData(); // ✅ Fetch fresh earnings when clicking
             setEarningsModalVisible(true);
           } },
-          { title: "Settings", icon: "settings", route: "/Settings" },
+          { title: t('settings'), icon: "settings", route: "/Settings" },
         ].map((card, index) => (
           <TouchableOpacity
             key={index}
@@ -453,8 +464,8 @@ export default function Profile(): React.ReactElement {
         activeOpacity={0.7}
       >
         <View>
-          <Text style={styles.referralHeading}>Referral Bonus</Text>
-          <Text style={styles.referralText}>You have earned ₹50 from referrals</Text>
+          <Text style={styles.referralHeading}>{t('referralBonus')}</Text>
+          <Text style={styles.referralText}>{tx('referralBonusEarned', 'You have earned ₹50 from referrals')}</Text>
         </View>
         <MaterialIcons name="card-giftcard" size={40} color="#1a2f4d" />
       </TouchableOpacity>
@@ -481,7 +492,7 @@ export default function Profile(): React.ReactElement {
 
         <TouchableOpacity style={styles.logoutButton} onPress={handleLogout}>
         <MaterialIcons name="logout" size={22} color="#fff" />
-        <Text style={styles.logoutText}>Logout</Text>
+        <Text style={styles.logoutText}>{t('logout')}</Text>
       </TouchableOpacity>
 
         <ReferralModal
@@ -499,7 +510,7 @@ export default function Profile(): React.ReactElement {
         >
         <View style={[styles.earningsModal, earningsModalVisible && { opacity: 1 }]}>
           <View style={styles.earningsHeader}>
-            <Text style={styles.earningsTitle}>Earnings Breakdown</Text>
+            <Text style={styles.earningsTitle}>{t('earningBreakdown')}</Text>
             <TouchableOpacity onPress={() => setEarningsModalVisible(false)}>
               <MaterialIcons name="close" size={28} color="#fff" />
             </TouchableOpacity>
@@ -513,9 +524,9 @@ export default function Profile(): React.ReactElement {
               end={{ x: 1, y: 1 }}
               style={styles.totalEarningsCard}
             >
-              <Text style={styles.totalEarningsLabel}>Total Earnings</Text>
+              <Text style={styles.totalEarningsLabel}>{t('totalEarnings')}</Text>
               <Text style={styles.totalEarningsValue}>₹{totalEarnings}</Text>
-              <Text style={styles.totalEarningsSubtext}>From {totalEarnings > 0 ? 'completed gigs' : 'no gigs yet'}</Text>
+              <Text style={styles.totalEarningsSubtext}>{totalEarnings > 0 ? tx('fromCompletedGigs', 'From completed gigs') : tx('fromNoGigsYet', 'From no gigs yet')}</Text>
             </LinearGradient>
 
             {/* Earnings Breakdown */}
@@ -525,7 +536,7 @@ export default function Profile(): React.ReactElement {
                   <MaterialIcons name="trending-up" size={24} color="#27AE60" />
                 </View>
                 <View style={styles.earningsItemContent}>
-                  <Text style={styles.earningsItemLabel}>Gig Earnings</Text>
+                  <Text style={styles.earningsItemLabel}>{t('gigEarnings')}</Text>
                   <Text style={styles.earningsItemValue}>₹{gigEarnings}</Text>
                 </View>
               </View>
@@ -535,7 +546,7 @@ export default function Profile(): React.ReactElement {
                   <MaterialIcons name="assessment" size={24} color="#F39C12" />
                 </View>
                 <View style={styles.earningsItemContent}>
-                  <Text style={styles.earningsItemLabel}>Jobs Earned</Text>
+                  <Text style={styles.earningsItemLabel}>{tx('jobsEarned', 'Jobs Earned')}</Text>
                   <Text style={styles.earningsItemValue}>₹{jobsEarnings}</Text>
                 </View>
               </View>
@@ -545,7 +556,7 @@ export default function Profile(): React.ReactElement {
                   <MaterialIcons name="card-giftcard" size={24} color="#E91E63" />
                 </View>
                 <View style={styles.earningsItemContent}>
-                  <Text style={styles.earningsItemLabel}>Referral Bonus</Text>
+                  <Text style={styles.earningsItemLabel}>{t('referralBonus')}</Text>
                   <Text style={styles.earningsItemValue}>₹{referralBonus}</Text>
                 </View>
               </View>
@@ -555,7 +566,7 @@ export default function Profile(): React.ReactElement {
                   <MaterialIcons name="trending-down" size={24} color="#E74C3C" />
                 </View>
                 <View style={styles.earningsItemContent}>
-                  <Text style={styles.earningsItemLabel}>Deductions</Text>
+                  <Text style={styles.earningsItemLabel}>{t('deductions')}</Text>
                   <Text style={[styles.earningsItemValue, { color: "#E74C3C" }]}>-₹{totalDeductions}</Text>
                 </View>
               </View>
@@ -564,7 +575,7 @@ export default function Profile(): React.ReactElement {
             {/* Net Earnings - Removed Available Balance Section */}
             <TouchableOpacity style={styles.withdrawButton}>
               <MaterialIcons name="wallet" size={20} color="#fff" />
-              <Text style={styles.withdrawButtonText}>View Withdrawal Options</Text>
+              <Text style={styles.withdrawButtonText}>{tx('viewWithdrawalOptions', 'View Withdrawal Options')}</Text>
             </TouchableOpacity>
           </ScrollView>
         </View>
@@ -595,7 +606,7 @@ export default function Profile(): React.ReactElement {
             >
               {/* Modal Header */}
               <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
-                <Text style={{ fontSize: 18, fontWeight: '700', color: '#1a2f4d' }}>Update Profile</Text>
+                <Text style={{ fontSize: 18, fontWeight: '700', color: '#1a2f4d' }}>{tx('updateProfile', 'Update Profile')}</Text>
                 <TouchableOpacity onPress={() => setMenuModalVisible(false)}>
                   <Ionicons name="close" size={26} color="#1a2f4d" />
                 </TouchableOpacity>
@@ -603,7 +614,7 @@ export default function Profile(): React.ReactElement {
 
               {/* Main Skill Dropdown */}
               <View style={{ marginBottom: 18 }}>
-                <Text style={{ fontSize: 14, fontWeight: '600', color: '#1a2f4d', marginBottom: 8 }}>Main Skill</Text>
+                <Text style={{ fontSize: 14, fontWeight: '600', color: '#1a2f4d', marginBottom: 8 }}>{t('mainSkill')}</Text>
                 <TouchableOpacity 
                   style={{ 
                     borderWidth: 1, 
@@ -619,7 +630,7 @@ export default function Profile(): React.ReactElement {
                   onPress={() => setShowSkillMenu(!showSkillMenu)}
                 >
                   <Text style={{ color: selectedSkill ? '#1a2f4d' : '#999', fontSize: 14 }}>
-                    {selectedSkill || 'Select Main Skill'}
+                    {selectedSkill ? t(selectedSkill as keyof typeof import('../../../constants/translations').translations.en) : t('selectMainSkill')}
                   </Text>
                   <Ionicons name={showSkillMenu ? 'chevron-up' : 'chevron-down'} size={20} color="#1a2f4d" />
                 </TouchableOpacity>
@@ -640,7 +651,7 @@ export default function Profile(): React.ReactElement {
                         style={{ paddingHorizontal: 12, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: '#eee' }}
                         onPress={() => { setSelectedSkill(skill); setShowSkillMenu(false); }}
                       >
-                        <Text style={{ color: '#1a2f4d', fontSize: 14 }}>{skill}</Text>
+                        <Text style={{ color: '#1a2f4d', fontSize: 14 }}>{t(skill)}</Text>
                       </TouchableOpacity>
                     ))}
                   </View>
@@ -649,7 +660,7 @@ export default function Profile(): React.ReactElement {
 
               {/* Expected Wages Dropdown */}
               <View style={{ marginBottom: 20 }}>
-                <Text style={{ fontSize: 14, fontWeight: '600', color: '#1a2f4d', marginBottom: 8 }}>Expected Wages</Text>
+                <Text style={{ fontSize: 14, fontWeight: '600', color: '#1a2f4d', marginBottom: 8 }}>{tx('expectedWages', 'Expected Wages')}</Text>
                 <TouchableOpacity 
                   style={{ 
                     borderWidth: 1, 
@@ -665,7 +676,7 @@ export default function Profile(): React.ReactElement {
                   onPress={() => setShowWageMenu(!showWageMenu)}
                 >
                   <Text style={{ color: selectedWage ? '#1a2f4d' : '#999', fontSize: 14 }}>
-                    {selectedWage ? WAGE_RANGES.find(w => w.value === selectedWage)?.label : 'Select Wage Range'}
+                    {selectedWage ? wageLabelMap[selectedWage] : tx('selectWageRange', 'Select Wage Range')}
                   </Text>
                   <Ionicons name={showWageMenu ? 'chevron-up' : 'chevron-down'} size={20} color="#1a2f4d" />
                 </TouchableOpacity>
@@ -686,7 +697,7 @@ export default function Profile(): React.ReactElement {
                         style={{ paddingHorizontal: 12, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: '#eee' }}
                         onPress={() => { setSelectedWage(range.value); setShowWageMenu(false); }}
                       >
-                        <Text style={{ color: '#1a2f4d', fontSize: 14 }}>{range.label}</Text>
+                        <Text style={{ color: '#1a2f4d', fontSize: 14 }}>{t(WAGE_RANGE_KEYS[range.value])}</Text>
                       </TouchableOpacity>
                     ))}
                   </View>
@@ -703,13 +714,13 @@ export default function Profile(): React.ReactElement {
                 }}
                 onPress={handleSaveProfile}
               >
-                <Text style={{ color: '#fff', fontSize: 16, fontWeight: '700' }}>Save Changes</Text>
+                <Text style={{ color: '#fff', fontSize: 16, fontWeight: '700' }}>{tx('saveChanges', 'Save Changes')}</Text>
               </TouchableOpacity>
             </TouchableOpacity>
           </View>
         </TouchableOpacity>
         </Modal>
       </ScrollView>
-    </View>
+    </SafeAreaView>
   );
 }

@@ -13,6 +13,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
 import * as Location from 'expo-location';
+import { socket } from '../utils/socket';
 import { useAuth } from '../context/AuthContext';
 import { SERVER_URL } from '../utils/config';
 import JobRequestModal from './JobRequestModal';
@@ -107,8 +108,31 @@ export default function ViewWorkersModal({
       setLoadingMore(false);
       setJobRequestPanelVisible(false);
       setSelectedWorker(null);
-      setPendingRequests({});
     }
+  }, [visible]);
+
+  // ✅ Listen for worker responses and keep requested rows until accepted/declined
+  useEffect(() => {
+    if (!visible) return;
+
+    const handleJobRequestResponse = (data: any) => {
+      if (!data) return;
+      const workerPhone = String(data.workerPhone || '').trim();
+      if (!workerPhone) return;
+
+      setPendingRequests((prev) => {
+        if (!prev[workerPhone]) return prev;
+        const next = { ...prev };
+        delete next[workerPhone];
+        return next;
+      });
+    };
+
+    socket.on('jobRequestResponse', handleJobRequestResponse);
+
+    return () => {
+      socket.off('jobRequestResponse', handleJobRequestResponse);
+    };
   }, [visible]);
 
   // ✅ STEP 2: Fetch workers ONLY when filters change (debounced)

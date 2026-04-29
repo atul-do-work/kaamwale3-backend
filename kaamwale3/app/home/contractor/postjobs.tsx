@@ -14,6 +14,8 @@ import { useRouter } from "expo-router";  // ⭐ ADDED
 import { useLanguage } from "../../../context/LanguageContext";
 import { useAuth } from "../../../context/AuthContext";
 import { useJobStatus } from "../../../hooks/useJobStatus"; // ✅ Real-time job status
+import { premiumCacheManager } from "../../../utils/premiumCacheManager";
+import { isPremiumPlanActive } from "../../../utils/premiumPlanState";
 
 interface JobPayload {
   title: string;
@@ -30,9 +32,24 @@ interface JobPayload {
   idempotencyKey?: string;
 }
 
-const JOB_TITLES = ['Construction', 'Renovation', 'Other'];
-const MAIN_SKILLS = ['Labour', 'Mason', 'Engineer', 'ITI/Technician'];
-const MASON_TYPES = ['Tile Mason', 'Stone Mason', 'Cement Mason', 'Composite Mason', 'Bar Bender'];
+const JOB_TITLES = [
+  { value: 'Construction', labelKey: 'construction' as const },
+  { value: 'Renovation', labelKey: 'renovation' as const },
+  { value: 'Other', labelKey: 'otherOption' as const },
+];
+const MAIN_SKILLS = [
+  { value: 'Labour', labelKey: 'labour' as const },
+  { value: 'Mason', labelKey: 'mason' as const },
+  { value: 'Engineer', labelKey: 'engineer' as const },
+  { value: 'ITI/Technician', labelKey: 'itiTechnician' as const },
+];
+const MASON_TYPES = [
+  { value: 'Tile Mason', labelKey: 'tileMason' as const },
+  { value: 'Stone Mason', labelKey: 'stoneMason' as const },
+  { value: 'Cement Mason', labelKey: 'cementMason' as const },
+  { value: 'Composite Mason', labelKey: 'compositeMason' as const },
+  { value: 'Bar Bender', labelKey: 'barBender' as const },
+];
 const BULK_HIRING_OPTIONS = [1, 2, 3, 5, 10];
 const MAPTILER_API_KEY = "rmEy5CtIKMlSfVx4fckr";
 const MAP_STYLE_URL = `https://api.maptiler.com/maps/streets-v2/style.json?key=${MAPTILER_API_KEY}`;
@@ -82,6 +99,15 @@ export default function PostJobScreen() {
     const ampm = date.getHours() >= 12 ? 'PM' : 'AM';
     return `${hours}:${mins} ${ampm}`;
   };
+
+  const getJobTitleLabel = (value: string) =>
+    t(JOB_TITLES.find((item) => item.value === value)?.labelKey || 'jobTitle');
+
+  const getSkillLabel = (value: string) =>
+    t(MAIN_SKILLS.find((item) => item.value === value)?.labelKey || 'mainSkill');
+
+  const getWorkerTypeLabel = (value: string) =>
+    t(MASON_TYPES.find((item) => item.value === value)?.labelKey || 'workerType');
 
   const toSafeBalance = (payload: any): number => {
     const raw =
@@ -139,11 +165,11 @@ export default function PostJobScreen() {
 
           if (storedToken) {
             try {
-              const premiumRes = await fetch(`${SERVER_URL}/premium/status`, {
-                headers: { Authorization: `Bearer ${storedToken}` },
-              });
-              const premiumData = await premiumRes.json();
-              const isActive = Boolean(premiumData?.success && premiumData?.isActive);
+              const premiumData = await premiumCacheManager.getStatus(storedToken);
+              const fallbackPlan = premiumData?.premiumDetails || user?.premiumPlan || null;
+              const isActive = premiumData?.success
+                ? Boolean(premiumData?.isActive)
+                : isPremiumPlanActive(fallbackPlan);
 
               setHasPremium(isActive);
 
@@ -154,10 +180,13 @@ export default function PostJobScreen() {
               }
             } catch (premiumErr) {
               console.warn("Failed to load premium status in postjobs", premiumErr);
-              setHasPremium(false);
-              setBulkHiringEnabled(false);
-              setRequiredWorkers(1);
-              setNumberOfDays(1);
+              const hasStoredPremium = isPremiumPlanActive(user?.premiumPlan);
+              setHasPremium(hasStoredPremium);
+              if (!hasStoredPremium) {
+                setBulkHiringEnabled(false);
+                setRequiredWorkers(1);
+                setNumberOfDays(1);
+              }
             }
           } else {
             setHasPremium(false);
@@ -190,13 +219,6 @@ export default function PostJobScreen() {
     }
   }, [token]);
 
-  // Also refresh immediately when token becomes available (not only on focus cycles).
-  useEffect(() => {
-    if (token) {
-      fetchWallet();
-    }
-  }, [token, fetchWallet]);
-
   // Fetch wallet whenever screen is focused
   useFocusEffect(
     React.useCallback(() => {
@@ -215,7 +237,7 @@ export default function PostJobScreen() {
   const pickImage = async () => {
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (status !== 'granted') {
-      Alert.alert('Permission Denied', 'Image library permission required');
+      Alert.alert(t('permissionDenied'), t('imageLibraryPermissionRequired'));
       return;
     }
     const result = await ImagePicker.launchImageLibraryAsync({
@@ -234,11 +256,11 @@ export default function PostJobScreen() {
     // ✅ Ask for confirmation if location already selected
     if (selectedLocation) {
       Alert.alert(
-        'Change Location?',
-        'Do you want to update to your current location?',
+        t('changeLocationTitle'),
+        t('changeLocationMessage'),
         [
-          { text: 'Cancel', onPress: () => {}, style: 'cancel' },
-          { text: 'Yes', onPress: () => actuallyGetLocation() },
+          { text: t('cancel'), onPress: () => {}, style: 'cancel' },
+          { text: t('yes'), onPress: () => actuallyGetLocation() },
         ]
       );
     } else {
@@ -251,7 +273,7 @@ export default function PostJobScreen() {
       setGettingLocation(true);
       const { status } = await Location.requestForegroundPermissionsAsync();
       if (status !== 'granted') {
-        Alert.alert('Permission Denied', 'Location permission is required to use current location');
+        Alert.alert(t('permissionDenied'), t('locationPermissionRequired'));
         setGettingLocation(false);
         return;
       }
@@ -274,9 +296,9 @@ export default function PostJobScreen() {
         lon: location.coords.longitude,
         placeName,
       });
-      Alert.alert('Success', 'Current location set');
+      Alert.alert(t('success'), t('currentLocationSet'));
     } catch (err) {
-      Alert.alert('Error', (err as Error).message || 'Failed to get location');
+      Alert.alert(t('error'), (err as Error).message || t('failedGetLocation'));
     } finally {
       setGettingLocation(false);
     }
@@ -340,9 +362,9 @@ export default function PostJobScreen() {
         placeName,
       });
       setShowMapPicker(false);
-      Alert.alert('Success', 'Location selected from map');
+      Alert.alert(t('success'), t('locationSelectedFromMap'));
     } catch (err) {
-      Alert.alert('Error', (err as Error).message || 'Failed to set location from map');
+      Alert.alert(t('error'), (err as Error).message || t('failedSetLocationFromMap'));
     }
   };
 
@@ -371,18 +393,18 @@ export default function PostJobScreen() {
     // ✅ Guard: Prevent double-click during posting
     if (isPostingJob) return;
     
-    if (!title) return Alert.alert("Missing", "Please select a job title");
-    if (!mainSkill) return Alert.alert("Missing", "Please select main skill");
+    if (!title) return Alert.alert(t('missingFieldTitle'), t('selectJobTitleMessage'));
+    if (!mainSkill) return Alert.alert(t('missingFieldTitle'), t('selectMainSkillMessage'));
     // ✅ FIXED: Worker type required ONLY for Mason, not for other skills
-    if (mainSkill === 'Mason' && !workerType) return Alert.alert("Missing", "Please select worker type for Mason");
-    if (!price) return Alert.alert("Missing", "Please enter price");
+    if (mainSkill === 'Mason' && !workerType) return Alert.alert(t('missingFieldTitle'), t('selectWorkerTypeForMasonMessage'));
+    if (!price) return Alert.alert(t('missingFieldTitle'), t('enterPriceMessage'));
     if (parseInt(price) < 410) return Alert.alert(t('error'), t('minimumPrice'));
     if (!selectedLocation) return Alert.alert(t('required'), t('selectLocation'));
     // ✅ Image is optional, but location is REQUIRED for accurate matching
     
     // ✅ Time validation: End time must be after start time
     if (endTime <= startTime) {
-      return Alert.alert("Invalid Time", "End time must be after start time");
+      return Alert.alert(t('invalidTimeTitle'), t('endTimeAfterStartMessage'));
     }
 
     // 💰 Calculate required posting fee based on bulk hiring
@@ -393,14 +415,14 @@ export default function PostJobScreen() {
 
     if (walletBalance < requiredBalance) {
       return Alert.alert(
-        "Insufficient Balance",
-        `You need ₹${requiredBalance} in your pocket balance to post this job for ${workersCount} worker(s).\n\nPlease deposit money first.`,
+        t('insufficientBalanceTitle'),
+        `${t('insufficientBalancePostJobMessage')} ₹${requiredBalance}.`,
         [
           {
-            text: "Deposit Now",
-            onPress: () => router.push("/(tabs)/wallet") // ✅ Navigate to wallet tab
+            text: t('depositNow'),
+            onPress: () => router.push("/(tabs)/wallet")
           },
-          { text: "Cancel", style: "cancel" }
+          { text: t('cancel'), style: "cancel" }
         ]
       );
     }
@@ -453,7 +475,7 @@ export default function PostJobScreen() {
 
           if (!imageRes.ok) {
             console.error("❌ Image upload failed with status", imageRes.status);
-            return Alert.alert("Error", `Failed to upload image: ${imageText}`);
+            return Alert.alert(t('error'), `${t('failedUploadImage')}: ${imageText}`);
           }
 
           const imageData = JSON.parse(imageText);
@@ -461,7 +483,7 @@ export default function PostJobScreen() {
           console.log("✅ Image uploaded:", imageUrl);
         } catch (uploadErr) {
           console.error("❌ Image upload error:", uploadErr);
-          return Alert.alert("Error", `Upload failed: ${uploadErr instanceof Error ? uploadErr.message : String(uploadErr)}`);
+          return Alert.alert(t('error'), `${t('uploadFailed')}: ${uploadErr instanceof Error ? uploadErr.message : String(uploadErr)}`);
         }
       }
 
@@ -527,7 +549,7 @@ export default function PostJobScreen() {
       router.replace("/waiting");
     } catch (err) {
       console.error(err);
-      Alert.alert("Error", "Server not responding"); 
+      Alert.alert(t('error'), t('serverNotResponding'));
     } finally {
       // ✅ Always reset posting state in finally block
       setIsPostingJob(false);
@@ -538,29 +560,29 @@ export default function PostJobScreen() {
     <SafeAreaView edges={['top', 'left', 'right']} style={{ flex: 1, backgroundColor: '#f3f3f3' }}>
       <ScrollView contentContainerStyle={styles.scroll}>
       <View style={styles.container}>
-        <Text style={styles.header}>Post a New Job</Text>
+        <Text style={styles.header}>{t('postNewJob')}</Text>
 
-        <Text style={styles.walletText}>Pocket Balance: ₹{Number(walletBalance) || 0}</Text>
+        <Text style={styles.walletText}>{t('pocketBalance')}: ₹{Number(walletBalance) || 0}</Text>
 
         {/* ✅ Show Posting Fee Transparently */}
         <View style={styles.feeDisplay}>
-          <Text style={styles.feeLabel}>Posting Fee</Text>
+          <Text style={styles.feeLabel}>{t('postingFee')}</Text>
           <Text style={styles.feeAmount}>₹{((hasPremium && bulkHiringEnabled) ? requiredWorkers : 1) * 25}</Text>
-          <Text style={styles.feeInfo}>{(hasPremium && bulkHiringEnabled) ? requiredWorkers : 1} worker(s)</Text>
+          <Text style={styles.feeInfo}>{(hasPremium && bulkHiringEnabled) ? requiredWorkers : 1} {t('workersShort')}</Text>
         </View>
 
         {/* Job Title Dropdown */}
         <View style={styles.dropdownContainer}>
-          <Text style={styles.label}>Job Title</Text>
+          <Text style={styles.label}>{t('jobTitle')}</Text>
           <TouchableOpacity style={styles.dropdown} onPress={() => setShowTitleDropdown(!showTitleDropdown)}>
-            <Text style={[styles.dropdownText, !title && { color: '#aaa' }]}>{title || 'Select Job Title'}</Text>
+            <Text style={[styles.dropdownText, !title && { color: '#aaa' }]}>{title ? getJobTitleLabel(title) : t('selectJobTitle')}</Text>
             <Ionicons name={showTitleDropdown ? 'chevron-up' : 'chevron-down'} size={20} color="#fff" />
           </TouchableOpacity>
           {showTitleDropdown && (
             <View style={styles.dropdownMenu}>
               {JOB_TITLES.map((item) => (
-                <TouchableOpacity key={item} style={styles.dropdownItem} onPress={() => { setTitle(item); setShowTitleDropdown(false); }}>
-                  <Text style={styles.dropdownItemText}>{item}</Text>
+                <TouchableOpacity key={item.value} style={styles.dropdownItem} onPress={() => { setTitle(item.value); setShowTitleDropdown(false); }}>
+                  <Text style={styles.dropdownItemText}>{t(item.labelKey)}</Text>
                 </TouchableOpacity>
               ))}
             </View>
@@ -569,16 +591,16 @@ export default function PostJobScreen() {
 
         {/* Main Skill Dropdown */}
         <View style={styles.dropdownContainer}>
-          <Text style={styles.label}>Main Skill</Text>
+          <Text style={styles.label}>{t('mainSkill')}</Text>
           <TouchableOpacity style={styles.dropdown} onPress={() => setShowSkillDropdown(!showSkillDropdown)}>
-            <Text style={[styles.dropdownText, !mainSkill && { color: '#aaa' }]}>{mainSkill || 'Select Main Skill'}</Text>
+            <Text style={[styles.dropdownText, !mainSkill && { color: '#aaa' }]}>{mainSkill ? getSkillLabel(mainSkill) : t('selectMainSkill')}</Text>
             <Ionicons name={showSkillDropdown ? 'chevron-up' : 'chevron-down'} size={20} color="#fff" />
           </TouchableOpacity>
           {showSkillDropdown && (
             <View style={styles.dropdownMenu}>
               {MAIN_SKILLS.map((item) => (
-                <TouchableOpacity key={item} style={styles.dropdownItem} onPress={() => { setMainSkill(item); setWorkerType(''); setShowSkillDropdown(false); }}>
-                  <Text style={styles.dropdownItemText}>{item}</Text>
+                <TouchableOpacity key={item.value} style={styles.dropdownItem} onPress={() => { setMainSkill(item.value); setWorkerType(''); setShowSkillDropdown(false); }}>
+                  <Text style={styles.dropdownItemText}>{t(item.labelKey)}</Text>
                 </TouchableOpacity>
               ))}
             </View>
@@ -588,16 +610,16 @@ export default function PostJobScreen() {
         {/* Worker Type Dropdown - Only visible if mainSkill is Mason */}
         {mainSkill === 'Mason' && (
           <View style={styles.dropdownContainer}>
-            <Text style={styles.label}>Worker Type</Text>
+            <Text style={styles.label}>{t('workerType')}</Text>
             <TouchableOpacity style={styles.dropdown} onPress={() => setShowWorkerTypeDropdown(!showWorkerTypeDropdown)}>
-              <Text style={[styles.dropdownText, !workerType && { color: '#aaa' }]}>{workerType || 'Select Worker Type'}</Text>
+              <Text style={[styles.dropdownText, !workerType && { color: '#aaa' }]}>{workerType ? getWorkerTypeLabel(workerType) : t('selectWorkerType')}</Text>
               <Ionicons name={showWorkerTypeDropdown ? 'chevron-up' : 'chevron-down'} size={20} color="#fff" />
             </TouchableOpacity>
             {showWorkerTypeDropdown && (
               <View style={styles.dropdownMenu}>
                 {MASON_TYPES.map((item) => (
-                  <TouchableOpacity key={item} style={styles.dropdownItem} onPress={() => { setWorkerType(item); setShowWorkerTypeDropdown(false); }}>
-                    <Text style={styles.dropdownItemText}>{item}</Text>
+                  <TouchableOpacity key={item.value} style={styles.dropdownItem} onPress={() => { setWorkerType(item.value); setShowWorkerTypeDropdown(false); }}>
+                    <Text style={styles.dropdownItemText}>{t(item.labelKey)}</Text>
                   </TouchableOpacity>
                 ))}
               </View>
@@ -610,7 +632,7 @@ export default function PostJobScreen() {
           <Ionicons name="cash-outline" size={22} color="#bcbec7ff" />
           <TextInput
             style={[styles.input, priceError && { borderColor: '#ff4444', borderWidth: 2 }]}
-            placeholder="Estimated Price (Min: ₹410)"
+            placeholder={t('estimatedPricePlaceholder')}
             placeholderTextColor="#aaa"
             keyboardType="numeric"
             value={price}
@@ -621,7 +643,7 @@ export default function PostJobScreen() {
 
         {/* Location Selection - Use Current Location Button */}
         <View style={styles.dropdownContainer}>
-          <Text style={styles.label}>Job Location</Text>
+          <Text style={styles.label}>{t('jobLocation')}</Text>
           <TouchableOpacity
             style={[styles.inputCard, { backgroundColor: selectedLocation ? '#1a5c3a' : '#162b49ff' }]}
             onPress={getCurrentLocation}
@@ -636,7 +658,7 @@ export default function PostJobScreen() {
               <Text style={[styles.input, { color: selectedLocation ? '#4ade80' : '#aaa' }]}>
                 {selectedLocation?.placeName 
                   ? `📍 ${selectedLocation.placeName}`
-                  : gettingLocation ? 'Getting location...' : 'Use Current Location'
+                  : gettingLocation ? t('gettingLocation') : t('useCurrentLocation')
                 }
               </Text>
               {selectedLocation && (
@@ -656,7 +678,7 @@ export default function PostJobScreen() {
             ) : (
               <>
                 <Ionicons name="map-outline" size={18} color="#fff" />
-                <Text style={[styles.addressButtonText, { marginLeft: 8 }]}>Choose From Map</Text>
+                <Text style={[styles.addressButtonText, { marginLeft: 8 }]}>{t('chooseFromMap')}</Text>
               </>
             )}
           </TouchableOpacity>
@@ -666,7 +688,7 @@ export default function PostJobScreen() {
         {/* Start + End Time in one row */}
         <View style={styles.twoColRow}>
           <View style={styles.twoColItem}>
-            <Text style={styles.label}>Start Time</Text>
+            <Text style={styles.label}>{t('startTime')}</Text>
             <TouchableOpacity style={styles.inputCard} onPress={() => setShowStartTimePicker(true)}>
               <Ionicons name="time-outline" size={22} color="#bcbec7ff" />
               <Text style={[styles.input, { color: "#fff" }]}>
@@ -676,7 +698,7 @@ export default function PostJobScreen() {
           </View>
 
           <View style={styles.twoColItem}>
-            <Text style={styles.label}>End Time</Text>
+            <Text style={styles.label}>{t('endTime')}</Text>
             <TouchableOpacity style={styles.inputCard} onPress={() => setShowEndTimePicker(true)}>
               <Ionicons name="time-outline" size={22} color="#bcbec7ff" />
               <Text style={[styles.input, { color: "#fff" }]}>
@@ -719,29 +741,29 @@ export default function PostJobScreen() {
           <View style={styles.bulkDurationWrap}>
             <View style={styles.twoColRow}>
               <View style={styles.twoColItem}>
-                <Text style={styles.label}>Bulk Hiring</Text>
+                <Text style={styles.label}>{t('bulkHiring')}</Text>
                 <TouchableOpacity
                   style={[styles.bulkHiringToggle, bulkHiringEnabled && styles.bulkHiringToggleActive]}
                   onPress={() => setBulkHiringEnabled(!bulkHiringEnabled)}
                 >
                   <View style={[styles.toggleCircle, bulkHiringEnabled && styles.toggleCircleActive]} />
                   <Text style={styles.toggleText}>
-                    {bulkHiringEnabled ? 'Enabled' : 'Disabled'}
+                    {bulkHiringEnabled ? t('enabled') : t('disabled')}
                   </Text>
                 </TouchableOpacity>
               </View>
 
               <View style={styles.twoColItem}>
-                <Text style={styles.label}>Job Duration</Text>
+                <Text style={styles.label}>{t('jobDuration')}</Text>
                 <TouchableOpacity style={styles.dropdown} onPress={() => setShowDaysDropdown(!showDaysDropdown)}>
-                  <Text style={[styles.dropdownText, { color: '#fff' }]}>{numberOfDays} {numberOfDays === 1 ? 'Day' : 'Days'}</Text>
+                  <Text style={[styles.dropdownText, { color: '#fff' }]}>{numberOfDays} {numberOfDays === 1 ? t('day') : t('days')}</Text>
                   <Ionicons name={showDaysDropdown ? 'chevron-up' : 'chevron-down'} size={20} color="#fff" />
                 </TouchableOpacity>
                 {showDaysDropdown && (
                   <View style={styles.dropdownMenu}>
                     {Array.from({ length: 30 }, (_, i) => i + 1).map((day) => (
                       <TouchableOpacity key={day} style={styles.dropdownItem} onPress={() => { setNumberOfDays(day); setShowDaysDropdown(false); }}>
-                        <Text style={styles.dropdownItemText}>{day} {day === 1 ? 'Day' : 'Days'}</Text>
+                        <Text style={styles.dropdownItemText}>{day} {day === 1 ? t('day') : t('days')}</Text>
                       </TouchableOpacity>
                     ))}
                   </View>
@@ -751,7 +773,7 @@ export default function PostJobScreen() {
 
             {bulkHiringEnabled && (
               <View style={styles.workerCountContainer}>
-                <Text style={styles.workerCountLabel}>Select Number of Workers</Text>
+                <Text style={styles.workerCountLabel}>{t('selectNumberOfWorkers')}</Text>
                 <View style={styles.workerCountButtons}>
                   {BULK_HIRING_OPTIONS.map((num) => (
                     <TouchableOpacity
@@ -772,13 +794,13 @@ export default function PostJobScreen() {
                   ))}
                 </View>
                 <Text style={styles.bulkHiringInfo}>
-                  This job will be offered to {requiredWorkers} nearby workers simultaneously
+                  {t('bulkHiringInfoMessage').replace('{count}', String(requiredWorkers))}
                 </Text>
               </View>
             )}
 
             <Text style={{ color: '#999', fontSize: 12, marginTop: 8, paddingHorizontal: 4 }}>
-              Workers will know the expected job duration before accepting
+              {t('jobDurationNotice')}
             </Text>
           </View>
         )}
@@ -786,7 +808,7 @@ export default function PostJobScreen() {
         {/* Date + Image in one row */}
         <View style={styles.twoColRow}>
           <View style={styles.twoColItem}>
-            <Text style={styles.label}>Date</Text>
+            <Text style={styles.label}>{t('date')}</Text>
             <TouchableOpacity style={styles.inputCard} onPress={() => setShowDatePicker(true)}>
               <Ionicons name="calendar-outline" size={22} color="#bcbec7ff" />
               <Text style={[styles.input, { color: "#fff" }]}>{date.toDateString()}</Text>
@@ -794,11 +816,11 @@ export default function PostJobScreen() {
           </View>
 
           <View style={styles.twoColItem}>
-            <Text style={styles.label}>Image</Text>
+            <Text style={styles.label}>{t('image')}</Text>
             <TouchableOpacity style={[styles.inputCard, { backgroundColor: selectedImage ? '#1a4c6d' : '#162b49ff' }]} onPress={pickImage}>
               <Ionicons name="image-outline" size={22} color={selectedImage ? '#3b82f6' : '#bcbec7ff'} />
               <Text style={[styles.input, { color: selectedImage ? '#3b82f6' : '#aaa' }]} numberOfLines={1}>
-                {selectedImage ? 'Image Selected' : 'Choose Image'}
+                {selectedImage ? t('imageSelected') : t('chooseImage')}
               </Text>
             </TouchableOpacity>
           </View>
@@ -811,7 +833,7 @@ export default function PostJobScreen() {
             onPressOut={() => setShowImagePreviewHold(false)}
             delayLongPress={180}
           >
-            <Text style={{ color: '#93c5fd', fontSize: 12 }}>Image selected (long press to preview)</Text>
+            <Text style={{ color: '#93c5fd', fontSize: 12 }}>{t('imagePreviewHint')}</Text>
           </TouchableOpacity>
         )}
 
@@ -860,7 +882,7 @@ export default function PostJobScreen() {
     >
       <SafeAreaView style={{ flex: 1, backgroundColor: '#0b1d33' }}>
         <View style={styles.mapHeader}>
-          <Text style={styles.mapHeaderTitle}>Select Job Location</Text>
+          <Text style={styles.mapHeaderTitle}>{t('selectJobLocation')}</Text>
           <TouchableOpacity onPress={() => setShowMapPicker(false)}>
             <Ionicons name="close" size={24} color="#fff" />
           </TouchableOpacity>
@@ -886,9 +908,9 @@ export default function PostJobScreen() {
         </View>
 
         <View style={styles.mapFooter}>
-          <Text style={styles.mapHint}>Move map and keep the red pin at exact job point</Text>
+          <Text style={styles.mapHint}>{t('moveMapHint')}</Text>
           <TouchableOpacity style={styles.confirmMapBtn} onPress={confirmMapLocation}>
-            <Text style={styles.confirmMapBtnText}>Confirm Location</Text>
+            <Text style={styles.confirmMapBtnText}>{t('confirmLocation')}</Text>
           </TouchableOpacity>
         </View>
       </SafeAreaView>

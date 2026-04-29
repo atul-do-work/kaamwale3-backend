@@ -47,6 +47,10 @@ export default function Wallet(): React.ReactElement {
   const { t } = useLanguage();
   const insets = useSafeAreaInsets();
   const { accessToken, user: authUser } = useAuth();
+  const tx = (key: keyof typeof import('../../../constants/translations').translations.en, fallback: string) => {
+    const translated = t(key);
+    return translated && translated !== key ? translated : fallback;
+  };
   
   const [wallet, setWallet] = useState<WalletType>({ balance: 0, availableBalance: 0, pocketBalance: 0, transactions: [] });
   const [weekly, setWeekly] = useState<WeeklyType | null>(null);
@@ -77,8 +81,21 @@ export default function Wallet(): React.ReactElement {
     bankName: '',
     accountType: 'savings'
   });
+  const [withdrawStatus, setWithdrawStatus] = useState<any>(null);
+  const [recentWithdrawal, setRecentWithdrawal] = useState<any>(null);
+  
+  // 🔐 CRITICAL FIX #2: Add idempotency locks to prevent double-tap exploits
+  const [isWithdrawProcessing, setIsWithdrawProcessing] = useState(false);
+  const [isDepositVerifyProcessing, setIsDepositVerifyProcessing] = useState(false);
+  const lastWithdrawIdempotencyKeyRef = useRef<string>('');
+  const lastDepositVerifyIdempotencyKeyRef = useRef<string>('');
 
   // API_URL imported from central config
+  
+  // 🔐 Generate unique idempotency key: timestamp + random = no duplicates
+  const generateIdempotencyKey = (): string => {
+    return `${Date.now()}-${Math.random().toString(36).slice(2, 10)}-${Math.random().toString(36).slice(2, 10)}`;
+  };
 
   // ✅ Check for user changes when screen comes into focus
   useFocusEffect(
@@ -91,6 +108,8 @@ export default function Wallet(): React.ReactElement {
         setCurrentUserPhone(userPhone);
         setWallet({ balance: 0, availableBalance: 0, pocketBalance: 0, transactions: [] });
         setDepositLoading(false); // Reset loading state on user change
+        setIsWithdrawProcessing(false); // 🔐 CRITICAL FIX #2: Reset lock on user change
+        setIsDepositVerifyProcessing(false); // 🔐 CRITICAL FIX #2: Reset lock on user change
       } else if (!userPhone && previousUserPhoneRef.current !== null) {
         // User logged out
         console.log(`👤 Wallet: User logged out, resetting wallet`);
@@ -98,6 +117,8 @@ export default function Wallet(): React.ReactElement {
         setCurrentUserPhone(null);
         setWallet({ balance: 0, availableBalance: 0, pocketBalance: 0, transactions: [] });
         setDepositLoading(false); // Reset loading state on logout
+        setIsWithdrawProcessing(false); // 🔐 CRITICAL FIX #2: Reset lock on logout
+        setIsDepositVerifyProcessing(false); // 🔐 CRITICAL FIX #2: Reset lock on logout
       }
     }, [authUser])
   );
@@ -111,6 +132,8 @@ export default function Wallet(): React.ReactElement {
         setShowWithdraw(false);
         setDepositModalVisible(false);
         setDepositLoading(false); // Reset loading state
+        setIsWithdrawProcessing(false); // 🔐 CRITICAL FIX #2: Reset lock on tab unfocus
+        setIsDepositVerifyProcessing(false); // 🔐 CRITICAL FIX #2: Reset lock on tab unfocus
         console.log('✅ Wallet modals closed (tab unfocused)');
       };
     }, [])
@@ -123,6 +146,8 @@ export default function Wallet(): React.ReactElement {
       console.log(`👤 User changed from ${currentUserPhone} to ${userPhone}, resetting wallet`);
       setCurrentUserPhone(userPhone);
       setWallet({ balance: 0, availableBalance: 0, pocketBalance: 0, transactions: [] });
+      setIsWithdrawProcessing(false); // 🔐 CRITICAL FIX #2: Reset lock on user change
+      setIsDepositVerifyProcessing(false); // 🔐 CRITICAL FIX #2: Reset lock on user change
     }
   }, [authUser?.phone]);
 
@@ -239,6 +264,7 @@ export default function Wallet(): React.ReactElement {
       console.log("📱 Wallet screen focused - refreshing balance");
       fetchWallet();
       fetchBankAccount();
+      fetchWithdrawStatus();
     }, [])
   );
 
@@ -265,6 +291,25 @@ export default function Wallet(): React.ReactElement {
       return Promise.reject(err);
     }
   };
+
+  const fetchWithdrawStatus = async () => {
+    if (!accessToken) return;
+    try {
+      const res = await api.get('/wallet/withdraw/status');
+      if (res.data?.success) {
+        setRecentWithdrawal(res.data.recentWithdrawal || null);
+        setWithdrawStatus(res.data.withdrawStatus || null);
+      }
+    } catch (err) {
+      console.error('Failed to load withdraw status:', err);
+    }
+  };
+
+  useEffect(() => {
+    if (accessToken) {
+      fetchWithdrawStatus();
+    }
+  }, [accessToken]);
 
   const handleDepositClick = () => {
     setShowDeposit(true);
@@ -407,21 +452,39 @@ export default function Wallet(): React.ReactElement {
 
   // ✅ Verify deposit payment
   const verifyDeposit = async (data: any) => {
+    // 🔐 CRITICAL FIX #2: Add loading lock to prevent double-tap on verify
+    if (isDepositVerifyProcessing) {
+      console.warn('⚠️ Deposit verify already processing, ignoring duplicate request');
+      return;
+    }
+    
+    setIsDepositVerifyProcessing(true);
+    const idempotencyKey = generateIdempotencyKey();
+    lastDepositVerifyIdempotencyKeyRef.current = idempotencyKey;
+    
     try {
-      const res = await api.post('/wallet/deposit/verify', {
-        orderId: data.orderId,
-        paymentId: data.paymentId,
-        signature: data.signature,
-        amount: currentDepositAmount
-      });
+      // 🔐 CRITICAL FIX #2: Include idempotency key in request header
+      const res = await api.post('/wallet/deposit/verify', 
+        {
+          orderId: data.orderId,
+          paymentId: data.paymentId,
+          signature: data.signature,
+          amount: currentDepositAmount
+        },
+        {
+          headers: {
+            'x-idempotency-key': idempotencyKey
+          }
+        }
+      );
 
       // ✅ Don't close modal here - already closed in handleDepositMessage
       // setDepositModalVisible(false);
 
       if (res.data.success) {
         const message = res.data.isDuplicate
-          ? 'Deposit already processed successfully.'
-          : t('depositSuccessDetailed').replace('{amount}', String(currentDepositAmount));
+          ? tx('depositAlreadyProcessed', 'Deposit already processed successfully.')
+          : `${tx('depositLabel', 'Deposit')} ₹${currentDepositAmount} ${tx('depositSuccessSuffix', 'was successful')}`;
         Alert.alert(t('success'), message);
         setDepositAmount('');
         setShowDeposit(false);
@@ -454,10 +517,24 @@ export default function Wallet(): React.ReactElement {
           { text: t('tryAgain'), onPress: () => verifyDeposit(data), style: 'default' }
         ]
       );
+    } finally {
+      // 🔐 CRITICAL FIX #2: Always release the lock
+      setIsDepositVerifyProcessing(false);
     }
   };
 
   const confirmWithdraw = async () => {
+    // 🔐 CRITICAL FIX #2: Add loading lock to prevent double-tap
+    if (isWithdrawProcessing) {
+      console.warn('⚠️ Withdraw already processing, ignoring duplicate request');
+      return;
+    }
+    
+    if (withdrawStatus?.blocked) {
+      Alert.alert(t('error'), withdrawStatus.message || tx('withdrawalUnavailable', 'Withdrawal temporarily unavailable'));
+      return;
+    }
+
     if (!withdrawAmount || Number(withdrawAmount) <= 0) {
       Alert.alert(t('error'), t('enterValidWithdrawAmount'));
       return;
@@ -477,8 +554,8 @@ export default function Wallet(): React.ReactElement {
     // Check if bank account is linked
     if (!bankAccount) {
       Alert.alert(
-        t('bankAccountRequired'),
-        t('addBankBeforeWithdraw'),
+        t('bankAccount'),
+        tx('verifiedBankRequiredBeforeWithdraw', 'Please add a verified bank account before withdrawing'),
         [
           { text: t('cancel'), onPress: () => {} },
           { text: t('addBankAccount'), onPress: () => setShowAddBank(true) }
@@ -487,18 +564,36 @@ export default function Wallet(): React.ReactElement {
       return;
     }
 
+    // 🔐 CRITICAL FIX #2: Generate idempotency key + set loading lock
+    setIsWithdrawProcessing(true);
+    const idempotencyKey = generateIdempotencyKey();
+    lastWithdrawIdempotencyKeyRef.current = idempotencyKey;
+    
     try {
-      const res = await api.post('/wallet/withdraw', { amount: Number(withdrawAmount) });
+      // 🔐 CRITICAL FIX #2: Include idempotency key in request header
+      const res = await api.post('/wallet/withdraw', 
+        { amount: Number(withdrawAmount) },
+        {
+          headers: {
+            'x-idempotency-key': idempotencyKey
+          }
+        }
+      );
 
       if (res.data.success) {
         Alert.alert(t('success'), `${t('withdrawalInitiated')}\n\n${t('amountTransferred')}`);
         setWithdrawAmount('');
         setShowWithdraw(false);
-        // ✅ Backend updates wallet atomically - no manual update needed
+        await fetchWithdrawStatus();
+        await fetchWallet();
       }
     } catch (err: any) {
       const errorMsg = err.response?.data?.message || t('withdrawFailed');
       Alert.alert(t('error'), errorMsg);
+      await fetchWithdrawStatus();
+    } finally {
+      // 🔐 CRITICAL FIX #2: Always release the lock
+      setIsWithdrawProcessing(false);
     }
   };
 
@@ -557,7 +652,7 @@ export default function Wallet(): React.ReactElement {
           accountType: 'savings'
         });
         setShowAddBank(false);
-        Alert.alert(t('success'), t('bankAccountAddedWaitingVerification'));
+        Alert.alert(t('success'), tx('bankAccountPendingVerification', 'Bank account added and is pending verification'));
         fetchBankAccount();
       }
     } catch (err: any) {
@@ -567,11 +662,11 @@ export default function Wallet(): React.ReactElement {
 
   // Map transactions to cards
   const transactionTitleMap: Record<Transaction['type'], string> = {
-    deposit: t('deposit'),
-    pocket_deposit: t('pocketDeposit'),
+    deposit: tx('depositLabel', 'Deposit'),
+    pocket_deposit: tx('pocketDeposit', 'Pocket Deposit'),
     withdraw: t('withdraw'),
-    payment: t('transactionPayment'),
-    incentive_reward: t('incentiveReward'),
+    payment: tx('paymentLabel', 'Payment'),
+    incentive_reward: tx('incentiveReward', 'Incentive Reward'),
   };
   const cards = wallet.transactions.map((t, idx) => ({
     id: idx + 1,
@@ -630,7 +725,7 @@ export default function Wallet(): React.ReactElement {
 
       {/* Available Balance */}
       <View style={styles.balanceContainer}>
-        <Text style={styles.balanceTitle}>{t('availableBalance')}</Text>
+        <Text style={styles.balanceTitle}>{tx('availableBalance', 'Available Balance')}</Text>
         <Text style={styles.balanceAmount}>₹{currentAvailableAmount}</Text>
       </View>
 
@@ -641,13 +736,14 @@ export default function Wallet(): React.ReactElement {
           onPress={handleDepositClick}
           disabled={depositLoading}
         >
-          <Text style={styles.buttonText}>{t('deposit')}</Text>
+          <Text style={styles.buttonText}>{tx('depositLabel', 'Deposit')}</Text>
         </TouchableOpacity>
         <TouchableOpacity
-          style={[styles.actionButton, { backgroundColor: '#2ecc71' }]}
+          style={[styles.actionButton, { backgroundColor: '#2ecc71', opacity: isWithdrawProcessing ? 0.6 : 1 }]}
           onPress={handleWithdrawClick}
+          disabled={isWithdrawProcessing}
         >
-          <Text style={styles.buttonText}>{t('withdraw')}</Text>
+          <Text style={styles.buttonText}>{isWithdrawProcessing ? t('processing') : t('withdraw')}</Text>
         </TouchableOpacity>
       </View>
 
@@ -657,26 +753,26 @@ export default function Wallet(): React.ReactElement {
           <View style={styles.inputRow}>
             <TextInput
               style={styles.amountInput}
-              placeholder={t('enterAmount')}
+              placeholder={tx('enterAmount', 'Enter amount')}
               keyboardType="numeric"
               value={depositAmount}
               onChangeText={setDepositAmount}
               editable={!depositLoading}
             />
             <TouchableOpacity
-              style={[styles.actionButton, { backgroundColor: '#1a2f4d', flex: 0.3, opacity: depositLoading ? 0.6 : 1 }]}
+              style={[styles.actionButton, { backgroundColor: '#1a2f4d', flex: 0.3, opacity: depositLoading || isDepositVerifyProcessing ? 0.6 : 1 }]}
               onPress={confirmDeposit}
-              disabled={depositLoading}
+              disabled={depositLoading || isDepositVerifyProcessing}
             >
-              <Text style={styles.buttonText}>{depositLoading ? t('processing') : t('confirm')}</Text>
+              <Text style={styles.buttonText}>{depositLoading || isDepositVerifyProcessing ? t('processing') : tx('confirmLabel', 'Confirm')}</Text>
             </TouchableOpacity>
           </View>
           {/* ✅ Deposit Summary UI */}
           {depositAmount && Number(depositAmount) > 0 && (
             <View style={{ marginTop: 12, marginHorizontal: 16, padding: 12, backgroundColor: '#f0f8ff', borderRadius: 8, borderLeftWidth: 4, borderLeftColor: '#1a2f4d' }}>
-              <Text style={{ fontSize: 12, color: '#666', marginBottom: 4 }}>{t('depositSummary')}</Text>
-              <Text style={{ fontSize: 14, fontWeight: '600', color: '#1a2f4d' }}>{t('youWillDeposit').replace('{amount}', String(Number(depositAmount)))}</Text>
-              <Text style={{ fontSize: 11, color: '#999', marginTop: 6 }}>{t('depositMinNoCharges')}</Text>
+              <Text style={{ fontSize: 12, color: '#666', marginBottom: 4 }}>{tx('depositSummary', 'Deposit Summary')}</Text>
+              <Text style={{ fontSize: 14, fontWeight: '600', color: '#1a2f4d' }}>{tx('youWillDeposit', 'You will deposit')} ₹{Number(depositAmount)}</Text>
+              <Text style={{ fontSize: 11, color: '#999', marginTop: 6 }}>{tx('minimumDepositNoCharges', 'Minimum ₹100, no transaction charges')}</Text>
             </View>
           )}
         </View>
@@ -684,20 +780,38 @@ export default function Wallet(): React.ReactElement {
 
       {/* Conditional Withdraw Input */}
       {showWithdraw && (
-        <View style={styles.inputRow}>
-          <TextInput
-            style={styles.amountInput}
-            placeholder={t('enterAmount')}
-            keyboardType="numeric"
-            value={withdrawAmount}
-            onChangeText={setWithdrawAmount}
-          />
-          <TouchableOpacity
-            style={[styles.actionButton, { backgroundColor: '#2ecc71', flex: 0.3 }]}
-            onPress={confirmWithdraw}
-          >
-            <Text style={styles.buttonText}>{t('confirm')}</Text>
-          </TouchableOpacity>
+        <View>
+          {withdrawStatus?.isRequestPending && (
+            <View style={{ marginHorizontal: 16, marginBottom: 10, padding: 12, borderRadius: 10, backgroundColor: '#eef6ff', borderWidth: 1, borderColor: '#bee3f8' }}>
+              <Text style={{ fontSize: 13, color: '#1d4ed8', fontWeight: '700', marginBottom: 4 }}>{tx('withdrawalRequested', 'Withdrawal Requested')}</Text>
+              <Text style={{ fontSize: 12, color: '#334155' }}>
+                {tx('withdrawalRequestedMessage', 'A withdrawal request is already pending. One withdrawal is allowed per week, so please wait for the current request to complete before requesting again.')}
+              </Text>
+            </View>
+          )}
+          {withdrawStatus?.blocked && !withdrawStatus?.isRequestPending && (
+            <View style={{ marginHorizontal: 16, marginBottom: 10, padding: 12, borderRadius: 10, backgroundColor: '#fff7ed', borderWidth: 1, borderColor: '#fbbf24' }}>
+              <Text style={{ fontSize: 13, color: '#b45309', fontWeight: '700', marginBottom: 4 }}>{tx('withdrawalUnavailable', 'Withdrawal unavailable')}</Text>
+              <Text style={{ fontSize: 12, color: '#7c2d12' }}>{withdrawStatus.message}</Text>
+            </View>
+          )}
+          <View style={styles.inputRow}>
+            <TextInput
+              style={styles.amountInput}
+              placeholder={tx('enterAmount', 'Enter amount')}
+              keyboardType="numeric"
+              value={withdrawAmount}
+              onChangeText={setWithdrawAmount}
+              editable={!withdrawStatus?.isRequestPending}
+            />
+            <TouchableOpacity
+              style={[styles.actionButton, { backgroundColor: '#2ecc71', flex: 0.3, opacity: withdrawStatus?.isRequestPending ? 0.5 : 1 }]}
+              onPress={confirmWithdraw}
+              disabled={withdrawStatus?.isRequestPending}
+            >
+              <Text style={styles.buttonText}>{tx('confirmLabel', 'Confirm')}</Text>
+            </TouchableOpacity>
+          </View>
         </View>
       )}
 
@@ -796,16 +910,16 @@ export default function Wallet(): React.ReactElement {
 
             <View style={{ padding: 16 }}>
               {/* Account Holder Name */}
-              <Text style={{ fontSize: 14, fontWeight: "600", color: "#333", marginBottom: 8 }}>{t('accountHolderNameLabel')}</Text>
+              <Text style={{ fontSize: 14, fontWeight: "600", color: "#333", marginBottom: 8 }}>{t('accountHolderName')}</Text>
               <TextInput
                 style={{ borderWidth: 1, borderColor: "#DDD", borderRadius: 8, padding: 12, marginBottom: 16, fontSize: 14 }}
-                placeholder={t('fullNameAsPerBank')}
+                placeholder={t('accountHolderNamePlaceholder')}
                 value={bankDetails.accountHolderName}
                 onChangeText={(val) => setBankDetails({ ...bankDetails, accountHolderName: val })}
               />
 
               {/* Bank Name */}
-              <Text style={{ fontSize: 14, fontWeight: "600", color: "#333", marginBottom: 8 }}>{t('bankNameLabel')}</Text>
+              <Text style={{ fontSize: 14, fontWeight: "600", color: "#333", marginBottom: 8 }}>{t('bankName')}</Text>
               <TextInput
                 style={{ borderWidth: 1, borderColor: "#DDD", borderRadius: 8, padding: 12, marginBottom: 16, fontSize: 14 }}
                 placeholder={t('bankNamePlaceholder')}
@@ -814,7 +928,7 @@ export default function Wallet(): React.ReactElement {
               />
 
               {/* Account Type */}
-              <Text style={{ fontSize: 14, fontWeight: "600", color: "#333", marginBottom: 8 }}>{t('accountTypeLabel')}</Text>
+              <Text style={{ fontSize: 14, fontWeight: "600", color: "#333", marginBottom: 8 }}>{t('accountType')}</Text>
               <View style={{ flexDirection: 'row', marginBottom: 16 }}>
                 <TouchableOpacity
                   style={{
@@ -847,7 +961,7 @@ export default function Wallet(): React.ReactElement {
               </View>
 
               {/* Account Number */}
-              <Text style={{ fontSize: 14, fontWeight: "600", color: "#333", marginBottom: 8 }}>{t('accountNumberLabel')}</Text>
+              <Text style={{ fontSize: 14, fontWeight: "600", color: "#333", marginBottom: 8 }}>{t('accountNumber')}</Text>
               <TextInput
                 style={{ borderWidth: 1, borderColor: "#DDD", borderRadius: 8, padding: 12, marginBottom: 16, fontSize: 14 }}
                 placeholder={t('enterAccountNumber')}
@@ -857,20 +971,20 @@ export default function Wallet(): React.ReactElement {
               />
 
               {/* Confirm Account Number */}
-              <Text style={{ fontSize: 14, fontWeight: "600", color: "#333", marginBottom: 8 }}>{t('confirmAccountNumberLabel')}</Text>
+              <Text style={{ fontSize: 14, fontWeight: "600", color: "#333", marginBottom: 8 }}>{t('confirmAccountNumber')}</Text>
               <TextInput
                 style={{ borderWidth: 1, borderColor: "#DDD", borderRadius: 8, padding: 12, marginBottom: 16, fontSize: 14 }}
-                placeholder={t('reenterAccountNumber')}
+                placeholder={t('confirmAccountNumberPlaceholder')}
                 keyboardType="number-pad"
                 value={bankDetails.accountNumberConfirm}
                 onChangeText={(val) => setBankDetails({ ...bankDetails, accountNumberConfirm: val })}
               />
 
               {/* IFSC Code */}
-              <Text style={{ fontSize: 14, fontWeight: "600", color: "#333", marginBottom: 8 }}>{t('ifscCodeLabel')}</Text>
+              <Text style={{ fontSize: 14, fontWeight: "600", color: "#333", marginBottom: 8 }}>{t('ifscCode')}</Text>
               <TextInput
                 style={{ borderWidth: 1, borderColor: "#DDD", borderRadius: 8, padding: 12, marginBottom: 24, fontSize: 14 }}
-                placeholder={t('ifscCodePlaceholder')}
+                placeholder={t('ifscPlaceholder')}
                 maxLength={11}
                 value={bankDetails.ifscCode}
                 onChangeText={(val) => setBankDetails({ ...bankDetails, ifscCode: val.toUpperCase() })}
