@@ -114,7 +114,6 @@ async function uploadFileBufferToCloudinary({
     folder,
     public_id: publicId,
     timestamp,
-    resource_type: resourceType,
   };
   const signature = signUploadParams(params, cfg.apiSecret);
 
@@ -125,7 +124,6 @@ async function uploadFileBufferToCloudinary({
   form.append("signature", signature);
   if (folder) form.append("folder", folder);
   if (publicId) form.append("public_id", publicId);
-  if (resourceType !== "auto") form.append("resource_type", resourceType);
 
   const endpoint = `https://api.cloudinary.com/v1_1/${cfg.cloudName}/${resourceType === "auto" ? "auto" : resourceType}/upload`;
   const response = await fetch(endpoint, { method: "POST", body: form });

@@ -27,7 +27,6 @@ router.post("/cloudinary-signature", authenticateToken, async (req, res) => {
       timestamp,
       ...(folder ? { folder } : {}),
       ...(publicId ? { public_id: publicId } : {}),
-      ...(resourceType ? { resource_type: resourceType } : {}),
     };
     const signature = signUploadParams(paramsToSign, cfg.apiSecret);
 
