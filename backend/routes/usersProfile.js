@@ -1,6 +1,26 @@
 const express = require("express");
 const { authenticateToken } = require("../utils/auth");
 const User = require("../models/User");
+const Worker = require("../models/Worker");
+const Wallet = require("../models/Wallet");
+const BankAccount = require("../models/BankAccount");
+const Withdrawal = require("../models/Withdrawal");
+const VerificationDocument = require("../models/VerificationDocument");
+const NotificationHistory = require("../models/NotificationHistory");
+const ActivityLog = require("../models/ActivityLog");
+const SupportTicket = require("../models/SupportTicket");
+const ContractorStats = require("../models/ContractorStats");
+const IncentiveLedger = require("../models/IncentiveLedger");
+const GigHistory = require("../models/GigHistory");
+const WorkerEarnings = require("../models/WorkerEarnings");
+const CashDeposit = require("../models/CashDeposit");
+const PayoutBatch = require("../models/PayoutBatch");
+const TermsAuditLog = require("../models/TermsAuditLog");
+const PremiumSubscription = require("../models/PremiumSubscription");
+const CancellationLog = require("../models/CancellationLog");
+const CityLeaderboard = require("../models/CityLeaderboard");
+const Job = require("../models/Jobs");
+const JobEventLog = require("../models/JobEventLog");
 const Upload = require("../models/Upload");
 const {
   uploadImageBufferToCloudinary,
@@ -8,6 +28,107 @@ const {
   deleteCloudinaryAsset,
 } = require("../utils/cloudinaryUpload");
 const MAX_IMAGE_SIZE_BYTES = Math.floor(1.5 * 1024 * 1024);
+
+async function deleteUserAccountData({ user, connectedWorkers }) {
+  const phone = String(user?.phone || "").trim();
+  const userId = user?._id ? String(user._id) : "";
+  if (!phone || !userId) {
+    throw new Error("Missing user identity for account deletion");
+  }
+
+  const uploads = await Upload.find({ userId: user._id }).select("cloudinaryPublicId").lean();
+  const cloudinaryIds = new Set(
+    [
+      user.profilePhotoPublicId || "",
+      ...uploads.map((item) => item?.cloudinaryPublicId || ""),
+    ].filter(Boolean)
+  );
+
+  const postedJobs = await Job.find({ contractorPhone: phone }).select("_id").lean();
+  const postedJobIds = postedJobs.map((job) => job._id).filter(Boolean);
+
+  await Promise.allSettled(
+    Array.from(cloudinaryIds).map((publicId) => deleteCloudinaryAsset(publicId))
+  );
+
+  if (postedJobIds.length > 0) {
+    await JobEventLog.deleteMany({ jobId: { $in: postedJobIds } });
+  }
+
+  // Remove jobs created by this contractor entirely.
+  await Job.deleteMany({ contractorPhone: phone });
+
+  // Remove this worker's direct traces from jobs owned by others.
+  await Job.updateMany(
+    {
+      contractorPhone: { $ne: phone },
+      $or: [
+        { acceptedBy: phone },
+        { "acceptedWorkers.phone": phone },
+        { declinedBy: phone },
+      ],
+    },
+    {
+      $unset: {
+        acceptedBy: "",
+        acceptedWorker: "",
+        acceptedAt: "",
+        attendanceStatus: "",
+        attendanceTime: "",
+        paymentStatus: "",
+        paymentMode: "",
+        paymentTime: "",
+        hoursWorked: "",
+        timeSpentMinutes: "",
+        rating: "",
+      },
+      $pull: {
+        acceptedWorkers: { phone },
+        declinedBy: phone,
+      },
+    }
+  );
+
+  await Promise.all([
+    Upload.deleteMany({ userId: user._id }),
+    Wallet.deleteMany({ phone }),
+    BankAccount.deleteMany({ phone }),
+    Withdrawal.deleteMany({ phone }),
+    VerificationDocument.deleteMany({ $or: [{ userId }, { phone }] }),
+    NotificationHistory.deleteMany({ $or: [{ recipientPhone: phone }, { senderPhone: phone }] }),
+    ActivityLog.deleteMany({ $or: [{ userId }, { phone }, { relatedPhone: phone }] }),
+    SupportTicket.deleteMany({ $or: [{ reporterPhone: phone }, { reportedPhone: phone }] }),
+    ContractorStats.deleteMany({ phone }),
+    IncentiveLedger.deleteMany({ phone }),
+    GigHistory.deleteMany({ $or: [{ workerPhone: phone }, { contractorPhone: phone }] }),
+    WorkerEarnings.deleteMany({ $or: [{ workerPhone: phone }, { contractorPhone: phone }] }),
+    CashDeposit.deleteMany({ $or: [{ workerPhone: phone }, { contractorPhone: phone }] }),
+    PayoutBatch.updateMany(
+      { "workers.workerPhone": phone },
+      { $pull: { workers: { workerPhone: phone } } }
+    ),
+    TermsAuditLog.deleteMany({ phone }),
+    PremiumSubscription.deleteMany({ contractorPhone: phone }),
+    CancellationLog.deleteMany({ $or: [{ contractorPhone: phone }, { workerPhone: phone }] }),
+    CityLeaderboard.updateMany({}, { $pull: { leaderboard: { phone } } }),
+    JobEventLog.deleteMany({ actorPhone: phone }),
+    Worker.deleteMany({ phone }),
+    User.deleteOne({ _id: user._id }),
+  ]);
+
+  if (connectedWorkers && typeof connectedWorkers.entries === "function") {
+    for (const [key, worker] of connectedWorkers.entries()) {
+      if (worker?.phone === phone) {
+        connectedWorkers.delete(key);
+      }
+    }
+  }
+
+  return {
+    deletedPostedJobs: postedJobIds.length,
+    deletedUploads: uploads.length,
+  };
+}
 
 function createUsersProfileRouter({ upload, io, connectedWorkers }) {
   const router = express.Router();
@@ -238,6 +359,26 @@ function createUsersProfileRouter({ upload, io, connectedWorkers }) {
     } catch (err) {
       console.error("Preferences update error:", err);
       return res.status(500).json({ success: false, message: "Internal server error" });
+    }
+  });
+
+  router.delete("/users/account", authenticateToken, async (req, res) => {
+    try {
+      const user = await User.findOne({ phone: req.user.phone });
+      if (!user) {
+        return res.status(404).json({ success: false, message: "User not found" });
+      }
+
+      const cleanupSummary = await deleteUserAccountData({ user, connectedWorkers });
+
+      return res.json({
+        success: true,
+        message: "Account deleted successfully",
+        summary: cleanupSummary,
+      });
+    } catch (err) {
+      console.error("Account deletion error:", err);
+      return res.status(500).json({ success: false, message: err?.message || "Failed to delete account" });
     }
   });
 

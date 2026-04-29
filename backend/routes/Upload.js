@@ -94,8 +94,16 @@ router.post("/upload", authenticateToken, upload.single("file"), async (req, res
     const mimeType = req.file.mimetype || "application/octet-stream";
     const isImage = mimeType.startsWith("image/");
     const resourceType = isImage ? "image" : "raw";
-    const folder = isImage ? "kaamwale/uploads/images" : "kaamwale/uploads/documents";
-    const publicId = `${req.user.phone}-${Date.now()}-${req.file.originalname}`;
+    const type = (req.body && req.body.type) || "document";
+    const normalizedType = type === "profile" ? "profilePhoto" : type;
+    const folder = normalizedType === "profilePhoto"
+      ? "kaamwale/profiles"
+      : isImage
+      ? "kaamwale/uploads/images"
+      : "kaamwale/uploads/documents";
+    const publicId = normalizedType === "profilePhoto"
+      ? `profile-${req.user.phone}-${Date.now()}`
+      : `${req.user.phone}-${Date.now()}-${req.file.originalname}`;
 
     const uploadResult = await uploadFileBufferToCloudinary({
       buffer: req.file.buffer,
@@ -106,23 +114,29 @@ router.post("/upload", authenticateToken, upload.single("file"), async (req, res
     });
 
     const fileUrl = uploadResult.secure_url;
-    const type = (req.body && req.body.type) || "document";
 
     const newUpload = new Upload({
       userId: user._id,
-      type: type,
+      type: normalizedType,
       fileName: req.file.originalname,
       fileUrl,
       cloudinaryPublicId: uploadResult.public_id,
     });
     await newUpload.save();
 
-    if (req.body.type === "profilePhoto") {
+    if (normalizedType === "profilePhoto") {
       user.profilePhoto = fileUrl;
+      user.profilePhotoPublicId = uploadResult.public_id || "";
       await user.save();
     }
 
-    return res.json({ success: true, fileUrl, upload: newUpload });
+    return res.json({
+      success: true,
+      fileUrl,
+      profilePhoto: normalizedType === "profilePhoto" ? fileUrl : undefined,
+      cloudinaryPublicId: uploadResult.public_id,
+      upload: newUpload,
+    });
   } catch (err) {
     console.error("Upload error", err);
     return res.status(500).json({ success: false, message: "Internal server error" });
