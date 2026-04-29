@@ -1222,8 +1222,18 @@ router.get('/contractors/by-district', authenticateToken, async (req, res) => {
             { $match: { phone: req.user.phone } },
             {
               $project: {
+                _id: 0,
+                contractorId: '$_id',
+                phone: '$phone',
+                name: 1,
                 score: 1,
                 tier: 1,
+                totalJobsPosted: '$jobCount',
+                completedJobs: '$completedJobs',
+                completionRate: { $round: ['$completionRate', 2] },
+                profilePhoto: '$profilePhoto',
+                avgRating: '$avgRating',
+                daysActive: '$activeDays',
               },
             },
           ],
@@ -1246,6 +1256,7 @@ router.get('/contractors/by-district', authenticateToken, async (req, res) => {
     // Find current user's rank
     let currentUserRank = null;
     let currentUserTier = 'new';
+    let currentUserEntry = null;
     
     if (facetResult.userScore && facetResult.userScore.length > 0) {
       const userInfo = facetResult.userScore[0];
@@ -1354,6 +1365,11 @@ router.get('/contractors/by-district', authenticateToken, async (req, res) => {
       if (rankAgg.length > 0) {
         currentUserRank = (rankAgg[0].aboveUserCount || 0) + 1;
       }
+
+      currentUserEntry = {
+        ...userInfo,
+        rank: currentUserRank,
+      };
     }
 
     // Return leaderboard with standardized format + pagination
@@ -1371,6 +1387,7 @@ router.get('/contractors/by-district', authenticateToken, async (req, res) => {
       },
       myRank: currentUserRank,
       myTier: currentUserTier,
+      currentUserEntry,
     });
 
     // Save leaderboard snapshot to database for caching (async, non-blocking)
