@@ -30,147 +30,146 @@ function calculateEligibility(events) {
   }
 
   try {
-    const completedByDay = new Map();
-    const cancellationEvents = [];
-    const cancellationDays = new Set();
-    const cancellationCountByDay = new Map();
+    const TZ = 'Asia/Kolkata';
+    const dateFormatter = new Intl.DateTimeFormat('en-CA', { timeZone: TZ }); // YYYY-MM-DD
+    const toDateKey = (d) => {
+      try {
+        return dateFormatter.format(d);
+      } catch (e) {
+        return new Date(d).toISOString().slice(0, 10);
+      }
+    };
+
+    const byDate = new Map(); // key -> { minutes, jobs, cancellations }
     const REQUIRED_DAILY_HOURS = 8;
+    const REQUIRED_DAILY_MINUTES = REQUIRED_DAILY_HOURS * 60;
     const REQUIRED_DAYS_FOR_5 = 5;
 
     for (const e of events) {
       const d = new Date(e.eventTime || e.createdAt || Date.now());
-      const day = d.toISOString().slice(0, 10);
+      const day = toDateKey(d);
 
-      if (e.eventType === "job_completed") {
-        const h = Number(e.hoursWorked || 0);
-        const prior = completedByDay.get(day) || { hours: 0, jobs: 0 };
-        completedByDay.set(day, {
-          hours: prior.hours + h,
-          jobs: prior.jobs + 1,
-        });
+      const minutes = Number(e.timeSpentMinutes || 0) || Math.round((Number(e.hoursWorked || 0) || 0) * 60);
+      const jobs = (e.eventType === 'job_completed') ? 1 : 0;
+
+      const prior = byDate.get(day) || { minutes: 0, jobs: 0, cancellations: 0 };
+      prior.minutes += Number(minutes || 0);
+      prior.jobs += jobs;
+
+      // detect cancellations/declines robustly
+      const eventType = String(e.eventType || '').toLowerCase();
+      const status = String(e.status || '').toLowerCase();
+      if (eventType.includes('cancel') || eventType.includes('declin') || status === 'cancelled') {
+        prior.cancellations += 1;
       }
 
-      if (e.eventType === "job_declined_offer" || e.eventType === "job_cancelled_by_worker") {
-        cancellationEvents.push(day);
-        cancellationDays.add(day);
-        cancellationCountByDay.set(day, Number(cancellationCountByDay.get(day) || 0) + 1);
-      }
+      byDate.set(day, prior);
     }
 
-    const completedWorkDays = Array.from(completedByDay.entries())
-      .filter(([, info]) => Number(info?.jobs || 0) > 0)
-      .map(([day, info]) => ({
-        dateObj: new Date(`${day}T00:00:00.000Z`),
-        dateStr: day,
-        hours: Number(info?.hours || 0),
-      }))
-      .sort((a, b) => b.dateObj - a.dateObj);
+    const allKeys = Array.from(byDate.keys()).sort().reverse(); // newest first
+    if (allKeys.length === 0) return emptyEligibility();
 
-    if (completedWorkDays.length === 0) {
-      return emptyEligibility();
-    }
-
-    // Daily audit trail (latest first) used by support/admin to explain eligibility.
-    const allDays = new Set([
-      ...Array.from(completedByDay.keys()),
-      ...Array.from(cancellationCountByDay.keys()),
-    ]);
-    const dailyQualificationTrail = Array.from(allDays)
-      .map((day) => {
-        const info = completedByDay.get(day) || { hours: 0, jobs: 0 };
-        const hoursWorked = Number(info.hours || 0);
-        const jobsCompleted = Number(info.jobs || 0);
-        const declinesCount = Number(cancellationCountByDay.get(day) || 0);
-        const hasCompletedJob = jobsCompleted > 0;
-        const meetsMinimumHours = hasCompletedJob && hoursWorked >= REQUIRED_DAILY_HOURS;
-        const meetsNoDeclines = declinesCount === 0;
-        const qualified = hasCompletedJob && meetsMinimumHours && meetsNoDeclines;
-        return {
-          date: day,
-          jobsCompleted,
-          hoursWorked: Number(hoursWorked.toFixed(2)),
-          declinesCount,
-          hasCompletedJob,
-          meetsMinimumHours,
-          meetsNoDeclines,
-          qualified,
-        };
-      })
-      .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-
-    // A day counts toward streak progress only if:
-    // 1) at least one completed paid job, 2) >=8 hours total, 3) no decline/cancel on that day.
-    const qualifiedDays = completedWorkDays.filter(
-      (d) => d.hours >= REQUIRED_DAILY_HOURS && !cancellationDays.has(d.dateStr)
-    );
-
-    // Bug #10 Fix: Initialize consecutiveDays to 0 before loop (avoid off-by-one error)
-    let consecutiveDays = 0;
-    let streakHours = 0;
-    for (let i = 0; i < qualifiedDays.length; i++) {
-      if (i === 0) {
-        consecutiveDays = 1; // First qualified day counts as 1 consecutive day
-        streakHours += Number(qualifiedDays[i]?.hours || 0);
-        continue;
-      }
-
-      const prevDay = qualifiedDays[i - 1].dateObj;
-      const currDay = qualifiedDays[i].dateObj;
-      const dayDiff = Math.floor((prevDay - currDay) / (1000 * 60 * 60 * 24));
-
-      if (dayDiff === 1) {
-        consecutiveDays++;
-        streakHours += qualifiedDays[i].hours;
-      } else {
-        break;
-      }
-    }
-
-    const latest = (qualifiedDays[0] || completedWorkDays[0]).dateObj;
-    const streakStart = new Date(latest);
-    streakStart.setUTCDate(streakStart.getUTCDate() - Math.max(0, consecutiveDays - 1));
-
-    const cancellationsInWindow = cancellationEvents.filter((day) => {
-      const d = new Date(`${day}T00:00:00.000Z`);
-      return d >= streakStart && d <= latest;
-    }).length;
-
-    // Build strict 5-day requirement window ending on latest completed-work day.
-    const fiveDayDailyStatus = [];
-    for (let i = REQUIRED_DAYS_FOR_5 - 1; i >= 0; i--) {
-      const dayDate = new Date(latest);
-      dayDate.setUTCDate(dayDate.getUTCDate() - i);
-      const day = dayDate.toISOString().slice(0, 10);
-      const info = completedByDay.get(day) || { hours: 0, jobs: 0 };
-      const hoursWorked = Number(info.hours || 0);
+    // Build dailyQualificationTrail
+    const dailyQualificationTrail = allKeys.map((day) => {
+      const info = byDate.get(day) || { minutes: 0, jobs: 0, cancellations: 0 };
+      const hoursWorked = Number((info.minutes || 0) / 60);
       const jobsCompleted = Number(info.jobs || 0);
-      const meetsMinimumHours = jobsCompleted > 0 && hoursWorked >= REQUIRED_DAILY_HOURS;
-      const declinesCount = Number(cancellationCountByDay.get(day) || 0);
+      const declinesCount = Number(info.cancellations || 0);
+      const hasCompletedJob = jobsCompleted > 0;
+      const meetsMinimumHours = hasCompletedJob && (info.minutes || 0) >= REQUIRED_DAILY_MINUTES;
       const meetsNoDeclines = declinesCount === 0;
-      const dayQualified = meetsMinimumHours && meetsNoDeclines;
-      fiveDayDailyStatus.push({
+      const qualified = hasCompletedJob && meetsMinimumHours && meetsNoDeclines;
+      return {
         date: day,
         jobsCompleted,
-        hoursWorked,
+        hoursWorked: Number(hoursWorked.toFixed(2)),
         declinesCount,
-        hasCompletedJob: jobsCompleted > 0,
+        hasCompletedJob,
         meetsMinimumHours,
         meetsNoDeclines,
-        dayQualified,
-      });
+        qualified,
+      };
+    });
+
+    // Determine latest day (newest key)
+    const latestKey = allKeys[0];
+    const latestDateObj = new Date(`${latestKey}T00:00:00.000+05:30`);
+
+    // Compute consecutive qualified days ending at latestKey
+    let consecutiveDays = 0;
+    let streakMinutes = 0;
+    for (let i = 0; ; i++) {
+      const checkDate = new Date(latestDateObj);
+      checkDate.setDate(latestDateObj.getDate() - i);
+      const key = toDateKey(checkDate);
+      const info = byDate.get(key) || { minutes: 0, jobs: 0, cancellations: 0 };
+      const meetsMin = (info.minutes || 0) >= REQUIRED_DAILY_MINUTES && (info.jobs || 0) > 0 && (info.cancellations || 0) === 0;
+      if (!meetsMin) break;
+      consecutiveDays++;
+      streakMinutes += Number(info.minutes || 0);
+      // stop if we run out of history
+      if (i > 365) break;
     }
-    const daysWithCompletedJob = fiveDayDailyStatus.filter((d) => d.hasCompletedJob).length;
-    const daysMetMinimumHours = fiveDayDailyStatus.filter((d) => d.meetsMinimumHours).length;
-    const daysQualified = fiveDayDailyStatus.filter((d) => d.dayQualified).length;
-    const failedDates = fiveDayDailyStatus.filter((d) => !d.meetsMinimumHours).map((d) => d.date);
+
+    // Helper to check strict N-day window ending at latestKey
+    const checkWindow = (n) => {
+      for (let i = 0; i < n; i++) {
+        const checkDate = new Date(latestDateObj);
+        checkDate.setDate(latestDateObj.getDate() - i);
+        const key = toDateKey(checkDate);
+        const info = byDate.get(key) || { minutes: 0, jobs: 0, cancellations: 0 };
+        if ((info.jobs || 0) === 0) return false;
+        if ((info.minutes || 0) < REQUIRED_DAILY_MINUTES) return false;
+        if ((info.cancellations || 0) > 0) return false;
+      }
+      return true;
+    };
+
+    const cancellationsInWindow = (function () {
+      // count cancellations within the streak period (consecutiveDays)
+      let c = 0;
+      for (let i = 0; i < consecutiveDays; i++) {
+        const checkDate = new Date(latestDateObj);
+        checkDate.setDate(latestDateObj.getDate() - i);
+        const key = toDateKey(checkDate);
+        const info = byDate.get(key) || { cancellations: 0 };
+        c += Number(info.cancellations || 0);
+      }
+      return c;
+    })();
+
+    // Build N-day windows
+    const buildWindowStatus = (n) => {
+      const arr = [];
+      for (let i = n - 1; i >= 0; i--) {
+        const d = new Date(latestDateObj);
+        d.setDate(latestDateObj.getDate() - i);
+        const key = toDateKey(d);
+        const info = byDate.get(key) || { minutes: 0, jobs: 0, cancellations: 0 };
+        arr.push({
+          workDate: key,
+          minutes: Math.max(0, Number(info.minutes || 0)),
+          jobs: Number(info.jobs || 0),
+          isQualified: (info.jobs || 0) > 0 && (info.minutes || 0) >= REQUIRED_DAILY_MINUTES && (info.cancellations || 0) === 0,
+          reasons: [ ...(info.cancellations && info.cancellations > 0 ? ['CANCELLED_JOB'] : []), ...(info.minutes < REQUIRED_DAILY_MINUTES ? ['LOW_HOURS'] : []) ],
+        });
+      }
+      return arr;
+    };
+
+    const fiveDayDailyStatus = buildWindowStatus(REQUIRED_DAYS_FOR_5);
+    const daysWithCompletedJob = fiveDayDailyStatus.filter((d) => d.jobs > 0).length;
+    const daysMetMinimumHours = fiveDayDailyStatus.filter((d) => d.minutes >= REQUIRED_DAILY_MINUTES).length;
+    const daysQualified = fiveDayDailyStatus.filter((d) => d.isQualified).length;
+    const failedDates = fiveDayDailyStatus.filter((d) => d.minutes < REQUIRED_DAILY_MINUTES).map((d) => d.workDate);
     const allDaysHaveMinHours = daysMetMinimumHours === REQUIRED_DAYS_FOR_5;
 
     let failureReason = null;
     if (daysWithCompletedJob === 0) {
-      failureReason = "No completed paid-job history found";
+      failureReason = 'No completed paid-job history found';
     } else if (!allDaysHaveMinHours) {
       failureReason = failedDates.length
-        ? `Daily minimum ${REQUIRED_DAILY_HOURS}h not met on: ${failedDates.join(", ")}`
+        ? `Daily minimum ${REQUIRED_DAILY_HOURS}h not met on: ${failedDates.join(', ')}`
         : `Need ${REQUIRED_DAYS_FOR_5} consecutive days with at least ${REQUIRED_DAILY_HOURS} hours`;
     } else if (cancellationsInWindow > 0 || daysQualified < REQUIRED_DAYS_FOR_5) {
       failureReason = `Declines/cancellations found in streak window (${cancellationsInWindow})`;
@@ -180,12 +179,12 @@ function calculateEligibility(events) {
 
     return {
       consecutiveDays,
-      totalHours: streakHours,
+      totalHours: Math.round((streakMinutes / 60) * 10) / 10,
       cancellationsInWindow,
-      lastWorkDate: (qualifiedDays[0] || completedWorkDays[0])?.dateStr || null,
-      eligibleFor5Days: consecutiveDays >= 5 && baseEligible,
-      eligibleFor10Days: consecutiveDays >= 10,
-      eligibleFor20Days: consecutiveDays >= 20,
+      lastWorkDate: latestKey || null,
+      eligibleFor5Days: checkWindow(5),
+      eligibleFor10Days: checkWindow(10),
+      eligibleFor20Days: checkWindow(20),
       requiredDailyHours: REQUIRED_DAILY_HOURS,
       requiredDaysFor5: REQUIRED_DAYS_FOR_5,
       dailyQualificationTrail,
@@ -194,15 +193,15 @@ function calculateEligibility(events) {
         requiredDailyHours: REQUIRED_DAILY_HOURS,
         daysMetMinimumHours,
         allDaysHaveMinHours,
-        startDate: fiveDayDailyStatus[0]?.date || null,
-        endDate: fiveDayDailyStatus[fiveDayDailyStatus.length - 1]?.date || null,
-        dailyStatus: fiveDayDailyStatus,
+        startDate: fiveDayDailyStatus[0]?.workDate || null,
+        endDate: fiveDayDailyStatus[fiveDayDailyStatus.length - 1]?.workDate || null,
+        dailyStatus: fiveDayDailyStatus.map((d) => ({ date: d.workDate, jobsCompleted: d.jobs, hoursWorked: d.minutes / 60, hasCompletedJob: d.jobs > 0, meetsMinimumHours: d.minutes >= REQUIRED_DAILY_MINUTES, meetsNoDeclines: !(d.reasons || []).includes('CANCELLED_JOB'), dayQualified: d.isQualified, reasons: Array.isArray(d.reasons) ? d.reasons : [] })),
         failedDates,
         failureReason,
       },
     };
   } catch (err) {
-    console.error("Error calculating eligibility:", err);
+    console.error('Error calculating eligibility:', err);
     return emptyEligibility();
   }
 }

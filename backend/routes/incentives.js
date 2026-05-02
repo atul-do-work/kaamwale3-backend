@@ -97,7 +97,6 @@ async function persistEligibilityAuditSnapshot(worker, eligibilityData) {
     return allowed.has(normalized) ? normalized : fallback;
   };
 
-  // Backward-compat migration in-place: old records may contain "Pending"/"Paid".
   if (Array.isArray(worker.recentGigs) && worker.recentGigs.length > 0) {
     for (const gig of worker.recentGigs) {
       if (!gig) continue;
@@ -197,7 +196,6 @@ router.get('/progress', authenticateToken, async (req, res) => {
 });
 
 router.post('/claim/:milestoneId', authenticateToken, async (req, res) => {
-  const session = await mongoose.startSession();
   try {
     const phone = req.user?.phone;
     const { milestoneId } = req.params;
@@ -239,61 +237,85 @@ router.post('/claim/:milestoneId', authenticateToken, async (req, res) => {
     let walletUpdateResult = null;
     let responsePayload = null;
 
-    await session.withTransaction(async () => {
-      const alreadyClaimed = await IncentiveLedger.findOne({
-        phone,
-        milestoneId,
-        'walletCredit.status': 'credited',
-      }).session(session);
+    // NOTE: Unique index on IncentiveLedger(phone,milestoneId) should be created at app startup/migration
 
-      if (alreadyClaimed) {
-        const existingWallet = await Wallet.findOne({ phone }).select('availableBalance balance').session(session);
-        responsePayload = {
-          success: true,
-          message: 'Reward already claimed',
-          isDuplicate: true,
-          rewardAmount,
-          claimedAt: alreadyClaimed.createdAt || alreadyClaimed.updatedAt,
-          walletBalance: Number(existingWallet?.availableBalance ?? existingWallet?.balance ?? 0),
-        };
-        return;
-      }
+    // Attempt atomic upsert: create ledger document only if not exists.
+    const now = new Date();
+    const ledgerUpsertDoc = {
+      phone,
+      workerName: worker.name || 'Unknown',
+      milestoneId,
+      rewardAmount,
+      eligibilityData: {
+        consecutiveDays: eligibilityData.consecutiveDays,
+        totalHours: eligibilityData.totalHours,
+        cancellationsInWindow: eligibilityData.cancellationsInWindow,
+        requiredDailyHours: eligibilityData.requiredDailyHours || 8,
+        requiredDaysFor5: eligibilityData.requiredDaysFor5 || 5,
+        fiveDayWindow: {
+          daysMetMinimumHours: Number(eligibilityData.fiveDayWindow?.daysMetMinimumHours || 0),
+          allDaysHaveMinHours: Boolean(eligibilityData.fiveDayWindow?.allDaysHaveMinHours),
+          startDate: eligibilityData.fiveDayWindow?.startDate || null,
+          endDate: eligibilityData.fiveDayWindow?.endDate || null,
+          failedDates: Array.isArray(eligibilityData.fiveDayWindow?.failedDates) ? eligibilityData.fiveDayWindow.failedDates : [],
+          failureReason: eligibilityData.fiveDayWindow?.failureReason || null,
+        },
+        dailyQualificationTrail: Array.isArray(eligibilityData.dailyQualificationTrail)
+          ? eligibilityData.dailyQualificationTrail.slice(0, 35)
+          : [],
+        lastWorkDate: eligibilityData.lastWorkDate,
+        verifiedAt: now,
+      },
+      walletCredit: { status: 'processing' },
+      claimedBy: req.headers['user-agent'] || 'unknown',
+      ipAddress: req.ip,
+      createdAt: now,
+    };
 
-      const ledgerDocs = await IncentiveLedger.create(
-        [{
-          phone,
-          workerName: worker.name || 'Unknown',
-          milestoneId,
-          rewardAmount,
-          eligibilityData: {
-            consecutiveDays: eligibilityData.consecutiveDays,
-            totalHours: eligibilityData.totalHours,
-            cancellationsInWindow: eligibilityData.cancellationsInWindow,
-            requiredDailyHours: eligibilityData.requiredDailyHours || 8,
-            requiredDaysFor5: eligibilityData.requiredDaysFor5 || 5,
-            fiveDayWindow: {
-              daysMetMinimumHours: Number(eligibilityData.fiveDayWindow?.daysMetMinimumHours || 0),
-              allDaysHaveMinHours: Boolean(eligibilityData.fiveDayWindow?.allDaysHaveMinHours),
-              startDate: eligibilityData.fiveDayWindow?.startDate || null,
-              endDate: eligibilityData.fiveDayWindow?.endDate || null,
-              failedDates: Array.isArray(eligibilityData.fiveDayWindow?.failedDates) ? eligibilityData.fiveDayWindow.failedDates : [],
-              failureReason: eligibilityData.fiveDayWindow?.failureReason || null,
-            },
-            dailyQualificationTrail: Array.isArray(eligibilityData.dailyQualificationTrail)
-              ? eligibilityData.dailyQualificationTrail.slice(0, 35)
-              : [],
-            lastWorkDate: eligibilityData.lastWorkDate,
-            verifiedAt: new Date(),
-          },
-          walletCredit: { status: 'processing' },
-          claimedBy: req.headers['user-agent'] || 'unknown',
-          ipAddress: req.ip,
-        }],
-        { session }
+    let upsertResult;
+    try {
+      upsertResult = await IncentiveLedger.collection.findOneAndUpdate(
+        { phone, milestoneId },
+        { $setOnInsert: ledgerUpsertDoc },
+        { upsert: true, returnDocument: 'after' }
       );
+    } catch (upsertErr) {
+      // Duplicate key or other errors mean another request likely inserted concurrently
+      if (upsertErr && upsertErr.code === 11000) {
+        const existing = await IncentiveLedger.findOne({ phone, milestoneId }).select('walletCredit rewardAmount createdAt updatedAt').lean();
+        const existingWallet = await Wallet.findOne({ phone }).select('availableBalance balance').lean();
+        const alreadyCredited = existing?.walletCredit?.status === 'credited';
+        return res.json({
+          success: alreadyCredited,
+          message: alreadyCredited ? 'Reward already claimed' : 'Reward claim already in progress',
+          isDuplicate: true,
+          rewardAmount: existing?.rewardAmount || rewardAmount,
+          claimedAt: existing?.createdAt || existing?.updatedAt,
+          walletBalance: Number(existingWallet?.availableBalance ?? existingWallet?.balance ?? 0),
+        });
+      }
+      throw upsertErr;
+    }
 
-      const ledgerDoc = ledgerDocs[0];
+    const ledgerDoc = upsertResult.value;
+    // If the upsert returned an existing document (already had a ledger), treat as duplicate
+    const wasInserted = !upsertResult.lastErrorObject || upsertResult.lastErrorObject.updatedExisting === false;
+    if (!wasInserted) {
+      const existingWallet = await Wallet.findOne({ phone }).select('availableBalance balance').lean();
+      const alreadyCredited = ledgerDoc?.walletCredit?.status === 'credited';
+      responsePayload = {
+        success: alreadyCredited,
+        message: alreadyCredited ? 'Reward already claimed' : 'Reward claim already in progress',
+        isDuplicate: true,
+        rewardAmount: ledgerDoc.rewardAmount || rewardAmount,
+        claimedAt: ledgerDoc.createdAt || ledgerDoc.updatedAt,
+        walletBalance: Number(existingWallet?.availableBalance ?? existingWallet?.balance ?? 0),
+      };
+      return res.json(responsePayload);
+    }
 
+    // Proceed to credit wallet. If this fails, mark ledger as failed and bubble error.
+    try {
       walletUpdateResult = await Wallet.findOneAndUpdate(
         { phone },
         {
@@ -315,25 +337,17 @@ router.post('/claim/:milestoneId', authenticateToken, async (req, res) => {
             },
           },
         },
-        { new: true, upsert: true, session }
+        { new: true, upsert: true }
       );
 
       if (!walletUpdateResult) {
+        // mark ledger as failed
+        await IncentiveLedger.updateOne({ _id: ledgerDoc._id }, { $set: { 'walletCredit.status': 'failed', 'walletCredit.failedAt': new Date() } });
         throw new Error('Wallet transaction failed');
       }
 
       const latestTx = walletUpdateResult.transactions[walletUpdateResult.transactions.length - 1];
-      await IncentiveLedger.updateOne(
-        { _id: ledgerDoc._id },
-        {
-          $set: {
-            'walletCredit.status': 'credited',
-            'walletCredit.walletTransactionId': latestTx?._id?.toString(),
-            'walletCredit.creditedAt': new Date(),
-          },
-        },
-        { session }
-      );
+      await IncentiveLedger.updateOne({ _id: ledgerDoc._id }, { $set: { 'walletCredit.status': 'credited', 'walletCredit.walletTransactionId': latestTx?._id?.toString(), 'walletCredit.creditedAt': new Date() } });
 
       responsePayload = {
         success: true,
@@ -343,7 +357,10 @@ router.post('/claim/:milestoneId', authenticateToken, async (req, res) => {
         transactionId: ledgerDoc._id.toString(),
         claimedAt: new Date(),
       };
-    });
+    } catch (errCredit) {
+      console.error('Wallet credit failed after ledger upsert:', errCredit);
+      return res.status(500).json({ success: false, message: 'Failed to credit wallet', error: String(errCredit && errCredit.message) });
+    }
 
     if (global.io && walletUpdateResult) {
       global.io.emit(`wallet:rewarded:${phone}`, {
@@ -385,7 +402,7 @@ router.post('/claim/:milestoneId', authenticateToken, async (req, res) => {
       error: err.message,
     });
   } finally {
-    session.endSession();
+    // no-op: not using mongoose sessions here to keep idempotent upsert flow simple
   }
 });
 

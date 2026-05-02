@@ -45,6 +45,17 @@ connectDatabase({ mongoose, jobModel: Job }).catch((err) => {
   console.error("MongoDB connection error:", err);
 });
 
+// Ensure DB indexes that are required for idempotency exist once on startup
+mongoose.connection.once('open', async () => {
+  try {
+    const IncentiveLedger = require('./models/IncentiveLedger');
+    await IncentiveLedger.collection.createIndex({ phone: 1, milestoneId: 1 }, { unique: true });
+    console.log('IncentiveLedger unique index ensured');
+  } catch (err) {
+    console.warn('Failed to create IncentiveLedger unique index on startup:', err && err.message);
+  }
+});
+
 // ---------------- EXPRESS & MIDDLEWARE ----------------
 const app = express();
 const server = http.createServer(app);
