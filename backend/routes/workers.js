@@ -84,6 +84,9 @@ function createWorkersRouter({
       const nearby = workers
         .map((worker) => {
           const userProfile = userMap[worker.phone] || {};
+          if (userProfile.role && String(userProfile.role).toLowerCase() !== "worker") {
+            return null;
+          }
           const avgRating = worker.performanceMetrics?.averageRating || worker.rating || 0;
           const totalReviews = worker.performanceMetrics?.totalReviews || 0;
           return {
@@ -102,6 +105,7 @@ function createWorkersRouter({
             createdAt: userProfile.createdAt,
           };
         })
+        .filter((worker) => worker !== null)
         .filter((worker) => {
           if (wageMin !== null || wageMax !== null) {
             const wageMatch = worker.expectedWage.match(/(\d+)/);
@@ -268,6 +272,55 @@ function createWorkersRouter({
     } catch (err) {
       console.error("workers/request-job error", err);
       return res.status(500).json({ success: false, message: "Failed to send job request" });
+    }
+  });
+
+  router.get("/workers/job-requests", authenticateToken, async (req, res) => {
+    try {
+      const contractorPhone = req.user?.phone;
+      if (!contractorPhone) {
+        return res.status(400).json({ success: false, message: "Contractor phone missing from token" });
+      }
+
+      const limit = parseInt(req.query.limit || "50", 10);
+      const skip = parseInt(req.query.skip || "0", 10);
+      const query = {
+        type: "job_request",
+        "metadata.contractorPhone": contractorPhone,
+      };
+
+      const [requests, total] = await Promise.all([
+        NotificationHistory.find(query)
+          .sort({ createdAt: -1 })
+          .limit(limit)
+          .skip(skip)
+          .lean(),
+        NotificationHistory.countDocuments(query),
+      ]);
+
+      const formatted = requests.map((request) => {
+        const metadata = request.metadata || {};
+        const responded = metadata.responded === true;
+        const accepted = metadata.accepted === true;
+
+        return {
+          _id: request._id,
+          requestId: metadata.requestId || String(request._id),
+          workerPhone: metadata.workerPhone || request.recipientPhone,
+          status: responded ? (accepted ? "accepted" : "declined") : "pending",
+          createdAt: request.createdAt,
+          updatedAt: request.updatedAt,
+          metadata,
+          type: request.type,
+          title: request.title,
+          body: request.body,
+        };
+      });
+
+      return res.json({ success: true, requests: formatted, total });
+    } catch (err) {
+      console.error("workers/job-requests error", err);
+      return res.status(500).json({ success: false, message: "Failed to fetch job requests" });
     }
   });
 

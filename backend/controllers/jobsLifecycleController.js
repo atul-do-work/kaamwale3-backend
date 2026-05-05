@@ -51,6 +51,21 @@ function createJobsLifecycleController(deps) {
       }
     },
 
+    depositCashById: async (req, res) => {
+      try {
+        const result = await jobsLifecycleService.depositCashById({
+          depositId: req.params.id,
+          workerPhone: req.user.phone,
+          idempotencyKey: req.headers["x-idempotency-key"] || req.body.idempotencyKey,
+          deps,
+        });
+        return res.status(result.code).json(result.body);
+      } catch (err) {
+        console.error(err);
+        return res.status(500).json({ success: false, message: "Internal server error" });
+      }
+    },
+
     getCashDeposits: async (req, res) => {
       try {
         const result = await jobsLifecycleService.getCashDeposits({

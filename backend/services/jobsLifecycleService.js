@@ -938,6 +938,203 @@ async function depositCash({ jobId, workerPhone, idempotencyKey, deps }) {
   }
 }
 
+async function depositCashById({ depositId, workerPhone, idempotencyKey, deps }) {
+  const { emitJobUpdatedToUsers, logJobEvent, io } = deps;
+
+  // Normalize phone number
+  const normalizedWorkerPhone = String(workerPhone || "").replace(/\D/g, "");
+
+  // Check for idempotency
+  const depositKey = `deposit:${depositId}:${normalizedWorkerPhone}:${idempotencyKey || ""}`;
+  if (depositIdempotencyResults.has(depositKey)) {
+    return depositIdempotencyResults.get(depositKey).result;
+  }
+
+  const lockKey = `deposit:${depositId}:${normalizedWorkerPhone}`;
+  if (depositInFlightLocks.has(lockKey)) {
+    return { code: 409, body: { success: false, message: "Deposit already processing. Please wait." } };
+  }
+  depositInFlightLocks.set(lockKey, true);
+
+  const finalize = (result) => {
+    depositInFlightLocks.delete(lockKey);
+    if (idempotencyKey) {
+      depositIdempotencyResults.set(depositKey, {
+        result,
+        expiresAt: Date.now() + IDEMPOTENCY_TTL_MS,
+      });
+    }
+    return result;
+  };
+
+  try {
+    // Find the cash deposit record by ID
+    const cashDeposit = await CashDeposit.findById(depositId);
+
+    if (!cashDeposit) {
+      return finalize({ code: 404, body: { success: false, message: "Cash deposit not found" } });
+    }
+
+    // Verify the deposit belongs to the requesting worker
+    if (cashDeposit.workerPhone !== normalizedWorkerPhone) {
+      return finalize({ code: 403, body: { success: false, message: "You are not authorized to deposit this cash" } });
+    }
+
+    if (cashDeposit.status !== 'pending') {
+      return finalize({ code: 400, body: { success: false, message: `Cash deposit is already ${cashDeposit.status}` } });
+    }
+
+    // Check if deposit deadline has passed
+    if (new Date() > cashDeposit.depositDeadline) {
+      cashDeposit.status = 'expired';
+      await cashDeposit.save();
+      return finalize({ code: 400, body: { success: false, message: "Cash deposit deadline has expired" } });
+    }
+
+    // Find the job to verify it's still valid
+    const job = await Job.findById(cashDeposit.jobId);
+    if (!job) {
+      return finalize({ code: 404, body: { success: false, message: "Associated job not found" } });
+    }
+
+    if (job.status !== 'completed' || job.paymentStatus !== 'paid' || job.paymentMode !== 'cash') {
+      return finalize({ code: 400, body: { success: false, message: "Job is not in a valid state for cash deposit" } });
+    }
+
+    // Update cash deposit status
+    cashDeposit.status = 'completed';
+    cashDeposit.depositedAt = new Date();
+    await cashDeposit.save();
+
+    // Credit the worker's wallet
+    const updatedWorkerWallet = await Wallet.findOneAndUpdate(
+      { phone: normalizedWorkerPhone },
+      {
+        $inc: {
+          balance: cashDeposit.amount,
+          availableBalance: cashDeposit.amount,
+          totalEarned: cashDeposit.amount
+        },
+        $push: {
+          transactions: {
+            type: "cash_deposit",
+            amount: cashDeposit.amount,
+            date: new Date(),
+            jobId: job._id,
+            source: "app",
+            provider: "cash_deposit",
+            status: "completed",
+            description: `Cash deposit credited to available balance (${job.title})`,
+            metadata: { balanceType: "available", workerPhone: normalizedWorkerPhone },
+          }
+        }
+      },
+      { new: true, upsert: true }
+    );
+
+    if (!updatedWorkerWallet) {
+      throw new Error("Failed to update worker wallet after cash deposit");
+    }
+
+    // Update gig data and earnings
+    try {
+      await upsertWorkerEarningForJobPayment({
+        job,
+        workerPhone: normalizedWorkerPhone,
+        amount: cashDeposit.amount,
+        mode: 'cash',
+      });
+    } catch (earnErr) {
+      console.error("Error upserting WorkerEarnings after cash deposit:", earnErr);
+    }
+
+    try {
+      await updateGigDataOnCompletion(normalizedWorkerPhone, {
+        jobId: job._id.toString(),
+        title: job.title,
+        amount: cashDeposit.amount,
+        workerType: job.workerType,
+        timeSpentMinutes: job.timeSpentMinutes || 0,
+      });
+    } catch (e) {
+      console.error("Error updating gigs data on cash deposit:", e);
+    }
+
+    // Log the deposit event
+    await logJobEvent({
+      jobId: job._id,
+      eventType: "cash_deposit_completed",
+      actorType: "worker",
+      actorPhone: normalizedWorkerPhone,
+      source: "app",
+      oldState: { cashDepositStatus: 'pending' },
+      newState: { cashDepositStatus: 'completed' },
+      metadata: { amount: cashDeposit.amount, depositedAt: cashDeposit.depositedAt },
+    });
+
+    // Send confirmation notification
+    try {
+      await NotificationHistory.create({
+        recipientPhone: normalizedWorkerPhone,
+        senderPhone: job.contractorPhone,
+        senderName: job.contractorName || "Contractor",
+        type: "cash_deposit_completed",
+        title: `Cash Deposit Confirmed: ₹${cashDeposit.amount}`,
+        body: `Your cash deposit for "${job.title}" has been confirmed. The amount is now available in your wallet.`,
+        jobId: job._id,
+        metadata: {
+          jobTitle: job.title,
+          amount: cashDeposit.amount,
+          actionRequired: false,
+        },
+        deepLink: "worker/wallet",
+        pushNotificationSent: false,
+      });
+    } catch (e) {
+      console.error("Error creating cash deposit notification:", e);
+    }
+
+    // Emit real-time updates
+    await emitJobUpdatedToUsers(job, [job.contractorPhone, normalizedWorkerPhone]);
+
+    if (io && normalizedWorkerPhone) {
+      try {
+        io.to(normalizedWorkerPhone).emit("walletUpdated", {
+          phone: normalizedWorkerPhone,
+          type: "cash_deposit",
+          amount: cashDeposit.amount,
+          balance: Number(updatedWorkerWallet.balance || 0),
+          availableBalance: Number(updatedWorkerWallet.availableBalance ?? updatedWorkerWallet.balance ?? 0),
+          pocketBalance: Number(updatedWorkerWallet.pocketBalance || 0),
+          message: `Cash deposit credited: ₹${cashDeposit.amount}`,
+        });
+      } catch (emitErr) {
+        console.error("Error emitting wallet update after cash deposit:", emitErr);
+      }
+    }
+
+    return finalize({
+      code: 200,
+      body: {
+        success: true,
+        message: "Cash deposit successful",
+        job,
+        cashDeposit,
+        wallet: {
+          balance: updatedWorkerWallet.balance,
+          availableBalance: updatedWorkerWallet.availableBalance,
+          pocketBalance: updatedWorkerWallet.pocketBalance
+        }
+      }
+    });
+
+  } catch (err) {
+    console.error("Error processing cash deposit by ID:", err);
+    depositInFlightLocks.delete(lockKey);
+    throw err;
+  }
+}
+
 async function rateJob({ jobId, stars, feedback, workerPhone, userPhone, userName, deps }) {
   if (!stars || stars < 1 || stars > 5) {
     return { code: 400, body: { message: "Rating must be between 1 and 5 stars" } };
@@ -1628,6 +1825,7 @@ module.exports = {
   markAttendance,
   payJob,
   depositCash,
+  depositCashById,
   getCashDeposits,
   rateJob,
   rateContractor,

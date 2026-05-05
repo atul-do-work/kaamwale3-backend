@@ -345,19 +345,27 @@ router.get("/transactions", authenticateToken, async (req, res) => {
       return res.json({ success: true, transactions: [] });
     }
     
-    const formattedTransactions = wallet.transactions.map((t) => ({
-      id: t._id,
-      type:
-        t.type === "deposit" || t.type === "pocket_deposit" || t.type === "credit"
-          ? "credit"
-          : t.type === "refund"
-            ? "refund"
-            : "debit",
-      description: t.description || `${t.type.charAt(0).toUpperCase() + t.type.slice(1)}`,
-      amount: t.amount,
-      date: new Date(t.date).toLocaleDateString("en-IN"),
-      status: "completed",
-    }));
+    const formattedTransactions = wallet.transactions.map((t) => {
+      const txDate = t.date ? new Date(t.date) : null;
+      const formattedDate =
+        txDate && !Number.isNaN(txDate.getTime())
+          ? txDate.toISOString()
+          : String(t.date || "");
+
+      return {
+        id: t._id,
+        type:
+          t.type === "deposit" || t.type === "pocket_deposit" || t.type === "credit"
+            ? "credit"
+            : t.type === "refund"
+              ? "refund"
+              : "debit",
+        description: t.description || `${t.type.charAt(0).toUpperCase() + t.type.slice(1)}`,
+        amount: t.amount,
+        date: formattedDate,
+        status: "completed",
+      };
+    });
     
     res.json({ success: true, transactions: formattedTransactions });
   } catch (err) {
