@@ -7,6 +7,7 @@ import * as Location from 'expo-location';
 import * as ImagePicker from 'expo-image-picker';
 import { MapView, Camera } from '@maplibre/maplibre-react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { getAuthAccessToken } from "../../../utils/secureStore";
 import { socket } from "../../../utils/socket";
 import { SERVER_URL } from "../../../utils/config";
 import { useFocusEffect } from '@react-navigation/native';
@@ -128,7 +129,7 @@ export default function PostJobScreen() {
       (async () => {
         try {
           const userStr = await AsyncStorage.getItem("user");
-          const storedToken = accessToken || await AsyncStorage.getItem("accessToken") || await AsyncStorage.getItem("token");
+          const storedToken = accessToken || await getAuthAccessToken();
           
           // ✅ Safer: Parse user with try/catch to handle corrupted storage
           let user = null;

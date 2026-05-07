@@ -1,5 +1,5 @@
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import { SERVER_URL } from '../utils/config';
+import { getAuthAccessToken, setAuthAccessToken, getRefreshToken, clearAuthTokens } from '../utils/secureStore';
 
 interface TokenResult {
   success: boolean;
@@ -47,7 +47,7 @@ class TokenManager {
 
   private async performRefresh(): Promise<TokenResult> {
     try {
-      const refreshToken = await AsyncStorage.getItem('refreshToken');
+      const refreshToken = await getRefreshToken();
       if (!refreshToken) {
         throw new Error('No refresh token available');
       }
@@ -70,9 +70,9 @@ class TokenManager {
 
       if (data.success && data.accessToken) {
         // ✅ Store new tokens
-        await AsyncStorage.setItem('accessToken', data.accessToken);
+        await setAuthAccessToken(data.accessToken);
         if (data.refreshToken) {
-          await AsyncStorage.setItem('refreshToken', data.refreshToken);
+          await setRefreshToken(data.refreshToken);
         }
 
         // ✅ Reset circuit breaker on success
@@ -109,7 +109,7 @@ class TokenManager {
   }
 
   async getValidAccessToken(): Promise<string | null> {
-    const storedToken = await AsyncStorage.getItem('accessToken');
+    const storedToken = await getAuthAccessToken();
     if (!storedToken) {
       return null;
     }
@@ -120,8 +120,7 @@ class TokenManager {
   }
 
   async clearTokens(): Promise<void> {
-    await AsyncStorage.removeItem('accessToken');
-    await AsyncStorage.removeItem('refreshToken');
+    await clearAuthTokens();
     this.circuitBreakerOpen = false;
     this.failureCount = 0;
   }

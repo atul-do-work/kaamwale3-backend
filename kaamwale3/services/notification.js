@@ -1,6 +1,7 @@
 import * as Notifications from 'expo-notifications';
 import { Platform, Alert } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { getAuthAccessToken } from '../utils/secureStore';
 
 let pushTokenSubscription = null;
 const FCM_TOKEN_RETRY_COUNT = 3;
@@ -162,7 +163,7 @@ export async function registerForPushNotificationsAsync() {
 async function updateBackendTokenOnChange(newToken) {
   try {
     // Only update if user is logged in
-    const accessToken = await AsyncStorage.getItem('accessToken');
+    const accessToken = await getAuthAccessToken();
     if (!accessToken) {
       console.log('ℹ️ User not logged in - token change not synced to backend');
       return;

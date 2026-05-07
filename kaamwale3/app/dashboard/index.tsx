@@ -987,20 +987,6 @@ export default function DashboardScreen() {
       </View>
       )}
 
-      {/* Performance Tips */}
-      <View style={styles.tipsContainer}>
-        <Text style={styles.tipsTitle}>💡 Performance Tips</Text>
-        <Text style={styles.tipText}>
-          • Pay workers on time to improve satisfaction and get better ratings
-        </Text>
-        <Text style={styles.tipText}>
-          • Clearly describe jobs to attract more qualified workers
-        </Text>
-        <Text style={styles.tipText}>
-          • Complete at least 1 job weekly to maintain active status
-        </Text>
-      </View>
-
       <View style={{ height: 40 }} />
 
       {/* Worker Details Modal */}
@@ -1165,11 +1151,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     backgroundColor: '#2d3436',
     paddingHorizontal: 16,
-    paddingVertical: 20,
-    paddingTop: 40,
+    paddingVertical: 12,
+    minHeight: 56,
   },
   headerTitle: {
-    fontSize: 22,
+    fontSize: 18,
     fontWeight: '700',
     color: '#fff',
   },

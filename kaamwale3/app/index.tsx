@@ -234,24 +234,13 @@ export default function LoginScreen() {
       // ------------------------
       //  SAVE TOKENS + USER (only when present)
       // ------------------------
-      // backend returns accessToken and refreshToken; keep legacy 'token' key for compatibility
       const accessToken = data.accessToken || data.token || null;
       const refreshToken = data.refreshToken || null;
-
-      if (accessToken) {
-        await AsyncStorage.setItem("accessToken", accessToken);
-        // keep the legacy 'token' key for older code paths
-        await AsyncStorage.setItem("token", accessToken);
-      }
-
-      if (refreshToken) {
-        await AsyncStorage.setItem("refreshToken", refreshToken);
-      }
 
       await AsyncStorage.setItem("user", JSON.stringify(data.user)); // save user object
       await AsyncStorage.setItem("locationProvidedOnLogin", locationProvidedOnLogin ? "true" : "false");
       
-      // ✅ FIX: Update AuthContext state immediately
+      // ✅ Store tokens securely and update AuthContext state
       await saveTokens(accessToken, refreshToken, data.user);
       
       console.log(`✅ Login successful for ${data.user.role}: ${data.user.phone}`);

@@ -11,7 +11,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useAuth } from '../context/AuthContext';
-import { SERVER_URL } from '../utils/config';
+import api from '../utils/api';
 
 interface JobRequest {
   requestId: string;
@@ -38,7 +38,7 @@ export default function JobRequestNotificationModal({
   jobRequest,
   onResponse,
 }: JobRequestNotificationModalProps) {
-  const { accessToken } = useAuth();
+  const { } = useAuth();
   const [loading, setLoading] = useState(false);
 
   const handleResponse = async (accepted: boolean) => {
@@ -46,21 +46,12 @@ export default function JobRequestNotificationModal({
 
     setLoading(true);
     try {
-      const response = await fetch(`${SERVER_URL}/workers/respond-job-request`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${accessToken}`,
-        },
-        body: JSON.stringify({
-          requestId: jobRequest.requestId,
-          accepted,
-        }),
+      const response = await api.post('/workers/respond-job-request', {
+        requestId: jobRequest.requestId,
+        accepted,
       });
 
-      const data = await response.json();
-
-      if (data.success) {
+      if (response.data?.success) {
         onResponse(accepted, jobRequest.requestId);
         onClose();
         Alert.alert(
@@ -68,7 +59,7 @@ export default function JobRequestNotificationModal({
           accepted ? 'Job request accepted!' : 'Job request declined.'
         );
       } else {
-        Alert.alert('Error', data.message || 'Failed to respond to job request');
+        Alert.alert('Error', response.data?.message || 'Failed to respond to job request');
       }
     } catch (error) {
       console.error('Response error:', error);

@@ -195,16 +195,7 @@ export default function FullContainer({
         </LinearGradient>
       </View>
 
-      {/* Quick Tips Section */}
-      <View style={styles.tipsSection}>
-        <View style={styles.tipHeader}>
-          <MaterialIcons name="lightbulb" size={20} color="#f59e0b" />
-          <Text style={styles.tipTitle}>{t('quickTips')}</Text>
-        </View>
-        <Text style={styles.tipText}>{t('quickTipAcceptMoreJobs')}</Text>
-        <Text style={styles.tipText}>{t('quickTipCompleteOnTime')}</Text>
-        <Text style={styles.tipText}>{t('quickTipMaintainRatings')}</Text>
-      </View>
+      {/* Quick Tips removed */}
         </>
       )}
     </ScrollView>

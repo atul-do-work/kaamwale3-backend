@@ -85,19 +85,18 @@ export default function PaymentHistoryScreen(): React.ReactElement {
     refund: { icon: "undo", color: "#4ECDC4", label: "Refunded" },
   };
 
-  const formatTransactionDate = (raw: string): string => {
-    if (!raw) return "-";
+  const parseTransactionDate = (raw: string): Date | null => {
+    if (!raw) return null;
 
     const direct = new Date(raw);
     if (!Number.isNaN(direct.getTime())) {
-      return direct.toLocaleDateString("en-IN");
+      return direct;
     }
 
-    // Backend may send: DD/MM/YYYY HH:MM:SS AM/PM
     const match = raw.match(
       /^(\d{1,2})\/(\d{1,2})\/(\d{4})(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(AM|PM)?)?$/i
     );
-    if (!match) return raw;
+    if (!match) return null;
 
     const day = Number(match[1]);
     const month = Number(match[2]) - 1;
@@ -111,8 +110,33 @@ export default function PaymentHistoryScreen(): React.ReactElement {
     if (meridiem === "AM" && hour === 12) hour = 0;
 
     const parsed = new Date(year, month, day, hour, minute, second);
-    if (Number.isNaN(parsed.getTime())) return raw;
-    return parsed.toLocaleDateString("en-IN");
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+  };
+
+  const formatTransactionDateTime = (raw: string): string => {
+    const parsed = parseTransactionDate(raw);
+    if (!parsed) return raw || "-";
+
+    const date = parsed.toLocaleDateString("en-IN");
+    const hasTime = /\d{1,2}:\d{2}|T|AM|PM/i.test(String(raw));
+    if (!hasTime) return date;
+
+    const time = parsed.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" });
+    return `${date} • ${time}`;
+  };
+
+  const getTransactionDescription = (raw: string): string => {
+    const description = String(raw || "").trim();
+    if (!description) return "Transaction";
+
+    const normalized = description.toLowerCase();
+    if (/(deposit|cash deposit|wallet topup|wallet credit|pocket balance)/.test(normalized)) {
+      return "Pocket balance deposit";
+    }
+    if (/(withdrawal|debited|payment|paid)/.test(normalized)) {
+      return "Wallet transaction";
+    }
+    return description;
   };
 
   // ✅ Fix: Memoize filtered & reversed transactions (avoid mutating state)
@@ -171,10 +195,9 @@ export default function PaymentHistoryScreen(): React.ReactElement {
               </View>
 
               <View style={styles.transactionInfo}>
-                <Text style={styles.description}>{transaction.description}</Text>
-                {/* ✅ Fix: Format date properly */}
+                <Text style={styles.description}>{getTransactionDescription(transaction.description)}</Text>
                 <Text style={styles.date}>
-                  {formatTransactionDate(transaction.date)}
+                  {formatTransactionDateTime(transaction.date)}
                 </Text>
               </View>
 

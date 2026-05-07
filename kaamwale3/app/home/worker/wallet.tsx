@@ -40,6 +40,17 @@ type WeeklyType = {
   weekEnd: string | Date;
 };
 
+type CashDepositType = {
+  id: string;
+  jobId: string;
+  jobTitle: string;
+  amount: number;
+  status: 'pending' | 'completed' | 'expired' | 'cancelled';
+  depositDeadline: string;
+  createdAt: string;
+  contractorName: string;
+};
+
 import { useAuth } from '../../../context/AuthContext';
 import api from '../../../utils/api';
 
@@ -67,7 +78,6 @@ export default function Wallet(): React.ReactElement {
   const [currentDepositAmount, setCurrentDepositAmount] = useState(0);
   const [currentDepositOrderId, setCurrentDepositOrderId] = useState('');
   const [depositLoading, setDepositLoading] = useState(false);
-  const [displayedCardCount, setDisplayedCardCount] = useState(4);
 
   // ✅ Bank account states
   const [bankAccount, setBankAccount] = useState<any>(null);
@@ -83,6 +93,11 @@ export default function Wallet(): React.ReactElement {
   });
   const [withdrawStatus, setWithdrawStatus] = useState<any>(null);
   const [recentWithdrawal, setRecentWithdrawal] = useState<any>(null);
+  
+  // ✅ Cash Deposits State
+  const [cashDeposits, setCashDeposits] = useState<CashDepositType[]>([]);
+  const [isDepositingCash, setIsDepositingCash] = useState(false);
+  const [depositingJobId, setDepositingJobId] = useState<string | null>(null);
   
   // 🔐 CRITICAL FIX #2: Add idempotency locks to prevent double-tap exploits
   const [isWithdrawProcessing, setIsWithdrawProcessing] = useState(false);
@@ -265,6 +280,7 @@ export default function Wallet(): React.ReactElement {
       fetchWallet();
       fetchBankAccount();
       fetchWithdrawStatus();
+      fetchCashDeposits();
     }, [])
   );
 
@@ -275,11 +291,11 @@ export default function Wallet(): React.ReactElement {
       const res = await api.get('/wallet');
 
       if (res.data.success && res.data.wallet) {
-        console.log(`💰 Wallet fetched: available ₹${res.data.wallet.availableBalance ?? res.data.wallet.balance ?? 0}, pocket ₹${res.data.wallet.pocketBalance || 0}`);
+        console.log(`💰 Wallet fetched: available ₹${res.data.wallet.availableBalance ?? res.data.wallet.balance ?? 0}, pocket ₹${res.data.wallet.pocketBalance ?? 0}`);
         setWallet({
           balance: Number(res.data.wallet.availableBalance ?? res.data.wallet.balance ?? 0),
           availableBalance: Number(res.data.wallet.availableBalance ?? res.data.wallet.balance ?? 0),
-          pocketBalance: Number(res.data.wallet.pocketBalance || 0),
+          pocketBalance: Number(res.data.wallet.pocketBalance ?? 0),
           transactions: res.data.wallet.transactions || []
         });
         setWeekly(res.data.wallet.weekly || null);
@@ -302,6 +318,19 @@ export default function Wallet(): React.ReactElement {
       }
     } catch (err) {
       console.error('Failed to load withdraw status:', err);
+    }
+  };
+
+  // ✅ Fetch Cash Deposits
+  const fetchCashDeposits = async () => {
+    if (!accessToken) return;
+    try {
+      const res = await api.get('/jobs/cash-deposits');
+      if (res.data?.success) {
+        setCashDeposits(res.data.deposits || []);
+      }
+    } catch (err) {
+      console.error('Failed to load cash deposits:', err);
     }
   };
 
@@ -660,6 +689,26 @@ export default function Wallet(): React.ReactElement {
     }
   };
 
+  // ✅ Handle Cash Deposit
+  const handleCashDeposit = async (depositId: string) => {
+    setIsDepositingCash(true);
+    setDepositingJobId(depositId);
+    try {
+      const res = await api.post(`/jobs/cash-deposits/${depositId}/deposit`);
+      if (res.data.success) {
+        Alert.alert(t('success'), 'Cash deposited successfully');
+        await fetchCashDeposits();
+        await fetchWallet();
+      }
+    } catch (err: any) {
+      const errorMsg = err.response?.data?.message || 'Cash deposit failed';
+      Alert.alert(t('error'), errorMsg);
+    } finally {
+      setIsDepositingCash(false);
+      setDepositingJobId('');
+    }
+  };
+
   // Map transactions to cards
   const transactionTitleMap: Record<Transaction['type'], string> = {
     deposit: tx('depositLabel', 'Deposit'),
@@ -668,18 +717,6 @@ export default function Wallet(): React.ReactElement {
     payment: tx('paymentLabel', 'Payment'),
     incentive_reward: tx('incentiveReward', 'Incentive Reward'),
   };
-  const cards = wallet.transactions.map((t, idx) => ({
-    id: idx + 1,
-    title: transactionTitleMap[t.type] || t.type,
-    amount: t.amount,
-    date: new Date(t.date).toLocaleDateString(),
-    icon:
-      t.type === 'deposit' || t.type === 'pocket_deposit'
-        ? 'attach-money'
-        : t.type === 'payment' || t.type === 'incentive_reward'
-          ? 'paid'
-          : 'money-off'
-  }));
 
   const formatWeekRange = (w: WeeklyType | null) => {
     if (!w?.weekStart || !w?.weekEnd) return "";
@@ -693,10 +730,6 @@ export default function Wallet(): React.ReactElement {
   const weekRangeText = formatWeekRange(weekly);
   const weeklyEarningsAmount = Number(weekly?.earnings ?? 0);
   const currentAvailableAmount = Number(wallet.availableBalance ?? wallet.balance ?? 0);
-
-  useEffect(() => {
-    setDisplayedCardCount(4);
-  }, [wallet.transactions.length]);
 
   return (
     <ScrollView
@@ -717,33 +750,73 @@ export default function Wallet(): React.ReactElement {
         )}
       </LinearGradient>
 
-      {/* Pocket Balance */}
-      <View style={styles.balanceContainer}>
-        <Text style={styles.balanceTitle}>{t('pocketBalance')}</Text>
-        <Text style={styles.balanceAmount}>₹{wallet.pocketBalance}</Text>
+      {/* Balance summary */}
+      <View style={styles.balanceSummaryCard}>
+        <View style={styles.balanceRow}>
+          <View style={styles.balanceSegment}>
+            <Text style={styles.balanceSegmentTitle}>{t('pocketBalance')}</Text>
+            <Text style={styles.balanceSegmentAmount}>₹{wallet.pocketBalance}</Text>
+          </View>
+          <View style={styles.balanceSegmentSpacer} />
+          <View style={styles.balanceSegment}>
+            <Text style={styles.balanceSegmentTitle}>{tx('availableBalance', 'Available Balance')}</Text>
+            <Text style={styles.balanceSegmentAmount}>₹{currentAvailableAmount}</Text>
+          </View>
+        </View>
       </View>
 
-      {/* Available Balance */}
-      <View style={styles.balanceContainer}>
-        <Text style={styles.balanceTitle}>{tx('availableBalance', 'Available Balance')}</Text>
-        <Text style={styles.balanceAmount}>₹{currentAvailableAmount}</Text>
-      </View>
+      {/* Cash Deposits Section */}
+      {cashDeposits.length > 0 && (
+        <View style={styles.cashDepositsCard}>
+          <Text style={styles.cashDepositsTitle}>{'Pending Cash Deposits'}</Text>
+          {cashDeposits.map((deposit) => (
+            <View key={deposit.id} style={styles.cashDepositItem}>
+              <View style={styles.cashDepositInfo}>
+                <Text style={styles.cashDepositAmount}>₹{deposit.amount}</Text>
+                <Text style={styles.cashDepositJobId}>Job: {deposit.jobTitle}</Text>
+                <Text style={styles.cashDepositDeadline}>
+                  Deadline: {new Date(deposit.depositDeadline).toLocaleDateString()}
+                </Text>
+              </View>
+              <TouchableOpacity
+                style={[
+                  styles.cashDepositButton,
+                  {
+                    opacity: isDepositingCash && depositingJobId === deposit.id ? 0.6 : 1
+                  }
+                ]}
+                onPress={() => handleCashDeposit(deposit.id)}
+                disabled={isDepositingCash}
+              >
+                <Text style={styles.cashDepositButtonText}>
+                  {isDepositingCash && depositingJobId === deposit.id
+                    ? 'Depositing...'
+                    : 'Deposit Cash'
+                  }
+                </Text>
+              </TouchableOpacity>
+            </View>
+          ))}
+        </View>
+      )}
 
-      {/* Deposit & Withdraw Buttons */}
-      <View style={styles.buttonRow}>
+      {/* Deposit & Withdraw Actions */}
+      <View style={styles.actionIconRow}>
         <TouchableOpacity
-          style={[styles.actionButton, { backgroundColor: '#1a2f4d', opacity: depositLoading ? 0.6 : 1 }]}
+          style={[styles.actionIconButton, { backgroundColor: '#1a2f4d', opacity: depositLoading ? 0.6 : 1 }]}
           onPress={handleDepositClick}
           disabled={depositLoading}
         >
-          <Text style={styles.buttonText}>{tx('depositLabel', 'Deposit')}</Text>
+          <MaterialIcons name="arrow-downward" size={20} color="#fff" />
+          <Text style={styles.actionIconText}>{tx('depositLabel', 'Deposit')}</Text>
         </TouchableOpacity>
         <TouchableOpacity
-          style={[styles.actionButton, { backgroundColor: '#2ecc71', opacity: isWithdrawProcessing ? 0.6 : 1 }]}
+          style={[styles.actionIconButton, { backgroundColor: '#2ecc71', opacity: isWithdrawProcessing ? 0.6 : 1 }]}
           onPress={handleWithdrawClick}
           disabled={isWithdrawProcessing}
         >
-          <Text style={styles.buttonText}>{isWithdrawProcessing ? t('processing') : t('withdraw')}</Text>
+          <MaterialIcons name="arrow-upward" size={20} color="#fff" />
+          <Text style={styles.actionIconText}>{isWithdrawProcessing ? t('processing') : t('withdraw')}</Text>
         </TouchableOpacity>
       </View>
 
@@ -815,33 +888,46 @@ export default function Wallet(): React.ReactElement {
         </View>
       )}
 
-      {/* Cards Grid */}
-      <View style={styles.cardsRow}>
-        {cards.slice(0, displayedCardCount).map((card) => (
-          <View key={card.id} style={styles.cardContainer}>
-            <MaterialIcons name={card.icon as any} size={28} color="#1a2f4d" />
-            <Text style={styles.cardAmount}>₹{card.amount}</Text>
-            <Text style={styles.cardTitle}>{card.title}</Text>
-            <Text style={styles.cardDate}>{card.date}</Text>
+      {/* Transaction list */}
+      <View style={styles.transactionSection}>
+        <View style={styles.transactionHeaderRow}>
+          <Text style={styles.transactionHeader}>{tx('transactions', 'Transactions')}</Text>
+          <Text style={styles.transactionCount}>{wallet.transactions.length} {tx('transactions', 'Transactions')}</Text>
+        </View>
+
+        {wallet.transactions.length === 0 ? (
+          <View style={styles.transactionEmpty}>
+            <Text style={styles.transactionEmptyText}>{tx('noTransactions', 'No transactions yet')}</Text>
           </View>
-        ))}
+        ) : (
+          wallet.transactions.map((transaction, index) => {
+            const title = transactionTitleMap[transaction.type] || transaction.type;
+            const icon =
+              transaction.type === 'deposit' || transaction.type === 'pocket_deposit'
+                ? 'arrow-downward'
+                : transaction.type === 'withdraw'
+                  ? 'arrow-upward'
+                  : 'paid';
+            const amountColor = transaction.type === 'withdraw' ? '#dc2626' : '#16a34a';
+            const prefix = transaction.type === 'withdraw' ? '-₹' : '+₹';
+
+            return (
+              <View key={`${transaction.type}-${transaction.date}-${index}`} style={styles.transactionItem}>
+                <View style={styles.transactionLeft}>
+                  <View style={styles.transactionIconCircle}>
+                    <MaterialIcons name={icon as any} size={20} color={transaction.type === 'withdraw' ? '#dc2626' : '#1d4ed8'} />
+                  </View>
+                  <View style={styles.transactionDetails}>
+                    <Text style={styles.transactionTitle}>{title}</Text>
+                    <Text style={styles.transactionDate}>{new Date(transaction.date).toLocaleDateString()}</Text>
+                  </View>
+                </View>
+                <Text style={[styles.transactionAmount, { color: amountColor }]}>{prefix}{transaction.amount}</Text>
+              </View>
+            );
+          })
+        )}
       </View>
-      {displayedCardCount < cards.length && (
-        <TouchableOpacity
-          style={{
-            marginHorizontal: 20,
-            marginTop: 4,
-            marginBottom: 18,
-            paddingVertical: 12,
-            borderRadius: 10,
-            backgroundColor: '#1a2f4d',
-            alignItems: 'center',
-          }}
-          onPress={() => setDisplayedCardCount((prev) => prev + 4)}
-        >
-          <Text style={{ color: '#fff', fontWeight: '700' }}>{t('seeMore')}</Text>
-        </TouchableOpacity>
-      )}
 
       {/* ✅ Razorpay Deposit Modal with Security */}
       <Modal visible={depositModalVisible} transparent animationType="slide" onDismiss={() => {

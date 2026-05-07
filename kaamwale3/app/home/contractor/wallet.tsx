@@ -10,7 +10,8 @@ import {
   TextInput,
   Modal,
   Pressable,
-  Alert
+  Alert,
+  Image,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { WebView } from "react-native-webview";
@@ -43,6 +44,9 @@ interface Job {
   description: string;
   amount: number;
   acceptedBy: string;
+  workerName?: string;
+  profilePhoto?: string;
+  mainSkill?: string;
   acceptedWorkers?: Array<{
     phone?: string;
     name?: string;
@@ -349,6 +353,7 @@ export default function ContractorWalletAttendance() {
               _id: `${j._id}:${w.phone}`,
               rootJobId: j._id,
               acceptedBy: (w.name || w.phone || "").trim(),
+              workerName: String(w.name || "").trim() || undefined,
               workerPhone: w.phone || undefined,
               isBulkWorkerEntry: true,
               attendanceStatus: w.attendanceStatus ?? null,
@@ -357,11 +362,18 @@ export default function ContractorWalletAttendance() {
             }));
         }
 
+        const singleWorkerName = (
+          Array.isArray(j.acceptedWorkers) && j.acceptedWorkers[0]
+            ? String((j.acceptedWorkers[0] as any).name || (j.acceptedWorkers[0] as any).workerName || "").trim()
+            : ""
+        ) || String((j as any).acceptedWorker?.name || (j as any).workerName || j.acceptedBy || "").trim();
+
         return [
           {
             ...j,
             rootJobId: j._id,
-            acceptedBy: (j.acceptedBy || "").trim(),
+            acceptedBy: singleWorkerName || (j.acceptedBy || "").trim(),
+            workerName: singleWorkerName || undefined,
             workerPhone: j.acceptedBy || undefined,
             isBulkWorkerEntry: false,
             attendanceStatus: j.attendanceStatus || null,
@@ -431,13 +443,24 @@ export default function ContractorWalletAttendance() {
   );
 
   // Mark attendance
+  const [attendanceSubmitting, setAttendanceSubmitting] = useState<Record<string, boolean>>({});
+
   const markAttendance = async (jobId: string, status: "Present" | "Absent", workerPhone?: string) => {
+    if (!jobId) {
+      console.warn('Skipping attendance mark: missing jobId');
+      return;
+    }
+    if (attendanceSubmitting[jobId]) return;
+
     try {
+      setAttendanceSubmitting((prev) => ({ ...prev, [jobId]: true }));
       await api.post(`/jobs/attendance/${jobId}`, { status, workerPhone });
       // ✅ DON'T update state optimistically - let backend emit jobUpdated
       // Backend will broadcast updated job with attendanceStatus, triggering fetchJobs
     } catch (err) {
       console.error("Failed to mark attendance:", err);
+    } finally {
+      setAttendanceSubmitting((prev) => ({ ...prev, [jobId]: false }));
     }
   };
 
@@ -1076,41 +1099,74 @@ export default function ContractorWalletAttendance() {
 
   // ✅ Memoize renderJob to stabilize FlatList rendering
   const renderJob = React.useCallback(
-    ({ item }: { item: Job }) => (
-    <View style={styles.attendanceCard}>
-      <Text style={styles.jobTitle}>{item.title}</Text>
-      <Text style={styles.jobDescription}>{item.description}</Text>
+    ({ item }: { item: Job }) => {
+      const skillLabel = item.mainSkill || item.description;
+      const titleAndSkill = [item.title, skillLabel]
+        .filter(Boolean)
+        .join(' · ') || 'Job';
+
+      const showDescription = Boolean(
+        item.description &&
+        item.title &&
+        item.description !== skillLabel &&
+        item.description !== item.title
+      );
+
+      return (
+        <View style={styles.attendanceCard}>
+          <View style={styles.workerHeader}>
+            <View style={styles.workerProfileRow}>
+              {item.profilePhoto ? (
+                <Image source={{ uri: item.profilePhoto }} style={styles.workerAvatar} />
+              ) : (
+                <View style={styles.workerAvatarPlaceholder}>
+                  <MaterialIcons name="person" size={20} color="#fff" />
+                </View>
+              )}
+              <View style={styles.workerIdentityText}>
+                <Text style={styles.workerName}>{item.workerName || item.acceptedBy || 'Worker'}</Text>
+                <Text style={styles.jobTitleSmall}>{titleAndSkill}</Text>
+              </View>
+            </View>
+
+            {item.attendanceStatus ? (
+          <View style={[
+            styles.statusBadge,
+            item.attendanceStatus === 'Present' ? styles.statusBadgePresent : styles.statusBadgeAbsent,
+          ]}>
+            <Text style={styles.statusBadgeText}>{item.attendanceStatus.toUpperCase()}</Text>
+          </View>
+        ) : null}
+      </View>
+      {showDescription ? <Text style={styles.jobDescription}>{item.description}</Text> : null}
       <Text style={styles.jobAmount}>Amount: ₹{item.amount}</Text>
-      <Text style={styles.workerName}>Worker: {item.acceptedBy}</Text>
 
       {item.attendanceStatus === null ? (
         <View style={styles.attendanceButtons}>
           <TouchableOpacity
-            style={[styles.presentButton, { backgroundColor: "#2ecc71" }]}
+            style={[
+              styles.presentButton,
+              { backgroundColor: "#2ecc71", opacity: attendanceSubmitting[item._id] ? 0.6 : 1 },
+            ]}
             onPress={() => markAttendance(item.rootJobId || item._id, "Present", item.workerPhone)}
+            disabled={attendanceSubmitting[item._id]}
           >
-            <Text style={styles.buttonText}>Present</Text>
+            <Text style={styles.buttonText}>{attendanceSubmitting[item._id] ? 'Marking...' : 'Present'}</Text>
           </TouchableOpacity>
 
           <TouchableOpacity
-            style={[styles.absentButton, { backgroundColor: "#e74c3c" }]}
+            style={[
+              styles.absentButton,
+              { backgroundColor: "#e74c3c", opacity: attendanceSubmitting[item._id] ? 0.6 : 1 },
+            ]}
             onPress={() => markAttendance(item.rootJobId || item._id, "Absent", item.workerPhone)}
+            disabled={attendanceSubmitting[item._id]}
           >
-            <Text style={styles.buttonText}>Absent</Text>
+            <Text style={styles.buttonText}>{attendanceSubmitting[item._id] ? 'Please wait' : 'Absent'}</Text>
           </TouchableOpacity>
         </View>
       ) : (
         <>
-          <Text
-            style={{
-              marginTop: 8,
-              fontWeight: "700",
-              color: item.attendanceStatus === "Present" ? "#2ecc71" : "#e74c3c",
-            }}
-          >
-            {item.attendanceStatus}
-          </Text>
-
           {item.attendanceStatus === "Present" && item.paymentStatus !== "paid" && (
             <TouchableOpacity
               style={{
@@ -1171,8 +1227,9 @@ export default function ContractorWalletAttendance() {
         </>
       )}
     </View>
-    ),
-    [markAttendance, setPayOptionsTarget, handleOpenRatingModal]
+      );
+    },
+    [markAttendance, setPayOptionsTarget, handleOpenRatingModal, attendanceSubmitting]
   );
 
   // ✅ Reset pagination when jobs data changes

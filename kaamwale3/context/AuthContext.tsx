@@ -1,7 +1,8 @@
-import React, { createContext, useContext, useEffect, useState, ReactNode } from 'react';
+import React, { createContext, useContext, useEffect, useState, useRef, ReactNode } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { secureSet, secureGet, secureDelete } from '../utils/secureStore';
-import { socket } from '../utils/socket';
+import { getAuthAccessToken, setAuthAccessToken, getRefreshToken, setRefreshToken, clearAuthTokens } from '../utils/secureStore';
+import api from '../utils/api';
+import { socket, disconnectSocket } from '../utils/socket';
 import { premiumCacheManager } from '../utils/premiumCacheManager';
 import { isPremiumPlanActive, mergePremiumPlan } from '../utils/premiumPlanState';
 
@@ -46,6 +47,17 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     });
   }, []);
 
+  const persistTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const queuePersistUser = React.useCallback((nextUser: any | null) => {
+    if (persistTimeoutRef.current) {
+      clearTimeout(persistTimeoutRef.current);
+    }
+    persistTimeoutRef.current = setTimeout(() => {
+      persistUser(nextUser).catch((err) => console.warn('Failed to persist user state', err));
+      persistTimeoutRef.current = null;
+    }, 150);
+  }, [persistUser]);
+
   useEffect(() => {
     const handlePremiumSubscriptionUpdate = async (data: any) => {
       console.log('Received premium subscription update:', data);
@@ -70,9 +82,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         });
         const updatedUser = { ...currentUser, premiumPlan: updatedPlan };
 
-        AsyncStorage.setItem('user', JSON.stringify(updatedUser)).catch((err) =>
-          console.warn('Failed to persist socket premium update', err)
-        );
+        queuePersistUser(updatedUser);
         syncPremiumCache(updatedPlan);
         return updatedUser;
       });
@@ -88,22 +98,9 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   useEffect(() => {
     (async () => {
       try {
-        const a = await AsyncStorage.getItem('accessToken');
+        const a = await getAuthAccessToken();
         const u = await AsyncStorage.getItem('user');
-        const refresh = await secureGet('refreshToken');
-
-        if (!refresh) {
-          const oldRefresh = await AsyncStorage.getItem('refreshToken');
-          if (oldRefresh) {
-            try {
-              await secureSet('refreshToken', oldRefresh);
-              await AsyncStorage.removeItem('refreshToken');
-              console.log('Migrated refreshToken to SecureStore');
-            } catch (mErr) {
-              console.warn('Failed migrating refresh token to SecureStore', mErr);
-            }
-          }
-        }
+        const refresh = await getRefreshToken();
 
         const parsedUser = u ? JSON.parse(u) : null;
 
@@ -116,7 +113,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
         if (a) {
           console.log('App started: Fetching fresh premium status...');
-          const freshStatus = await premiumCacheManager.forceFresh(a);
+          const freshStatus = await premiumCacheManager.forceFresh();
           const freshPremiumDetails = freshStatus?.premiumDetails;
           if (freshPremiumDetails && parsedUser) {
             const updatedUser = {
@@ -127,6 +124,10 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
             syncPremiumCache(updatedUser.premiumPlan);
             console.log('User updated with fresh premium status on startup');
           }
+        }
+
+        if (!refresh) {
+          console.log('No refresh token found on startup');
         }
       } catch (e) {
         console.warn('AuthProvider init error', e);
@@ -139,11 +140,10 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const saveTokens = async (aToken: string | null, refreshToken?: string | null, userObj?: any) => {
     try {
       setAccessToken(aToken);
-      if (aToken) await AsyncStorage.setItem('accessToken', aToken);
-      else await AsyncStorage.removeItem('accessToken');
-
-      if (refreshToken) await secureSet('refreshToken', refreshToken);
-      else if (refreshToken === null) await secureDelete('refreshToken');
+      await setAuthAccessToken(aToken);
+      if (refreshToken !== undefined) {
+        await setRefreshToken(refreshToken);
+      }
 
       if (userObj) {
         await persistUser(userObj);
@@ -184,12 +184,26 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
   const logout = async () => {
     try {
+      const refreshToken = await getRefreshToken();
+      if (refreshToken) {
+        await api.post('/auth/logout', { refreshToken });
+      }
+    } catch (error) {
+      console.warn('logout backend error', error);
+    }
+
+    try {
+      disconnectSocket();
+    } catch (error) {
+      console.warn('socket disconnect error', error);
+    }
+
+    try {
       setAccessToken(null);
       setUser(null);
       premiumCacheManager.clear();
-      await AsyncStorage.removeItem('accessToken');
+      await clearAuthTokens();
       await AsyncStorage.removeItem('user');
-      await secureDelete('refreshToken');
     } catch (e) {
       console.warn('logout error', e);
     }

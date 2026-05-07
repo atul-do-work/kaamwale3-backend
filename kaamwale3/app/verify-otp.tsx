@@ -62,9 +62,14 @@ export default function VerifyOtpScreen() {
       }
 
       // ✅ SECURITY: Now that OTP is verified, persist full user data
-      // Save tokens & user via AuthProvider
+      // Validate tokens before saving
       const accessToken = data.accessToken || data.token || null;
       const refreshToken = data.refreshToken || null;
+
+      // ⚠️ Validate tokens are non-empty strings
+      if (!accessToken || typeof accessToken !== 'string' || !accessToken.trim()) {
+        return Alert.alert('Error', 'Invalid token received from server. Please try again.');
+      }
 
       // ✅ Persist full user object (wallet, profile, etc.) only AFTER OTP
       if (data.user) {
@@ -72,7 +77,8 @@ export default function VerifyOtpScreen() {
         console.log('✅ Full user data persisted after OTP verification');
       }
 
-      await saveTokens(accessToken, refreshToken, data.user || null);
+      await saveTokens(accessToken.trim(), refreshToken?.trim() || null, data.user || null);
+      console.log('✅ Tokens saved successfully');
 
       // ✅ Clean up temporary registration data
       await AsyncStorage.removeItem('tempRegistration');

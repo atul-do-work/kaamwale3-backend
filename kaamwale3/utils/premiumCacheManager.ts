@@ -1,4 +1,5 @@
 import { API_BASE } from './config';
+import api from './api';
 
 const CACHE_TTL = 2 * 60 * 1000;
 
@@ -50,10 +51,8 @@ class PremiumCacheManager {
   }
 
   async fetchFresh(accessToken: string | null): Promise<any> {
-    if (!accessToken) {
-      console.warn('No access token for premium status check');
-      return null;
-    }
+    // Note: accessToken parameter kept for backward compatibility but not used
+    // The api client will handle token management automatically
 
     if (this.isFetching && this.fetchPromise) {
       console.log('Reusing in-flight premium status request');
@@ -63,20 +62,13 @@ class PremiumCacheManager {
     this.isFetching = true;
     this.fetchPromise = (async () => {
       try {
-        const response = await fetch(`${API_BASE}/premium/status`, {
-          headers: { Authorization: `Bearer ${accessToken}` },
-        });
+        // ✅ Use api client with automatic token refresh
+        const response = await api.get('/premium/status');
 
-        if (!response.ok) {
-          console.error('Premium status check failed:', response.status);
-          return null;
-        }
-
-        const data = await response.json();
-        if (data.success) {
-          this.setCache(data);
+        if (response.data?.success) {
+          this.setCache(response.data);
           console.log('Fresh premium status fetched');
-          return data;
+          return response.data;
         }
 
         return null;
@@ -92,14 +84,14 @@ class PremiumCacheManager {
     return this.fetchPromise;
   }
 
-  async getStatus(accessToken: string | null): Promise<any> {
+  async getStatus(): Promise<any> {
     const cached = this.getCached();
     if (cached) {
       return cached;
     }
 
     console.log('Premium cache invalid/expired, fetching fresh data...');
-    const fresh = await this.fetchFresh(accessToken);
+    const fresh = await this.fetchFresh(null); // accessToken no longer needed
     if (fresh) {
       return fresh;
     }
@@ -113,9 +105,9 @@ class PremiumCacheManager {
     return null;
   }
 
-  async forceFresh(accessToken: string | null): Promise<any> {
+  async forceFresh(): Promise<any> {
     this.invalidate();
-    return this.fetchFresh(accessToken);
+    return this.fetchFresh(null); // accessToken no longer needed
   }
 }
 

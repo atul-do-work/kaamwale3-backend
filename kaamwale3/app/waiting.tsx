@@ -562,94 +562,99 @@ export default function WaitingScreen() {
 
   return (
     <SafeAreaView style={styles.container} edges={['top', 'left', 'right', 'bottom']}>
-      {/* Top Header Area */}
-      <View style={styles.headerContainer}>
-        {/* ✅ Back button disabled - contractor must wait for acceptances or cancel job */}
-        <View style={styles.backButton} />
+      {/* Only show waiting screen content when modal is not visible */}
+      {!modalVisible && (
+        <>
+          {/* Top Header Area */}
+          <View style={styles.headerContainer}>
+            {/* ✅ Back button disabled - contractor must wait for acceptances or cancel job */}
+            <View style={styles.backButton} />
 
-        <Text style={styles.title}>{t('waitingForWorkers')}...</Text>
-        <Text style={styles.timerText}>Expected Response: {formatTime(timeLeft)}</Text>
-      </View>
+            <Text style={styles.title}>{t('waitingForWorkers')}...</Text>
+            <Text style={styles.timerText}>Expected Response: {formatTime(timeLeft)}</Text>
+          </View>
 
-      {/* Center Loader */}
-      <View style={styles.centerArea}>
-        {/* ✅ NEW: Network error indicator */}
-        {networkError && (
-          <View style={styles.networkErrorContainer}>
-            <Ionicons name="cloud-offline" size={24} color="#ef4444" />
-            <Text style={styles.networkErrorText}>
-              {timeLeft > 0 ? "Connection issues - using backup mode" : "Job search expired"}
-            </Text>
-            {pollingFallback && (
-              <Text style={styles.pollingText}>Checking for updates...</Text>
+          {/* Center Loader */}
+          <View style={styles.centerArea}>
+            {/* ✅ NEW: Network error indicator */}
+            {networkError && (
+              <View style={styles.networkErrorContainer}>
+                <Ionicons name="cloud-offline" size={24} color="#ef4444" />
+                <Text style={styles.networkErrorText}>
+                  {timeLeft > 0 ? "Connection issues - using backup mode" : "Job search expired"}
+                </Text>
+                {pollingFallback && (
+                  <Text style={styles.pollingText}>Checking for updates...</Text>
+                )}
+              </View>
+            )}
+
+            {/* ✅ NEW: Socket status indicator */}
+            {!socketConnected && !networkError && (
+              <View style={styles.socketStatusContainer}>
+                <Ionicons name="radio" size={20} color="#f59e0b" />
+                <Text style={styles.socketStatusText}>Reconnecting...</Text>
+              </View>
+            )}
+
+            <ActivityIndicator size="large" color="#667eea" />
+            {isBulkHiring ? (
+              <>
+                <Text style={styles.loadingText}>{t('waitingForWorkers')}...</Text>
+                <View style={styles.bulkHiringCounter}>
+                  <Text style={styles.counterText}>
+                    {acceptedWorkers.length} / {requiredWorkers} Workers Accepted
+                  </Text>
+                  <View style={styles.progressBar}>
+                    <View 
+                      style={[
+                        styles.progressFill,
+                        { width: `${(acceptedWorkers.length / requiredWorkers) * 100}%` }
+                      ]}
+                    />
+                  </View>
+                </View>
+              </>
+            ) : (
+              <Text style={styles.loadingText}>
+                {networkError ? "Searching with limited connection..." : t('weAreNotifyingWorkersNearYou')}
+              </Text>
             )}
           </View>
-        )}
 
-        {/* ✅ NEW: Socket status indicator */}
-        {!socketConnected && !networkError && (
-          <View style={styles.socketStatusContainer}>
-            <Ionicons name="radio" size={20} color="#f59e0b" />
-            <Text style={styles.socketStatusText}>Reconnecting...</Text>
+          {/* Bottom Buttons */}
+          <View style={styles.bottomActions}>
+            <TouchableOpacity style={styles.actionBtn} onPress={handleNeedHelp}>
+              <Ionicons name="help-circle" size={20} color="#667eea" style={{ marginRight: 8 }} />
+                <Text style={styles.actionText}>{t('needHelp')}?</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity style={styles.actionBtn} onPress={handleGetCallback}>
+              <Ionicons name="call" size={20} color="#10b981" style={{ marginRight: 8 }} />
+              <Text style={styles.actionText}>Get a Callback</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity style={styles.actionBtn} onPress={handleNeedHelp}>
+              <Ionicons name="chatbubbles" size={20} color="#f59e0b" style={{ marginRight: 8 }} />
+              <Text style={styles.actionText}>Chat With Us</Text>
+            </TouchableOpacity>
+
+            {/* Cancel Job Button */}
+            <TouchableOpacity 
+              style={[styles.cancelBtn, cancellationLoading && { opacity: 0.6 }]} 
+              onPress={handleCancelJob}
+              disabled={cancellationLoading}
+            >
+              {cancellationLoading ? (
+                <ActivityIndicator color="#fff" size="small" />
+              ) : (
+                <Text style={styles.cancelText}>{t('cancelJob')}</Text>
+              )}
+            </TouchableOpacity>
           </View>
-        )}
+        </>
+      )}
 
-        <ActivityIndicator size="large" color="#667eea" />
-        {isBulkHiring ? (
-          <>
-            <Text style={styles.loadingText}>{t('waitingForWorkers')}...</Text>
-            <View style={styles.bulkHiringCounter}>
-              <Text style={styles.counterText}>
-                {acceptedWorkers.length} / {requiredWorkers} Workers Accepted
-              </Text>
-              <View style={styles.progressBar}>
-                <View 
-                  style={[
-                    styles.progressFill,
-                    { width: `${(acceptedWorkers.length / requiredWorkers) * 100}%` }
-                  ]}
-                />
-              </View>
-            </View>
-          </>
-        ) : (
-          <Text style={styles.loadingText}>
-            {networkError ? "Searching with limited connection..." : t('weAreNotifyingWorkersNearYou')}
-          </Text>
-        )}
-      </View>
-
-      {/* Bottom Buttons */}
-      <View style={styles.bottomActions}>
-        <TouchableOpacity style={styles.actionBtn} onPress={handleNeedHelp}>
-          <Ionicons name="help-circle" size={20} color="#667eea" style={{ marginRight: 8 }} />
-            <Text style={styles.actionText}>{t('needHelp')}?</Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity style={styles.actionBtn} onPress={handleGetCallback}>
-          <Ionicons name="call" size={20} color="#10b981" style={{ marginRight: 8 }} />
-          <Text style={styles.actionText}>Get a Callback</Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity style={styles.actionBtn} onPress={handleNeedHelp}>
-          <Ionicons name="chatbubbles" size={20} color="#f59e0b" style={{ marginRight: 8 }} />
-          <Text style={styles.actionText}>Chat With Us</Text>
-        </TouchableOpacity>
-
-        {/* Cancel Job Button */}
-        <TouchableOpacity 
-          style={[styles.cancelBtn, cancellationLoading && { opacity: 0.6 }]} 
-          onPress={handleCancelJob}
-          disabled={cancellationLoading}
-        >
-          {cancellationLoading ? (
-            <ActivityIndicator color="#fff" size="small" />
-          ) : (
-            <Text style={styles.cancelText}>{t('cancelJob')}</Text>
-          )}
-        </TouchableOpacity>
-      </View>
-    
       {/* ✅ Chat/Support Modal */}
       <Modal visible={chatModalVisible} transparent animationType="slide">
         <View style={styles.chatContainer}>
@@ -699,7 +704,7 @@ export default function WaitingScreen() {
       </Modal>
 
       {/* Accepted Worker Modal */}
-      <Modal visible={modalVisible} transparent animationType="fade">
+      <Modal visible={modalVisible} animationType="fade">
         <View style={styles.modalOverlay}>
           <View style={styles.modalCard}>
             {/* Header: Success Icon */}
@@ -836,7 +841,7 @@ const styles = StyleSheet.create({
     flex: 1,
     justifyContent: "center",
     alignItems: "center",
-    backgroundColor: "rgba(0, 0, 0, 0.7)",
+    backgroundColor: "#000",
   },
   modalCard: {
     width: "85%",

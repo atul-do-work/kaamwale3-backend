@@ -1,6 +1,6 @@
 import axios from 'axios';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { secureGet } from './secureStore';
+import { getAuthAccessToken, setAuthAccessToken, getRefreshToken, clearAuthTokens } from './secureStore';
 import { API_BASE } from './config';
 
 const api = axios.create({ baseURL: API_BASE });
@@ -14,7 +14,7 @@ const processQueue = (error: any, token: string | null = null) => {
 };
 
 api.interceptors.request.use(async (config) => {
-  const token = await AsyncStorage.getItem('accessToken');
+  const token = await getAuthAccessToken();
   if (token && config.headers) config.headers.Authorization = `Bearer ${token}`;
   return config;
 });
@@ -38,19 +38,18 @@ api.interceptors.response.use(
       isRefreshing = true;
 
       try {
-        const refreshToken = await secureGet('refreshToken');
+        const refreshToken = await getRefreshToken();
         if (!refreshToken) throw new Error('No refresh token');
         const response = await axios.post(`${API_BASE}/auth/refresh`, { refreshToken });
         const newToken = response.data.accessToken;
-        await AsyncStorage.setItem('accessToken', newToken);
+        await setAuthAccessToken(newToken);
         processQueue(null, newToken);
         originalReq.headers.Authorization = 'Bearer ' + newToken;
         return axios(originalReq);
       } catch (e) {
         processQueue(e, null);
         // Clear tokens
-        await AsyncStorage.removeItem('accessToken');
-        try { await secureGet('refreshToken'); } catch (ignore) {}
+        await clearAuthTokens();
         throw e;
       } finally {
         isRefreshing = false;

@@ -12,14 +12,14 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { MaterialIcons } from '@expo/vector-icons';
-import * as Clipboard from 'expo-clipboard';
+import { MaterialIcons } from '@expo/vector-icons';import { getAuthAccessToken } from '../utils/secureStore';import * as Clipboard from 'expo-clipboard';
 
 interface ReferralModalProps {
   visible: boolean;
   onClose: () => void;
   workerName: string;
   workerPhone: string;
+  variant?: 'default' | 'minimal';
 }
 
 export default function ReferralModal({
@@ -27,38 +27,73 @@ export default function ReferralModal({
   onClose,
   workerName,
   workerPhone,
+  variant = 'default',
 }: ReferralModalProps) {
   const [referralCode, setReferralCode] = useState<string>('');
   const [copied, setCopied] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  // ✅ FIXED: Fetch referral code from backend (production-safe)
+  // Fetch referral code from backend (production-safe)
   useEffect(() => {
+    let isMounted = true;
     if (visible && workerPhone) {
-      fetchReferralCode();
+      fetchReferralCode(isMounted);
     }
+
+    return () => {
+      isMounted = false;
+    };
   }, [visible, workerPhone]);
 
-  const fetchReferralCode = async () => {
+  const fetchReferralCode = async (isMountedFlag = true) => {
     try {
       setLoading(true);
-      // TODO: Replace with actual backend endpoint
-      const API_BASE = process.env.EXPO_PUBLIC_API_URL;
-      const response = await fetch(`${API_BASE}/referral/code/${workerPhone}`);
-      
-      if (response.ok) {
-        const data = await response.json();
-        setReferralCode(data.code || generateFallbackCode());
-      } else {
-        // Fallback for development
-        setReferralCode(generateFallbackCode());
+      setError(null);
+
+      const API_BASE = process.env.EXPO_PUBLIC_API_URL ?? '';
+      if (!API_BASE) {
+        console.warn('[referral] EXPO_PUBLIC_API_URL not set; using fallback code');
+        if (isMountedFlag) setReferralCode(generateFallbackCode());
+        return;
       }
-    } catch (err) {
-      console.error('Failed to fetch referral code:', err);
-      // Use fallback code if fetch fails
-      setReferralCode(generateFallbackCode());
+
+      const url = `${API_BASE}/referral/code/${workerPhone}`;
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 8000);
+
+      // attach auth token if available
+      let headers: any = {};
+      try {
+        const token = await getAuthAccessToken();
+        if (token) headers.Authorization = `Bearer ${token}`;
+      } catch (e) {
+        // ignore
+      }
+
+      const response = await fetch(url, {
+        signal: controller.signal,
+        headers,
+      });
+      clearTimeout(timeout);
+
+      if (!response.ok) {
+        if (isMountedFlag) setReferralCode(generateFallbackCode());
+        return;
+      }
+
+      const data = await response.json();
+      if (data?.code && typeof data.code === 'string') {
+        if (isMountedFlag) setReferralCode(data.code);
+      } else {
+        if (isMountedFlag) setReferralCode(generateFallbackCode());
+      }
+    } catch (err: any) {
+      console.error('Failed to fetch referral code:', err?.message || err);
+      if (err?.name === 'AbortError') setError('Request timed out');
+      if (isMountedFlag) setReferralCode(generateFallbackCode());
     } finally {
-      setLoading(false);
+      if (isMountedFlag) setLoading(false);
     }
   };
 
@@ -68,8 +103,19 @@ export default function ReferralModal({
     return `${namePart}${phonePart}`;
   };
 
-  const referralLink = `https://kaamwale.app/ref/${referralCode}`;
-  const referralMessage = `🎉 Join IndianWorker and earn money!\n\nUse my referral code: ${referralCode}\nGet reward bonus when you register!\n\n${referralLink}`;
+  const APP_BASE_URL = process.env.EXPO_PUBLIC_APP_URL ?? 'https://kaamwale.app';
+  const referralLink = `${APP_BASE_URL.replace(/\/$/, '')}/ref/${referralCode}`;
+  const referralMessage = `🎉 Join Kaamwale and earn money!\n\nUse my referral code: ${referralCode}\nGet ₹50 bonus when you register and complete your first job.\n\n${referralLink}`;
+
+  const copyReferralLink = async () => {
+    try {
+      await Clipboard.setStringAsync(referralLink);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch (err) {
+      Alert.alert('Error', 'Failed to copy link');
+    }
+  };
 
   // ✅ FIXED: Use Linking API instead of WebBrowser for WhatsApp
   const shareOnWhatsApp = async () => {
@@ -81,15 +127,10 @@ export default function ReferralModal({
       if (supported) {
         await Linking.openURL(whatsappUrl);
       } else {
-        // Fallback: open WhatsApp web/share endpoint instead of hard-failing.
         await Linking.openURL(`https://wa.me/?text=${encodedMessage}`);
       }
     } catch (err) {
-      // Final fallback to native share sheet.
-      await Share.share({
-        message: referralMessage,
-        title: 'Kaamwale Referral',
-      });
+      await Share.share({ message: referralMessage, title: 'Kaamwale Referral' });
     }
   };
 
@@ -105,41 +146,36 @@ export default function ReferralModal({
     }
   };
 
-  // ✅ FIXED: Use expo-clipboard with async method
-  const copyToClipboard = async () => {
-    try {
-      await Clipboard.setStringAsync(referralCode);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    } catch (err) {
-      Alert.alert('Error', 'Failed to copy to clipboard');
-    }
-  };
+  const containerStyle = variant === 'minimal' ? minimalStyles.container : styles.container;
+  const titleStyle = variant === 'minimal' ? minimalStyles.title : styles.title;
+  const textStyle = variant === 'minimal' ? minimalStyles.text : undefined;
 
   return (
     <Modal visible={visible} transparent animationType="fade">
-      {/* Backdrop */}
-      <View style={styles.backdrop}>
+      <View style={variant === 'minimal' ? minimalStyles.backdrop : styles.backdrop}>
         <SafeAreaView style={styles.safeArea} edges={['bottom']}>
-          {/* Modal Container */}
-          <View style={styles.container}>
+          <View style={containerStyle}>
           {/* Header */}
           <View style={styles.header}>
-            <Text style={styles.title}>🎁 Refer & Earn</Text>
+            <Text style={titleStyle}>🎁 Refer & Earn</Text>
             <TouchableOpacity onPress={onClose}>
               <MaterialIcons name="close" size={24} color="#666" />
             </TouchableOpacity>
           </View>
+          <Text style={[styles.subtitle, textStyle]}>
+            Share your referral code with friends and both of you get ₹50 when they complete their first job.
+          </Text>
 
           {/* Content with ScrollView for small devices */}
           <ScrollView style={styles.scrollContent} showsVerticalScrollIndicator={false}>
-            {/* Loading State */}
-            {loading && (
-              <View style={styles.loadingContainer}>
-                <ActivityIndicator size="large" color="#667eea" />
-                <Text style={styles.loadingText}>Generating your code...</Text>
-              </View>
-            )}
+              {/* Loading State */}
+              {loading && (
+                <View style={styles.loadingContainer}>
+                  {/* simple skeleton */}
+                  <View style={styles.skeletonLine} />
+                  <View style={[styles.skeletonLine, { width: '60%', marginTop: 12 }]} />
+                </View>
+              )}
 
             {!loading && (
               <>
@@ -147,19 +183,23 @@ export default function ReferralModal({
                 <View style={styles.codeBox}>
                   <Text style={styles.label}>Your Referral Code</Text>
                   {referralCode ? (
-                    <View style={styles.codeDisplay}>
-                      <Text style={styles.code}>{referralCode}</Text>
-                      <TouchableOpacity
-                        style={styles.copyButton}
-                        onPress={copyToClipboard}
-                      >
-                        <MaterialIcons
-                          name={copied ? 'check' : 'content-copy'}
-                          size={20}
-                          color="#fff"
-                        />
-                      </TouchableOpacity>
-                    </View>
+                    <>
+                      <View style={styles.codeDisplay}>
+                        <Text style={styles.code}>{referralCode}</Text>
+                        <TouchableOpacity
+                          style={styles.copyButton}
+                          onPress={copyReferralLink}
+                        >
+                          <MaterialIcons
+                            name={copied ? 'check' : 'content-copy'}
+                            size={20}
+                            color="#fff"
+                          />
+                        </TouchableOpacity>
+                      </View>
+                      <Text style={[styles.linkLabel, textStyle]}>Referral link</Text>
+                      <Text style={[styles.linkText, textStyle]} numberOfLines={2}>{referralLink}</Text>
+                    </>
                   ) : (
                     <Text style={styles.errorText}>Unable to generate code</Text>
                   )}
@@ -207,7 +247,7 @@ export default function ReferralModal({
           </ScrollView>
 
           {/* Action Buttons */}
-          <View style={styles.actions}>
+            <View style={variant === 'minimal' ? minimalStyles.actions : styles.actions}>
             {/* WhatsApp Button */}
             <TouchableOpacity
               style={[styles.button, styles.whatsappButton, !referralCode && styles.disabledButton]}
@@ -216,7 +256,7 @@ export default function ReferralModal({
               activeOpacity={referralCode && !loading ? 0.7 : 1}
             >
               <MaterialIcons name="message" size={20} color="#fff" />
-              <Text style={styles.buttonText}>Share on WhatsApp</Text>
+              <Text style={[styles.buttonText, textStyle]}>Share on WhatsApp</Text>
             </TouchableOpacity>
 
             {/* Share More Button */}
@@ -227,7 +267,7 @@ export default function ReferralModal({
               activeOpacity={referralCode && !loading ? 0.7 : 1}
             >
               <MaterialIcons name="share" size={20} color="#fff" />
-              <Text style={styles.buttonText}>Share More</Text>
+              <Text style={[styles.buttonText, textStyle]}>Share More</Text>
             </TouchableOpacity>
 
             {/* Close Button */}
@@ -235,7 +275,7 @@ export default function ReferralModal({
               style={[styles.button, styles.closeButton]}
               onPress={onClose}
             >
-              <Text style={styles.closeButtonText}>Close</Text>
+              <Text style={variant === 'minimal' ? minimalStyles.closeButtonText : styles.closeButtonText}>Close</Text>
             </TouchableOpacity>
           </View>
           </View>
@@ -274,6 +314,14 @@ const styles = StyleSheet.create({
     fontSize: 20,
     fontWeight: '700',
     color: '#333',
+  },
+  subtitle: {
+    color: '#555',
+    fontSize: 14,
+    lineHeight: 20,
+    marginHorizontal: 20,
+    marginTop: 8,
+    marginBottom: 10,
   },
   scrollContent: {
     paddingHorizontal: 20,
@@ -325,6 +373,17 @@ const styles = StyleSheet.create({
     color: '#667eea',
     letterSpacing: 2,
   },
+  linkLabel: {
+    fontSize: 12,
+    color: '#6B7280',
+    fontWeight: '600',
+    marginTop: 10,
+  },
+  linkText: {
+    fontSize: 14,
+    color: '#111827',
+    marginTop: 6,
+  },
   copyButton: {
     backgroundColor: '#667eea',
     width: 40,
@@ -338,6 +397,12 @@ const styles = StyleSheet.create({
     color: '#4CAF50',
     fontWeight: '600',
     textAlign: 'center',
+  },
+  skeletonLine: {
+    height: 16,
+    backgroundColor: '#E5E7EB',
+    borderRadius: 8,
+    width: '80%',
   },
   rewardBox: {
     backgroundColor: '#f0f8f0',
@@ -428,5 +493,41 @@ const styles = StyleSheet.create({
   },
   disabledButton: {
     opacity: 0.5,
+  },
+});
+
+const minimalStyles = StyleSheet.create({
+  backdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.85)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  container: {
+    width: '92%',
+    backgroundColor: '#000',
+    borderRadius: 12,
+    paddingVertical: 18,
+    paddingHorizontal: 16,
+    maxHeight: '80%',
+  },
+  title: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#fff',
+  },
+  text: {
+    color: '#fff',
+  },
+  actions: {
+    paddingHorizontal: 0,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: 8,
+    marginTop: 12,
+  },
+  closeButtonText: {
+    color: '#fff',
+    fontWeight: '600',
   },
 });

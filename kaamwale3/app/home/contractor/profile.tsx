@@ -12,6 +12,7 @@ import { useAuth } from "../../../context/AuthContext";
 import { useLanguage } from "../../../context/LanguageContext";
 import { StyleSheet } from "react-native";
 import ViewWorkersModal from "../../../components/ViewWorkersModal";
+import ReferralModal from "../../../components/ReferralModal";
 import { useContractorStats } from "../../../hooks/useContractorStats";
 import { statsCacheManager } from "../../../utils/statsCacheManager";
 import * as Progress from "react-native-progress";
@@ -139,6 +140,17 @@ const styles = StyleSheet.create({
     letterSpacing: 0.4,
     color: "rgba(255,255,255,0.82)",
   },
+  ratingContainer: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginTop: 8,
+  },
+  ratingText: {
+    fontSize: 14,
+    fontWeight: "700",
+    color: "#FFD700",
+    marginLeft: 4,
+  },
   contentWrap: {
     paddingTop: 18,
     paddingBottom: 24,
@@ -161,31 +173,33 @@ const styles = StyleSheet.create({
   statCard: {
     flex: 1,
     backgroundColor: "#FFFFFF",
-    borderRadius: 22,
-    paddingVertical: 18,
-    paddingHorizontal: 14,
-    alignItems: "flex-start",
+    borderRadius: 18,
+    paddingVertical: 12,
+    paddingHorizontal: 10,
+    alignItems: "center",
     borderWidth: 1,
     borderColor: "#EEF2F7",
   },
   statIcon: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
+    width: 36,
+    height: 36,
+    borderRadius: 18,
     justifyContent: "center",
     alignItems: "center",
-    marginBottom: 14,
+    marginBottom: 10,
   },
   statValue: {
-    fontSize: 20,
+    fontSize: 18,
     fontWeight: "700",
     color: "#111827",
+    textAlign: "center",
   },
   statLabel: {
-    fontSize: 12,
+    fontSize: 11,
     color: "#6B7280",
-    marginTop: 6,
+    marginTop: 4,
     fontWeight: "500",
+    textAlign: "center",
   },
   infoCard: {
     backgroundColor: "#fff",
@@ -323,8 +337,9 @@ export default function ContractorProfile(): React.ReactElement {
   const [contractorId, setContractorId] = useState<string>("0000");
   const [profilePhoto, setProfilePhoto] = useState<string | null>(null);
   const [uploadProgress, setUploadProgress] = useState(0);
-  const { jobsCompleted, totalJobs } = useContractorStats();
+  const { jobsCompleted, totalJobs, rating } = useContractorStats();
   const [viewWorkersModalVisible, setViewWorkersModalVisible] = useState(false);
+  const [referralModalVisible, setReferralModalVisible] = useState(false);
 
   type ModalType = "confirm" | "info" | "success" | "error";
   const [logoutModalVisible, setLogoutModalVisible] = useState(false);
@@ -495,6 +510,8 @@ export default function ContractorProfile(): React.ReactElement {
   const navigateTo = (path: string | null) => {
     if (path === "VIEW_WORKERS") {
       setViewWorkersModalVisible(true);
+    } else if (path === "REFERRAL") {
+      setReferralModalVisible(true);
     } else if (path) {
       router.push(path as any);
     }
@@ -505,7 +522,9 @@ export default function ContractorProfile(): React.ReactElement {
       header: t("jobManager"),
       icon: "work-outline",
       color: "#667eea",
-      options: [{ name: "View Workers", icon: "people", screen: "VIEW_WORKERS" }],
+      options: [
+        { name: "View Workers", icon: "people", screen: "VIEW_WORKERS" },
+      ],
     },
     {
       header: t("finance"),
@@ -563,8 +582,11 @@ export default function ContractorProfile(): React.ReactElement {
           <View style={styles.identityBlock}>
             <Text style={styles.nameText}>{userName}</Text>
             <Text style={styles.idText}>ID: {contractorId}</Text>
-            <View style={styles.identityChip}>
-              <Text style={styles.identityChipText}>Contractor Profile</Text>
+            <View style={styles.ratingContainer}>
+              <MaterialIcons name="star" size={16} color="#FFD700" />
+              <Text style={styles.ratingText}>
+                {rating !== null ? `${rating.toFixed(1)} ★` : "No rating yet"}
+              </Text>
             </View>
           </View>
 
@@ -627,6 +649,14 @@ export default function ContractorProfile(): React.ReactElement {
           }}
         />
       )}
+
+        <ReferralModal
+          visible={referralModalVisible}
+          onClose={() => setReferralModalVisible(false)}
+          workerName={authUser?.name || userName}
+          workerPhone={authUser?.phone || contractorId}
+          variant="minimal"
+        />
 
       <Modal
         transparent={true}

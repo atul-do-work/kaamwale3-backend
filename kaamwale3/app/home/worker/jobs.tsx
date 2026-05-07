@@ -7,6 +7,7 @@ import { useRouter } from "expo-router";
 import { LinearGradient } from "expo-linear-gradient";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as Location from "expo-location";
+import { getAuthAccessToken } from "../../../utils/secureStore";
 import { socket } from "../../../utils/socket";
 import { API_BASE } from "../../../utils/config";
 import styles from "../../../styles/WorkerJobsStyles";
@@ -103,6 +104,18 @@ const isJobDayExpired = (job: Job): boolean => {
   return new Date() >= nextMidnight;
 };
 
+const isJobOlderThan30Days = (job: Job): boolean => {
+  const sourceDate = job?.paymentTime || job?.date || job?.createdAt;
+  if (!sourceDate) return false;
+  const parsed = new Date(sourceDate);
+  if (Number.isNaN(parsed.getTime())) return false;
+
+  // Check if job is older than 30 days
+  const thirtyDaysAgo = new Date();
+  thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+  return parsed < thirtyDaysAgo;
+};
+
 export default function Jobs(): React.ReactElement {
   const router = useRouter();
   const { t } = useLanguage();
@@ -133,8 +146,7 @@ export default function Jobs(): React.ReactElement {
   const [cancelModalVisible, setCancelModalVisible] = useState<boolean>(false);
   const [selectedCancelJob, setSelectedCancelJob] = useState<Job | null>(null);
   const [pastJobsModalVisible, setPastJobsModalVisible] = useState<boolean>(false);
-  const [pastJobsPage, setPastJobsPage] = useState<number>(1);
-  const PAST_JOBS_PAGE_SIZE = 8;
+  const [pastJobsLimit, setPastJobsLimit] = useState<number>(2);
   const [cancelReason, setCancelReason] = useState<string>("");
   const [cancelReasonDescription, setCancelReasonDescription] = useState<string>("");
   const [cancelProcessing, setCancelProcessing] = useState<boolean>(false);
@@ -233,12 +245,12 @@ export default function Jobs(): React.ReactElement {
     }, [])
   );
 
-  // Load worker name + token from AsyncStorage
+  // Load worker name + token from SecureStore
   useEffect(() => {
     (async () => {
       try {
         const userStr = await AsyncStorage.getItem("user");
-        const storedToken = (await AsyncStorage.getItem("accessToken")) || (await AsyncStorage.getItem("token"));
+        const storedToken = await getAuthAccessToken();
 
         if (userStr) {
           const user = JSON.parse(userStr);
@@ -890,15 +902,12 @@ export default function Jobs(): React.ReactElement {
   const previewJobs = pendingJobs.slice(0, 3);
 
   const pastJobs = acceptedJobs
-    .filter((job) => isPaid(job, currentUserPhone) && isJobDayExpired(job))
+    .filter((job) => isPaid(job, currentUserPhone) && isJobDayExpired(job) && !isJobOlderThan30Days(job))
     .sort((a, b) => {
       const aTime = new Date(a.paymentTime || a.date || a.createdAt || 0).getTime();
       const bTime = new Date(b.paymentTime || b.date || b.createdAt || 0).getTime();
       return bTime - aTime;
     });
-
-  const totalPastJobPages = Math.max(1, Math.ceil(pastJobs.length / PAST_JOBS_PAGE_SIZE));
-  const pagedPastJobs = pastJobs.slice((pastJobsPage - 1) * PAST_JOBS_PAGE_SIZE, pastJobsPage * PAST_JOBS_PAGE_SIZE);
 
   const { weekStart, weekEnd } = getWeekWindow();
   const weeklyJobs = acceptedJobs.filter((job) => {
@@ -910,9 +919,15 @@ export default function Jobs(): React.ReactElement {
   });
 
   const openPastJobsModal = () => {
-    setPastJobsPage(1);
+    setPastJobsLimit(2);
     setPastJobsModalVisible(true);
   };
+
+  const loadMorePastJobs = () => {
+    setPastJobsLimit((prev) => Math.min(prev + 2, pastJobs.length));
+  };
+
+  const displayedPastJobs = pastJobs.slice(0, pastJobsLimit);
 
   return (
     <SafeAreaView edges={['top', 'left', 'right', 'bottom']} style={{ flex: 1 }}>
@@ -923,7 +938,6 @@ export default function Jobs(): React.ReactElement {
           onPress={openPastJobsModal}
         >
           <MaterialIcons name="history" size={22} color="#1d4ed8" />
-          <Text style={{ color: '#1d4ed8', fontWeight: '700' }}>{t('pastJobs') || 'Past Jobs'}</Text>
         </TouchableOpacity>
       </View>
       <FlatList
@@ -962,7 +976,7 @@ export default function Jobs(): React.ReactElement {
 
           <View style={{ flex: 1 }}>
             <FlatList
-              data={pagedPastJobs}
+              data={displayedPastJobs}
               keyExtractor={(item) => item._id}
               contentContainerStyle={{ paddingBottom: 24, paddingTop: 16 }}
               ListEmptyComponent={
@@ -970,28 +984,22 @@ export default function Jobs(): React.ReactElement {
                   <Text style={{ color: '#6b7280', fontSize: 14 }}>{t('noPastJobsYet')}</Text>
                 </View>
               }
+              ListFooterComponent={
+                pastJobs.length > displayedPastJobs.length ? (
+                  <View style={{ alignItems: 'center', marginTop: 6, marginBottom: 24 }}>
+                    <TouchableOpacity
+                      onPress={loadMorePastJobs}
+                      style={{ paddingVertical: 10, paddingHorizontal: 20, backgroundColor: '#1d4ed8', borderRadius: 999, minWidth: 140, alignItems: 'center' }}
+                    >
+                      <Text style={{ color: '#fff', fontWeight: '700', fontSize: 13 }}>
+                        {t('loadMore') || 'Load More'}
+                      </Text>
+                    </TouchableOpacity>
+                  </View>
+                ) : null
+              }
               renderItem={renderJobCard}
             />
-          </View>
-
-          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 12, backgroundColor: '#fff', borderTopWidth: 1, borderTopColor: '#e5e7eb' }}>
-            <TouchableOpacity
-              style={{ padding: 12, backgroundColor: pastJobsPage <= 1 ? '#d1d5db' : '#1d4ed8', borderRadius: 10, flex: 1, marginRight: 8, alignItems: 'center' }}
-              disabled={pastJobsPage <= 1}
-              onPress={() => setPastJobsPage((page) => Math.max(1, page - 1))}
-            >
-              <Text style={{ color: '#fff', fontWeight: '700' }}>{t('previous')}</Text>
-            </TouchableOpacity>
-            <View style={{ flex: 1, alignItems: 'center' }}>
-              <Text style={{ color: '#4b5563', fontWeight: '700' }}>{`${t('page')} ${pastJobsPage} / ${totalPastJobPages}`}</Text>
-            </View>
-            <TouchableOpacity
-              style={{ padding: 12, backgroundColor: pastJobsPage >= totalPastJobPages ? '#d1d5db' : '#1d4ed8', borderRadius: 10, flex: 1, marginLeft: 8, alignItems: 'center' }}
-              disabled={pastJobsPage >= totalPastJobPages}
-              onPress={() => setPastJobsPage((page) => Math.min(totalPastJobPages, page + 1))}
-            >
-              <Text style={{ color: '#fff', fontWeight: '700' }}>{t('next')}</Text>
-            </TouchableOpacity>
           </View>
         </SafeAreaView>
       </Modal>
@@ -1214,6 +1222,26 @@ export default function Jobs(): React.ReactElement {
               >
                 <Text style={{ color: "#FFF", fontSize: 14, fontWeight: "700", textAlign: "center" }}>
                   {t('okay')}
+                </Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                onPress={() => {
+                  setPaymentModalVisible(false);
+                  // Navigate to wallet tab
+                  router.push('/home/worker?tab=wallet' as any);
+                }}
+                style={{
+                  flex: 1,
+                  backgroundColor: "rgba(26, 47, 77, 0.9)",
+                  paddingVertical: 12,
+                  borderRadius: 10,
+                  borderWidth: 1.5,
+                  borderColor: "#FFF",
+                }}
+              >
+                <Text style={{ color: "#FFF", fontSize: 14, fontWeight: "700", textAlign: "center" }}>
+                  Deposit to Wallet
                 </Text>
               </TouchableOpacity>
 

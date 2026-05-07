@@ -5,6 +5,7 @@ import {
   TouchableOpacity,
   StyleSheet,
   ActivityIndicator,
+  Modal,
   FlatList,
   RefreshControl,
   Platform,
@@ -79,6 +80,16 @@ interface IncentiveProgress {
   consecutiveDays: number;
   totalHours: number;
   cancellationsInWindow: number;
+  dailyQualificationTrail?: Array<{
+    date: string;
+    jobsCompleted?: number;
+    hoursWorked?: number;
+    declinesCount?: number;
+    hasCompletedJob?: boolean;
+    meetsMinimumHours?: boolean;
+    meetsNoDeclines?: boolean;
+    qualified?: boolean;
+  }>;
   requiredDailyHours?: number;
   requiredDaysFor5?: number;
   fiveDayWindow?: {
@@ -150,7 +161,17 @@ export default function GigHistory() {
   const incentiveAbortRef = useRef<AbortController | null>(null);
   const realtimeRefreshTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isRealtimeRefreshingRef = useRef(false);
+  const incentiveRequestIdRef = useRef<number | null>(null);
+  const gigsRequestIdRef = useRef<number | null>(null);
   const isMountedRef = useRef(true);
+  // v2 removed: the backend `/incentives/progress` (v1) is authoritative
+  const loadingMoreRef = useRef(false);
+  const simpleModalVisibleRef = useRef(false);
+  const scheduleRef = useRef<() => void>(() => {});
+  const [simpleModalVisible, setSimpleModalVisible] = useState(false);
+  const [simpleModalTitle, setSimpleModalTitle] = useState('');
+  const [simpleModalMessage, setSimpleModalMessage] = useState('');
+  const [fiveDayModalVisible, setFiveDayModalVisible] = useState(false);
 
   const buildFallbackIncentiveData = useCallback(
     (reason?: string): IncentiveProgress => ({
@@ -181,37 +202,9 @@ export default function GigHistory() {
     [tx]
   );
 
-  useEffect(() => {
-    return () => {
-      isMountedRef.current = false;
-      if (gigsAbortRef.current) gigsAbortRef.current.abort();
-      if (incentiveAbortRef.current) incentiveAbortRef.current.abort();
-      if (realtimeRefreshTimeoutRef.current) clearTimeout(realtimeRefreshTimeoutRef.current);
-    };
-  }, []);
-
-  useEffect(() => {
-    const now = new Date();
-    const nextMidnight = new Date(now);
-    nextMidnight.setHours(24, 0, 0, 0);
-    const ms = Math.max(1000, nextMidnight.getTime() - now.getTime());
-    const timer = setTimeout(() => setDayTick((value) => value + 1), ms);
-    return () => clearTimeout(timer);
-  }, [dayTick]);
-
-  const formatHoursDotMinutes = (totalMinutes: number) => {
-    const safe = Math.max(0, Number(totalMinutes) || 0);
-    const hours = Math.floor(safe / 60);
-    const minutes = safe % 60;
-    return `${hours}.${String(minutes).padStart(2, '0')}`;
-  };
-
-  const getGigPaymentStatus = (gig: GigHistoryItem): 'paid' | 'pending' => {
-    if (Array.isArray(gig.acceptedWorkers) && gig.acceptedWorkers.length > 0) {
-      return gig.acceptedWorkers.every((worker) => String(worker?.paymentStatus || '').toLowerCase() === 'paid') ? 'paid' : 'pending';
-    }
+  const getGigPaymentStatus = useCallback((gig: GigHistoryItem) => {
     return String(gig.paymentStatus || '').toLowerCase() === 'paid' ? 'paid' : 'pending';
-  };
+  }, []);
 
   const todayWorkedMinutes = useMemo(() => {
     const now = new Date();
@@ -222,6 +215,7 @@ export default function GigHistory() {
     return gigs.reduce((sum, gig) => {
       const isPaid = getGigPaymentStatus(gig) === 'paid';
       const isCompleted = String(gig.status || '').toLowerCase() === 'completed';
+      // Count gig minutes for today if the gig is completed OR paid (allow completed but unpaid to show today's progress)
       if (!isPaid && !isCompleted) return sum;
 
       const sourceDate = gig.paymentTime || gig.date || gig.acceptedAt;
@@ -238,6 +232,8 @@ export default function GigHistory() {
 
   const fetchGigHistory = useCallback(
     async (pageNum: number = 1, isFresh: boolean = true) => {
+      const reqId = Date.now();
+      gigsRequestIdRef.current = reqId;
       try {
         if (isFresh) setLoading(true);
         else setLoadingMore(true);
@@ -257,11 +253,15 @@ export default function GigHistory() {
 
         if (response.status === 401) {
           if (isMountedRef.current) {
-            const message = tx('sessionExpiredPleaseLoginAgain', 'Your session has expired. Please log in again.');
-            setGigError(message);
-            Alert.alert(tx('sessionExpiredTitle', 'Session Expired'), message, [
-              { text: tx('ok', 'OK'), onPress: () => router.push('/') },
-            ]);
+              const message = tx('sessionExpiredPleaseLoginAgain', 'Your session has expired. Please log in again.');
+              setGigError(message);
+              // show simple modal once to avoid repeated native alerts spamming the user
+              if (!simpleModalVisibleRef.current) {
+                simpleModalVisibleRef.current = true;
+                setSimpleModalTitle(tx('sessionExpiredTitle', 'Session Expired'));
+                setSimpleModalMessage(message);
+                setSimpleModalVisible(true);
+              }
           }
           return;
         }
@@ -275,6 +275,9 @@ export default function GigHistory() {
 
         const data = await response.json();
         if (!isMountedRef.current) return;
+
+        // Only apply response if this is the latest request
+        if (gigsRequestIdRef.current !== reqId) return;
 
         const gigsData = data.gigs || (Array.isArray(data) ? data : []);
         if (isFresh) setGigs(gigsData);
@@ -292,16 +295,22 @@ export default function GigHistory() {
           setGigError(tx('failedToLoadGigsPullToRefresh', 'Failed to load gigs. Pull to refresh.'));
         }
       } finally {
-        if (isMountedRef.current) {
-          setLoading(false);
-          setLoadingMore(false);
-        }
+          if (isMountedRef.current) {
+            // only update loading state if this is the latest request
+            if (gigsRequestIdRef.current === reqId) {
+              setLoading(false);
+              setLoadingMore(false);
+              loadingMoreRef.current = false;
+            }
+          }
       }
     },
     [accessToken, router, tx]
   );
 
   const fetchIncentiveProgress = useCallback(async () => {
+    const reqId = Date.now();
+    incentiveRequestIdRef.current = reqId;
     try {
       setIncentiveLoading(true);
       setIncentiveError(null);
@@ -313,6 +322,7 @@ export default function GigHistory() {
 
       incentiveAbortRef.current = new AbortController();
 
+      // Use authoritative v1 endpoint
       const response = await fetch(`${API_BASE}/incentives/progress`, {
         headers: { Authorization: `Bearer ${accessToken}` },
         signal: incentiveAbortRef.current.signal,
@@ -326,18 +336,60 @@ export default function GigHistory() {
       }
 
       if (response.ok) {
-        const data: IncentiveProgress = await response.json();
+        const result = await response.json();
         if (!isMountedRef.current) return;
 
+        // only apply if this is the latest incentive request
+        if (incentiveRequestIdRef.current !== reqId) return;
+
+        // legacy v1 response (authoritative)
+        const data: IncentiveProgress = result;
         setIncentiveData(data);
         setLastUpdatedAt(new Date());
         setMilestones((prev) =>
-          prev.map((milestone) => ({
-            ...milestone,
-            progress: Math.min(data.consecutiveDays / milestone.days, 1),
-            completed: data.unlockedMilestones?.includes(milestone.id) || false,
-            claimed: data.claimedMilestones?.includes(milestone.id) || false,
-          }))
+          prev.map((milestone) => {
+            const prevItem = prev.find((p) => p.id === milestone.id);
+            const days = milestone.days || 1;
+
+            // If server explicitly marks eligible, consider fully progressed
+            const eligibleFlag = days === 5 ? data.eligibleFor5Days : days === 10 ? data.eligibleFor10Days : days === 20 ? data.eligibleFor20Days : false;
+
+            // Compute progress using server dailyQualificationTrail and lastWorkDate to ensure calendar-day alignment
+            let qualifiedCount = 0;
+            try {
+              const trail = Array.isArray(data.dailyQualificationTrail) ? data.dailyQualificationTrail : [];
+              const lastKey = data.lastWorkDate;
+              if (lastKey) {
+                const toDateKey = (d: Date) => {
+                  try {
+                    return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata' }).format(d);
+                  } catch (e) {
+                    return d.toISOString().slice(0, 10);
+                  }
+                };
+                const latest = new Date(`${lastKey}T00:00:00.000+05:30`);
+                for (let i = 0; i < days; i++) {
+                  const check = new Date(latest);
+                  check.setDate(latest.getDate() - i);
+                  const key = toDateKey(check);
+                  const entry = trail.find((r: any) => String(r.date || '') === String(key));
+                  if (entry && entry.qualified) qualifiedCount++;
+                }
+              }
+            } catch (e) {
+              qualifiedCount = 0;
+            }
+
+            const computedProgress = days > 0 ? Math.min(qualifiedCount / days, 1) : 0;
+            const progress = eligibleFlag ? 1 : computedProgress;
+
+            return {
+              ...milestone,
+              progress,
+              completed: (prevItem?.completed ?? false) || (data.unlockedMilestones?.includes(milestone.id) || false),
+              claimed: (prevItem?.claimed ?? false) || (data.claimedMilestones?.includes(milestone.id) || false),
+            };
+          })
         );
         return;
       }
@@ -354,7 +406,7 @@ export default function GigHistory() {
       }
     } finally {
       if (isMountedRef.current) {
-        setIncentiveLoading(false);
+        if (incentiveRequestIdRef.current === reqId) setIncentiveLoading(false);
       }
     }
   }, [accessToken, buildFallbackIncentiveData, tx]);
@@ -366,7 +418,9 @@ export default function GigHistory() {
 
       try {
         setPage(1);
-        await Promise.all([fetchGigHistory(1, true), fetchIncentiveProgress()]);
+        // Run sequentially to avoid race conditions where independent responses overwrite each other
+        await fetchGigHistory(1, true);
+        await fetchIncentiveProgress();
       } finally {
         if (isMountedRef.current) {
           if (showPullRefresh) setRefreshing(false);
@@ -404,33 +458,80 @@ export default function GigHistory() {
   useEffect(() => {
     if (!accessToken) return;
 
-    connectSocket();
+    try {
+      if (!socket || !socket.connected) {
+        connectSocket();
+      }
+    } catch (e) {
+      console.warn('Socket connect check failed', e);
+    }
+    // Keep a stable scheduleRef that always points to the latest scheduler function
+    scheduleRef.current = scheduleRealtimeRefresh;
 
-    const handleLiveRefresh = () => {
+    // Stable handler that uses scheduleRef to call the latest scheduler without re-registering listeners
+    const stableHandler = () => {
       if (!isMountedRef.current) return;
-      scheduleRealtimeRefresh();
+      try {
+        scheduleRef.current();
+      } catch (e) {
+        console.warn('Live refresh handler error', e);
+      }
     };
 
-    socket.on('jobUpdated', handleLiveRefresh);
-    socket.on('walletUpdated', handleLiveRefresh);
-    socket.on('workerStatusUpdate', handleLiveRefresh);
+    // Ensure we don't register duplicate handlers: remove prior then add (safe even if not present)
+    socket.off('jobUpdated', stableHandler);
+    socket.off('walletUpdated', stableHandler);
+    socket.off('workerStatusUpdate', stableHandler);
+
+    socket.on('jobUpdated', stableHandler);
+    socket.on('walletUpdated', stableHandler);
+    socket.on('workerStatusUpdate', stableHandler);
 
     return () => {
-      socket.off('jobUpdated', handleLiveRefresh);
-      socket.off('walletUpdated', handleLiveRefresh);
-      socket.off('workerStatusUpdate', handleLiveRefresh);
+      socket.off('jobUpdated', stableHandler);
+      socket.off('walletUpdated', stableHandler);
+      socket.off('workerStatusUpdate', stableHandler);
+      // Do NOT disconnect socket here; app-level socket handler should manage connection lifecycle
     };
   }, [accessToken, scheduleRealtimeRefresh]);
 
   const handleLoadMore = () => {
-    if (!loadingMore && hasMore) {
-      fetchGigHistory(page + 1, false);
+    if (!loadingMoreRef.current && hasMore) {
+      loadingMoreRef.current = true;
+      fetchGigHistory(page + 1, false).finally(() => {
+        loadingMoreRef.current = false;
+      });
     }
   };
 
   const onRefresh = async () => {
     await refreshAll({ showPullRefresh: true });
   };
+
+  // Ensure today's minutes recompute at local midnight
+  useEffect(() => {
+    const now = new Date();
+    const next = new Date(now);
+    next.setHours(24, 0, 0, 0);
+    const msUntilMidnight = next.getTime() - now.getTime();
+    const t = setTimeout(() => {
+      try {
+        setDayTick((d) => d + 1);
+      } finally {
+        // schedule daily tick thereafter
+        const daily = setInterval(() => setDayTick((d) => d + 1), 24 * 60 * 60 * 1000);
+        (realtimeRefreshTimeoutRef.current as any) = daily;
+      }
+    }, msUntilMidnight + 50);
+
+    return () => {
+      clearTimeout(t);
+      if (realtimeRefreshTimeoutRef.current) {
+        clearInterval(realtimeRefreshTimeoutRef.current as any);
+        realtimeRefreshTimeoutRef.current = null;
+      }
+    };
+  }, []);
 
   const claimMilestone = async (milestoneId: string) => {
     if (claimingId) {
@@ -519,14 +620,22 @@ export default function GigHistory() {
     }
   };
 
+  const formatHoursDotMinutes = (minutes: number | null | undefined) => {
+    const mins = Math.max(0, Number(minutes || 0));
+    const hrs = Math.floor(mins / 60);
+    const rem = mins % 60;
+    return `${hrs}.${String(Math.round((rem / 60) * 10)).padStart(1, '0')}`;
+  };
+
   const getFiveDayFailureMessage = (data: IncentiveProgress) => {
     const fiveDayWindow = data.fiveDayWindow;
     if (!fiveDayWindow) return null;
     if (data.cancellationsInWindow > 0) {
       return `${tx('declinesCancellationsInWindow', 'Declines/cancellations in streak window')}: ${data.cancellationsInWindow}`;
     }
+    // Do not show the verbose failed-dates list in the UI (privacy/clarity)
     if (fiveDayWindow.failedDates?.length) {
-      return `${tx('dailyMinimumNotMetOn', 'Daily minimum not met on')}: ${fiveDayWindow.failedDates.join(', ')}`;
+      return null;
     }
     if (fiveDayWindow.failureReason && fiveDayWindow.failureReason.toLowerCase().includes('no completed')) {
       return tx('noCompletedPaidJobHistoryFound', 'No completed paid job history found');
@@ -561,7 +670,25 @@ export default function GigHistory() {
               <Text style={styles.statLabel}>{t('hours')}</Text>
             </View>
           </View>
-        ) : null}
+          ) : null}
+
+        {/* Next milestone hint */}
+        {incentiveData ? (() => {
+          const nextMilestone = milestones.find(m => !m.completed && !m.claimed);
+          if (!nextMilestone) return null;
+          const remainingDays = Math.max(0, nextMilestone.days - (incentiveData.consecutiveDays || 0));
+          const requiredDailyHours = incentiveData.requiredDailyHours || 8;
+          const hoursToday = (todayWorkedMinutes ?? 0) / 60;
+          const hoursNeededToday = Math.max(0, requiredDailyHours - hoursToday);
+          return (
+            <View style={{ marginTop: 8 }}>
+              <Text style={{ color: '#E8EAFF', fontSize: 13, fontWeight: '700' }}>{`You need ${remainingDays} more day${remainingDays===1?'':'s'} with ${requiredDailyHours}h to unlock ₹${nextMilestone.reward}`}</Text>
+              {hoursNeededToday > 0 ? (
+                <Text style={{ color: '#E8EAFF', fontSize: 12, marginTop: 4 }}>{`Today: ${hoursNeededToday.toFixed(1)}h remaining towards today's ${requiredDailyHours}h`}</Text>
+              ) : null}
+            </View>
+          );
+        })() : null}
 
         <View style={styles.liveRow}>
           <View style={styles.liveBadge}>
@@ -585,11 +712,21 @@ export default function GigHistory() {
     const fiveDayWindow = safeIncentiveData.fiveDayWindow;
     const failureMessage = getFiveDayFailureMessage(safeIncentiveData);
 
+    // backend v1 is authoritative for reasons
+    let streakBroken = Boolean((safeIncentiveData.cancellationsInWindow || 0) > 0 || (fiveDayWindow?.failedDates && fiveDayWindow.failedDates.length > 0) || (fiveDayWindow?.failureReason && /fail|no completed|not met/i.test(String(fiveDayWindow.failureReason))));
+
     return (
       <View style={styles.conditionsCard}>
         <Text style={styles.conditionsTitle}>
           {t('requirementsStatus')} - 5 {tx('day', 'Day')} {tx('milestone', 'Milestone')}
         </Text>
+
+        {streakBroken ? (
+          <View style={styles.streakBrokenBanner}>
+            <MaterialIcons name="cancel" size={20} color="#fff" />
+            <Text style={styles.streakBrokenText}>{tx('streakBroken' as any, 'Streak Broken')}</Text>
+          </View>
+        ) : null}
 
         <View style={styles.conditionsList}>
           <View style={[styles.condition, { borderLeftColor: safeIncentiveData.consecutiveDays >= 5 ? '#27AE60' : '#BDC3C7' }]}>
@@ -615,7 +752,7 @@ export default function GigHistory() {
             <View style={styles.conditionText}>
               <Text style={styles.conditionLabel}>{t('hoursPerDay')}</Text>
               <Text style={styles.conditionValue}>
-                {fiveDayWindow?.daysMetMinimumHours || 0}/{safeIncentiveData.requiredDaysFor5 || 5} {tx('days', 'days')} {tx('metMinimum', 'met')} ({safeIncentiveData.requiredDailyHours || 8}{tx('hoursPerDayShort', 'h/day')})
+                {fiveDayWindow?.daysMetMinimumHours || 0}/{safeIncentiveData.requiredDaysFor5 || 5} {tx('days', 'days')} {tx('metMinimum', 'met')} ({(safeIncentiveData.requiredDailyHours || 8)}{tx('hoursPerDayShort', 'h/day')})
               </Text>
               {failureMessage ? <Text style={styles.conditionError}>{failureMessage}</Text> : null}
             </View>
@@ -636,24 +773,63 @@ export default function GigHistory() {
           </View>
         </View>
 
-        {fiveDayWindow?.dailyStatus?.length ? (
-          <View style={styles.dailyBreakdown}>
-            <Text style={styles.dailyBreakdownTitle}>{tx('recent5DayBreakdown', 'Recent 5-day breakdown')}</Text>
-            {fiveDayWindow.dailyStatus.map((dayStatus) => {
-              const isQualified = Boolean(dayStatus.dayQualified ?? (dayStatus.meetsMinimumHours && dayStatus.meetsNoDeclines !== false));
-              return (
-                <View key={dayStatus.date} style={styles.dailyRow}>
-                  <Text style={styles.dailyDate}>{formatDate(dayStatus.date)}</Text>
-                  <Text style={[styles.dailyHours, { color: isQualified ? '#27AE60' : '#E74C3C' }]}>
-                    {Number(dayStatus.hoursWorked || 0).toFixed(1)}
-                    {tx('hoursShort', 'h')} · {isQualified ? tx('qualified', 'Qualified') : tx('notQualified', 'Not Qualified')}
-                  </Text>
-                </View>
-              );
-            })}
-          </View>
-        ) : null}
+        {/** Replace inline breakdown with an info icon that opens a modal */}
+        <View style={{ marginTop: 12, alignItems: 'flex-end' }}>
+          <TouchableOpacity onPress={() => setFiveDayModalVisible(true)} style={{ padding: 6 }}>
+            <MaterialIcons name="info" size={18} color="#6B7280" />
+          </TouchableOpacity>
+        </View>
       </View>
+    );
+  };
+
+  const renderFiveDayModal = () => {
+    const safeIncentiveData = incentiveData || buildFallbackIncentiveData(incentiveError || undefined);
+    const fiveDayWindow = safeIncentiveData.fiveDayWindow;
+    return (
+      <Modal transparent visible={fiveDayModalVisible} animationType="slide" onRequestClose={() => setFiveDayModalVisible(false)}>
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modalContainer, { maxWidth: 520 }]}>
+            <View style={[styles.modalHeader, { backgroundColor: '#EEF2FF' }]}>
+              <View style={[styles.modalIconBg, { backgroundColor: '#667EEA' }]}>
+                <MaterialIcons name="today" size={28} color="#fff" />
+              </View>
+            </View>
+            <View style={[styles.modalContent, { alignItems: 'flex-start' }]}>
+              <Text style={[styles.modalTitle, { color: '#111827' }]}>{tx('recent5DayBreakdown', 'Recent 5-day breakdown')}</Text>
+              <View style={{ width: '100%', marginTop: 8 }}>
+                {fiveDayWindow?.dailyStatus?.length ? (
+                  fiveDayWindow.dailyStatus.map((dayStatus) => {
+                    const isQualified = Boolean(dayStatus.dayQualified ?? (dayStatus.meetsMinimumHours && dayStatus.meetsNoDeclines !== false));
+                    const reasons: string[] = Array.isArray((dayStatus as any).reasons) ? (dayStatus as any).reasons : [];
+                    const reasonText = reasons.length
+                      ? reasons
+                          .map((r) => (String(r).toUpperCase().includes('CANCEL') ? tx('cancelled', 'Cancelled') : tx('lowHours' as any, 'Less than required hours')))
+                          .join(', ')
+                      : null;
+                    return (
+                      <View key={dayStatus.date} style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: '#F3F4F6' }}>
+                        <View style={{ flex: 1 }}>
+                          <Text style={styles.dailyDate}>{formatDate(dayStatus.date)}</Text>
+                          {reasonText ? <Text style={[styles.conditionError, { marginTop: 4 }]}>{reasonText}</Text> : null}
+                        </View>
+                        <Text style={[styles.dailyHours, { color: isQualified ? '#27AE60' : '#E74C3C' }]}>
+                          {Number(dayStatus.hoursWorked || 0).toFixed(1)}{tx('hoursShort', 'h')} · {isQualified ? tx('qualified', 'Qualified') : tx('notQualified', 'Not Qualified')}
+                        </Text>
+                      </View>
+                    );
+                  })
+                ) : (
+                  <Text style={{ color: '#6B7280' }}>{tx('noRecentData', 'No recent data')}</Text>
+                )}
+              </View>
+            </View>
+            <TouchableOpacity style={[styles.modalButton, { backgroundColor: '#667EEA' }]} onPress={() => setFiveDayModalVisible(false)}>
+              <Text style={styles.modalButtonText}>{tx('close', 'Close')}</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     );
   };
 
@@ -731,7 +907,7 @@ export default function GigHistory() {
     </View>
   );
 
-  const renderGigCard = ({ item: gig }: { item: GigHistoryItem }) => {
+  const renderGigCard = useCallback(({ item: gig }: { item: GigHistoryItem }) => {
     const paymentStatus = getGigPaymentStatus(gig);
     const isCancelled = String(gig.status || '').toLowerCase() === 'cancelled';
     const displayStatus = isCancelled ? t('cancelled') : paymentStatus === 'paid' ? t('completed') : t('pending');
@@ -805,7 +981,7 @@ export default function GigHistory() {
         ) : null}
       </View>
     );
-  };
+  }, [tx, t, getGigPaymentStatus, getStatusColor, getStatusIcon, formatDate]);
 
   const { completedCount, pendingCount, cancelledCount } = useMemo(() => {
     let completed = 0;
@@ -889,6 +1065,26 @@ export default function GigHistory() {
         <View style={{ width: 44 }} />
       </View>
 
+      {/* Simple modal used to avoid native alert spam for repeated API failures */}
+      <Modal transparent visible={simpleModalVisible} animationType="fade" onRequestClose={() => { setSimpleModalVisible(false); simpleModalVisibleRef.current = false; }}>
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContainer}>
+            <View style={[styles.modalHeader, { backgroundColor: '#FEE2E2' }]}>
+              <View style={[styles.modalIconBg, { backgroundColor: '#E11D48' }]}>
+                <MaterialIcons name="error" size={32} color="#fff" />
+              </View>
+            </View>
+            <View style={styles.modalContent}>
+              <Text style={[styles.modalTitle, { color: '#991B1B' }]}>{simpleModalTitle}</Text>
+              <Text style={[styles.modalMessage, { color: '#4B5563' }]}>{simpleModalMessage}</Text>
+            </View>
+            <TouchableOpacity style={[styles.modalButton, { backgroundColor: '#E11D48' }]} onPress={() => { setSimpleModalVisible(false); simpleModalVisibleRef.current = false; router.push('/'); }}>
+              <Text style={styles.modalButtonText}>{tx('ok', 'OK')}</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
       {loading ? (
         <View style={styles.centerContainer}>
           <ActivityIndicator size="large" color="#667EEA" />
@@ -915,6 +1111,7 @@ export default function GigHistory() {
             removeClippedSubviews
             initialNumToRender={10}
             maxToRenderPerBatch={20}
+            windowSize={5}
           />
         </>
       )}
@@ -971,6 +1168,18 @@ const styles = StyleSheet.create({
     marginHorizontal: 12,
     marginTop: 12,
     borderRadius: 14,
+  },
+  todayProgressBar: {
+    height: 8,
+    backgroundColor: 'rgba(232,234,255,0.2)',
+    borderRadius: 4,
+    overflow: 'hidden',
+    marginTop: 6,
+  },
+  todayProgressFill: {
+    height: '100%',
+    backgroundColor: '#22c55e',
+    borderRadius: 4,
   },
   incentiveContent: {
     gap: 14,
@@ -1103,6 +1312,21 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: '#F3F4F6',
     gap: 8,
+  },
+  streakBrokenBanner: {
+    marginTop: 10,
+    backgroundColor: '#E11D48',
+    borderRadius: 8,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  streakBrokenText: {
+    color: '#fff',
+    fontWeight: '800',
+    fontSize: 13,
   },
   dailyBreakdownTitle: {
     fontSize: 13,
@@ -1407,6 +1631,60 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingTop: 14,
     paddingBottom: 10,
+  },
+  // Simple modal styles
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+  },
+  modalContainer: {
+    backgroundColor: '#fff',
+    borderRadius: 12,
+    width: '100%',
+    maxWidth: 360,
+    overflow: 'hidden',
+    elevation: 8,
+  },
+  modalHeader: {
+    paddingVertical: 18,
+    alignItems: 'center',
+  },
+  modalIconBg: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  modalContent: {
+    paddingHorizontal: 18,
+    paddingVertical: 16,
+    alignItems: 'center',
+  },
+  modalTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    marginBottom: 8,
+  },
+  modalMessage: {
+    fontSize: 14,
+    color: '#4B5563',
+    textAlign: 'center',
+  },
+  modalButton: {
+    paddingVertical: 12,
+    margin: 16,
+    borderRadius: 8,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  modalButtonText: {
+    color: '#fff',
+    fontSize: 15,
+    fontWeight: '700',
   },
   footerRefreshButton: {
     backgroundColor: '#1F6FEB',

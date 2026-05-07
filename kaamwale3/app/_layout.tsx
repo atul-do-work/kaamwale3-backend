@@ -8,6 +8,7 @@ import { registerForPushNotificationsAsync } from '../services/notification';
 import { LanguageProvider } from '../context/LanguageContext';
 import { AuthProvider } from '../context/AuthContext';
 import { API_BASE } from '../utils/config';
+import { getAuthAccessToken } from '../utils/secureStore';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 // ******************** 1st step 
@@ -38,7 +39,7 @@ export default function RootLayout() {
   };
 
   const syncFcmTokenWithBackend = async (fcmToken: string, maxRetries = 3) => {
-    const accessToken = await AsyncStorage.getItem('accessToken');
+    const accessToken = await getAuthAccessToken();
     if (!accessToken || !fcmToken) return;
     for (let attempt = 1; attempt <= maxRetries; attempt += 1) {
       try {

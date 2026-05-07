@@ -7,6 +7,7 @@
  */
 
 import { API_BASE } from './config';
+import api from './api';
 
 const CACHE_TTL = 2 * 60 * 1000; // 2 minutes (real-time)
 
@@ -56,7 +57,8 @@ class AvailabilityCacheManager {
   }
 
   async fetchFresh(accessToken: string | null): Promise<any> {
-    if (!accessToken) return null;
+    // Note: accessToken parameter kept for backward compatibility but not used
+    // The api client will handle token management automatically
 
     if (this.isFetching && this.fetchPromise) {
       return this.fetchPromise;
@@ -65,19 +67,17 @@ class AvailabilityCacheManager {
     this.isFetching = true;
     this.fetchPromise = (async () => {
       try {
-        const response = await fetch(`${API_BASE}/worker/profile`, {
-          headers: { Authorization: `Bearer ${accessToken}` },
-        });
+        // ✅ Use api client with automatic token refresh
+        const response = await api.get('/worker/profile');
 
-        if (!response.ok) {
-          console.error('❌ Availability fetch failed:', response.status);
+        if (response.data?.success) {
+          this.setCache(response.data);
+          console.log('✅ Fresh availability status fetched');
+          return response.data;
+        } else {
+          console.error('❌ Availability fetch failed:', response.data?.message);
           return null;
         }
-
-        const data = await response.json();
-        this.setCache(data);
-        console.log('✅ Fresh availability status fetched');
-        return data;
       } catch (err) {
         console.error('❌ Availability fetch error:', err);
         return null;
@@ -90,17 +90,17 @@ class AvailabilityCacheManager {
     return this.fetchPromise;
   }
 
-  async getStatus(accessToken: string | null): Promise<any> {
+  async getStatus(): Promise<any> {
     const cached = this.getCached();
     if (cached) return cached;
 
     console.log('📡 Availability cache expired, fetching fresh...');
-    return this.fetchFresh(accessToken);
+    return this.fetchFresh(null); // accessToken no longer needed
   }
 
-  async forceFresh(accessToken: string | null): Promise<any> {
+  async forceFresh(): Promise<any> {
     this.invalidate();
-    return this.fetchFresh(accessToken);
+    return this.fetchFresh(null); // accessToken no longer needed
   }
 }
 

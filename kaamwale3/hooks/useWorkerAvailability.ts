@@ -10,6 +10,7 @@ import { useFocusEffect } from '@react-navigation/native';
 import { useAuth } from '../context/AuthContext';
 import { availabilityCacheManager } from '../utils/availabilityCacheManager';
 import { socket } from '../utils/socket';
+import api from '../utils/api';
 
 interface UseWorkerAvailabilityReturn {
   isOnline: boolean;
@@ -36,7 +37,8 @@ export const useWorkerAvailability = (): UseWorkerAvailabilityReturn => {
     setError(null);
 
     try {
-      const data = await availabilityCacheManager.getStatus(accessToken);
+      // ✅ No need to pass accessToken - cache manager uses api client
+      const data = await availabilityCacheManager.getStatus();
       const fetchedStatus = data?.worker?.isAvailable ?? data?.isAvailable ?? data?.isOnline ?? data?.status === 'online';
       if (data?.success || typeof fetchedStatus === 'boolean') {
         setIsOnline(Boolean(fetchedStatus));
@@ -83,27 +85,15 @@ export const useWorkerAvailability = (): UseWorkerAvailabilityReturn => {
     setError(null);
 
     try {
-      const response = await fetch(
-        `${process.env.REACT_APP_API_BASE}/workers/availability`,
-        {
-          method: 'PUT',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${accessToken}`,
-          },
-          body: JSON.stringify({ isAvailable: status }),
-        }
-      );
+      // ✅ Use api client with automatic token refresh
+      const response = await api.put('/workers/availability', { isAvailable: status });
 
-      if (!response.ok) {
-        throw new Error('Failed to update availability');
-      }
-
-      const data = await response.json();
-      if (data.success) {
+      if (response.data?.success) {
         setIsOnline(status);
         availabilityCacheManager.invalidate();
         console.log(`✅ Availability updated to: ${status}`);
+      } else {
+        throw new Error(response.data?.message || 'Failed to update availability');
       }
     } catch (err) {
       console.error('❌ Availability toggle error:', err);

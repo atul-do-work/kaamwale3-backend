@@ -18,7 +18,7 @@ import { MaterialIcons } from '@expo/vector-icons';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import * as Location from 'expo-location';
 import { useAuth } from '../context/AuthContext';
-import { SERVER_URL } from '../utils/config';
+import api from '../utils/api';
 
 interface Worker {
   phone: string;
@@ -49,7 +49,7 @@ export default function JobRequestModal({
   worker,
   onRequestSent,
 }: JobRequestModalProps) {
-  const { accessToken, user: authUser } = useAuth();
+  const { user: authUser } = useAuth();
 
   // Form state
   const [date, setDate] = useState(new Date());
@@ -160,24 +160,15 @@ export default function JobRequestModal({
         message: `Job request for ${worker.mainSkill || 'work'}`,
       };
 
-      const response = await fetch(`${SERVER_URL}/workers/request-job`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${accessToken}`,
-        },
-        body: JSON.stringify(requestData),
-      });
+      const response = await api.post('/workers/request-job', requestData);
 
-      const data = await response.json();
-
-      if (data.success) {
-        onRequestSent(worker.phone, data.requestId);
+      if (response.data?.success) {
+        onRequestSent(worker.phone, response.data.requestId);
         resetForm();
         onClose();
         Alert.alert('Success', 'Job request sent successfully!');
       } else {
-        Alert.alert('Error', data.message || 'Failed to send request');
+        Alert.alert('Error', response.data?.message || 'Failed to send request');
         resetForm(); // Reset on error to prevent confusion
       }
     } catch (error) {
@@ -187,7 +178,7 @@ export default function JobRequestModal({
     } finally {
       setLoading(false);
     }
-  }, [worker, location, date, startTime, endTime, accessToken, onRequestSent, resetForm, onClose]);
+  }, [worker, location, date, startTime, endTime, onRequestSent, resetForm, onClose]);
 
   const formatDate = (date: Date) => {
     return date.toLocaleDateString('en-IN', {

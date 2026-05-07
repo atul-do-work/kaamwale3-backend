@@ -1,7 +1,7 @@
 import { io } from "socket.io-client";
 import { SERVER_URL } from "./config";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { secureGet } from "./secureStore";
+import { getAuthAccessToken, setAuthAccessToken, getRefreshToken, clearAuthTokens } from "./secureStore";
 
 // ⚠️ Do NOT create multiple socket instances.
 // Create only ONE global instance and export it.
@@ -20,8 +20,8 @@ export const socket = io(SOCKET_URL, {
 });
 
 const refreshAuthToken = async () => {
-  let authToken = (await AsyncStorage.getItem("accessToken")) || (await AsyncStorage.getItem("token"));
-  const refreshToken = (await secureGet("refreshToken")) || (await AsyncStorage.getItem("refreshToken"));
+  let authToken = await getAuthAccessToken();
+  const refreshToken = await getRefreshToken();
 
   if (refreshToken) {
     try {
@@ -35,7 +35,7 @@ const refreshAuthToken = async () => {
         const data = await response.json();
         if (data.accessToken && typeof data.accessToken === "string") {
           authToken = data.accessToken;
-          await AsyncStorage.setItem("accessToken", data.accessToken);
+          await setAuthAccessToken(data.accessToken);
           console.log("🔄 Token refreshed successfully");
         }
       }
@@ -109,9 +109,15 @@ export const clearAllUserData = async () => {
     // Clear socket auth to prevent stale reconnect
     (socket.auth as any) = null;
 
-    // Clear all AsyncStorage keys
+    // Clear auth tokens from both stores
+    await clearAuthTokens();
+
+    // Clear all non-auth AsyncStorage keys
     const keys = await AsyncStorage.getAllKeys();
-    await AsyncStorage.multiRemove(keys);
+    const nonAuthKeys = keys.filter((key) => !['accessToken', 'token', 'refreshToken'].includes(key));
+    if (nonAuthKeys.length > 0) {
+      await AsyncStorage.multiRemove(nonAuthKeys);
+    }
 
     console.log("✅ All user data cleared successfully");
   } catch (err) {

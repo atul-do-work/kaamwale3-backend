@@ -15,7 +15,9 @@ import { MaterialIcons } from '@expo/vector-icons';
 import * as Location from 'expo-location';
 import { socket } from '../utils/socket';
 import { useAuth } from '../context/AuthContext';
+import { jobRequestCacheManager } from '../utils/jobRequestCacheManager';
 import { SERVER_URL } from '../utils/config';
+import api from '../utils/api';
 import JobRequestModal from './JobRequestModal';
 
 interface Worker {
@@ -43,7 +45,7 @@ export default function ViewWorkersModal({
   onClose,
   onRequestWorker,
 }: ViewWorkersModalProps) {
-  const { accessToken, user: authUser } = useAuth();
+  const { user: authUser, accessToken } = useAuth();
   const [workers, setWorkers] = useState<Worker[]>([]);
   const [loading, setLoading] = useState(false);
   const [userLocation, setUserLocation] = useState<{ lat: number; lon: number } | null>(null);
@@ -96,8 +98,53 @@ export default function ViewWorkersModal({
       setLoadingMore(false);
       setJobRequestPanelVisible(false);
       setSelectedWorker(null);
+      return;
     }
-  }, [visible]);
+
+    let isMounted = true;
+    const loadPendingRequests = async () => {
+      if (!accessToken) return;
+
+      try {
+        const data = await jobRequestCacheManager.getStatus(accessToken);
+        type JobRequest = {
+          status?: string;
+          workerPhone?: string;
+          worker?: { phone?: string };
+          phone?: string;
+          _id?: string;
+          requestId?: string;
+          id?: string;
+          createdAt?: string;
+        };
+        const requests: JobRequest[] = Array.isArray(data?.requests) ? data.requests : [];
+
+        const pendingMap = requests.reduce<Record<string, { requestId: string; timestamp: Date }>>((acc, req: JobRequest) => {
+          if (req?.status !== 'pending') return acc;
+          const workerPhone = String(req.workerPhone || req.worker?.phone || req.phone || '').trim();
+          if (!workerPhone) return acc;
+
+          acc[workerPhone] = {
+            requestId: String(req._id || req.requestId || req.id || ''),
+            timestamp: req.createdAt ? new Date(req.createdAt) : new Date(),
+          };
+          return acc;
+        }, {});
+
+        if (isMounted) {
+          setPendingRequests(pendingMap);
+        }
+      } catch (err) {
+        console.error('Error loading pending worker requests:', err);
+      }
+    };
+
+    loadPendingRequests();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [visible, accessToken]);
 
   useEffect(() => {
     if (!visible) return;
@@ -164,13 +211,11 @@ export default function ViewWorkersModal({
         if (wageMax && wageMax !== 999999) query += `&wageMax=${wageMax}`;
       }
 
-      const response = await fetch(`${SERVER_URL}/workers/nearby${query}`, {
-        headers: { Authorization: `Bearer ${accessToken}` },
-      });
+      // ✅ Use API client with token refresh interceptor
+      const response = await api.get(`/workers/nearby${query}`);
 
-      const data = await response.json();
-      if (data.success) {
-        const newWorkers = data.workers || [];
+      if (response.data?.success) {
+        const newWorkers = response.data.workers || [];
         setWorkers(pageNum === 1 ? newWorkers : (prev) => [...prev, ...newWorkers]);
         setHasMore(newWorkers.length === 20);
       }
@@ -197,6 +242,7 @@ export default function ViewWorkersModal({
   };
 
   const handleRequestSent = (workerPhone: string, requestId: string) => {
+    jobRequestCacheManager.invalidate();
     setPendingRequests((prev) => ({
       ...prev,
       [workerPhone]: { requestId, timestamp: new Date() },
@@ -206,13 +252,24 @@ export default function ViewWorkersModal({
   const getUniqueSkills = (): string[] => {
     const skillSet = new Set<string>();
     skillSet.add('All Skills');
+
     workers.forEach((worker) => {
-      if (worker.mainSkill) skillSet.add(worker.mainSkill);
-      if (worker.skills && Array.isArray(worker.skills)) {
-        worker.skills.forEach((skill) => skillSet.add(skill));
+      const mainSkill = worker.mainSkill?.trim();
+      if (mainSkill) skillSet.add(mainSkill);
+
+      if (Array.isArray(worker.skills)) {
+        worker.skills.forEach((skill) => {
+          const trimmed = String(skill || '').trim();
+          if (trimmed) skillSet.add(trimmed);
+        });
       }
     });
-    return Array.from(skillSet).sort();
+
+    return Array.from(skillSet).sort((a, b) => {
+      if (a === 'All Skills') return -1;
+      if (b === 'All Skills') return 1;
+      return a.localeCompare(b);
+    });
   };
 
   const wageRanges = ['All Wages', '100-300', '300-500', '500-1000', '1000+'];
@@ -319,16 +376,27 @@ export default function ViewWorkersModal({
             data={workers}
             keyExtractor={(item, index) => `${item.phone}-${index}`}
             refreshing={loading}
-            onRefresh={() => fetchNearbyWorkers(1)}
+            onRefresh={async () => {
+              setPage(1);
+              setWorkers([]);
+              setHasMore(true);
+              await fetchNearbyWorkers(1);
+            }}
             renderItem={({ item: worker }) => (
               <View style={styles.workerCard}>
                 <View style={styles.workerTopRow}>
                   <View style={styles.workerIdentity}>
                     <View style={styles.photoContainer}>
-                      <Image
-                        source={worker.profilePhoto ? { uri: worker.profilePhoto } : require('../assets/oip2.jpg')}
-                        style={styles.profilePhoto}
-                      />
+                      {worker.profilePhoto ? (
+                        <Image
+                          source={{ uri: worker.profilePhoto }}
+                          style={styles.profilePhoto}
+                        />
+                      ) : (
+                        <View style={[styles.profilePhoto, styles.profilePlaceholder]}>
+                          <MaterialIcons name="person" size={28} color="#6B7280" />
+                        </View>
+                      )}
                       {worker.isAvailable && (
                         <View style={styles.onlineIndicator}>
                           <View style={styles.onlineDot} />
@@ -607,6 +675,10 @@ const styles = StyleSheet.create({
     height: 54,
     borderRadius: 27,
     backgroundColor: '#E5E7EB',
+  },
+  profilePlaceholder: {
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   onlineIndicator: {
     position: 'absolute',

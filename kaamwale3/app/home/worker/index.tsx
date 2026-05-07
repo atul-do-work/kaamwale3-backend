@@ -20,6 +20,7 @@ import WorkerMap from "../../../components/WorkerMap";
 import FullContainer from "../../../components/FullContainer";
 import * as Location from "expo-location";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import { getAuthAccessToken, getRefreshToken, setAuthAccessToken } from "../../../utils/secureStore";
 import { socket } from "../../../utils/socket"; // ✅ Use global socket instead
 import { API_BASE } from "../../../utils/config";
 import { availabilityCacheManager } from "../../../utils/availabilityCacheManager"; // ✅ BUG #4: Smart caching
@@ -126,6 +127,7 @@ interface Job {
   declinedBy?: string[];
   status?: string;
   acceptedBy?: string;
+  expiresAt?: number | string; // optional server-provided expiry (ms since epoch or ISO)
 }
 
 interface JobItemProps {
@@ -283,6 +285,7 @@ function WorkerHome() {
   // Backend is authoritative for job expiration - don't auto-decline on frontend
   const [timer, setTimer] = useState<number>(AUTO_DECLINE_SECONDS);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [offerExpired, setOfferExpired] = useState<boolean>(false);
   const currentJobRef = useRef<Job | null>(null);
   const displayedJobIds = useRef<Set<string>>(new Set()); // ✅ Track displayed jobs to prevent duplicates
   const fetchAbortControllers = useRef<Map<string, AbortController>>(new Map()); // ✅ Track fetch abort controllers
@@ -448,7 +451,7 @@ function WorkerHome() {
           if (userPhone) {
             let authToken = token;
             if (!authToken) {
-              authToken = (await AsyncStorage.getItem("token")) || (await AsyncStorage.getItem("accessToken"));
+              authToken = await getAuthAccessToken();
             }
 
             if (authToken) {
@@ -479,7 +482,7 @@ function WorkerHome() {
   // ✅ TOKEN REFRESH HELPER - Attempt to refresh expired token
   const refreshAccessToken = async (maxRetries = 3): Promise<string | null> => {
     try {
-      const refreshToken = await AsyncStorage.getItem('refreshToken');
+      const refreshToken = await getRefreshToken();
       if (!refreshToken) {
         console.warn('⚠️ No refresh token available');
         return null;
@@ -505,8 +508,7 @@ function WorkerHome() {
           if (response.ok) {
             const data = await response.json();
             if (data.accessToken) {
-              await AsyncStorage.setItem('token', data.accessToken);
-              await AsyncStorage.setItem('accessToken', data.accessToken);
+              await setAuthAccessToken(data.accessToken);
               console.log('✅ Token refreshed successfully');
               return data.accessToken;
             }
@@ -604,15 +606,7 @@ function WorkerHome() {
         console.log("[WorkerHome] Loading worker data and connecting socket...");
         
         const userStr = await AsyncStorage.getItem("user");
-        // ✅ Try multiple keys for token with fallback
-        let storedToken = await AsyncStorage.getItem("token");
-        if (!storedToken) {
-          storedToken = await AsyncStorage.getItem("accessToken");
-          if (storedToken) {
-            console.log('ℹ️ Using accessToken key (migrating to token key)');
-            await AsyncStorage.setItem("token", storedToken);
-          }
-        }
+        let storedToken = await getAuthAccessToken();
         const profilePhotoStr = await AsyncStorage.getItem("profilePhoto"); // ✅ Load profile photo
 
         if (userStr) {
@@ -700,14 +694,12 @@ function WorkerHome() {
               const lon = loc.coords.longitude;
               console.log(`[WorkerHome] Got location: ${lat}, ${lon}`);
 
-              // 🔔 Register for push notifications
-              console.log("[WorkerHome] Registering for push notifications...");
               // Register worker with backend
               console.log("[WorkerHome] Emitting registerWorker event...");
               socket.emit("registerWorker", {
                 lat,
                 lon,
-                workerType: "General",
+                workerType: workerType || "",
               });
 
               console.log("✅ Worker auto-registered with location:", { lat, lon });
@@ -955,10 +947,22 @@ function WorkerHome() {
         // ✅ Mark job as displayed
         displayedJobIds.current.add(data._id);
 
-        setCurrentJob(normalizedJob);
-        currentJobRef.current = normalizedJob; // ✅ Update ref to track current job
+        // attach expiresAt from server if provided
+        const expiresAt = data.expiresAt ? new Date(data.expiresAt).getTime() : Date.now() + AUTO_DECLINE_SECONDS * 1000;
+        const jobWithExpiry = { ...normalizedJob, expiresAt } as Job & { expiresAt?: number };
+
+        setCurrentJob(jobWithExpiry);
+        currentJobRef.current = jobWithExpiry; // ✅ Update ref to track current job
+        setOfferExpired(false); // reset expired flag for fresh job
         stopLocationTracking(); // Stop tracking until job accepted
-        startTimer();
+
+        try {
+          await AsyncStorage.setItem('currentOffer', JSON.stringify({ job: normalizedJob, expiresAt }));
+        } catch (err) {
+          console.warn('Failed to persist current offer from socket:', err);
+        }
+
+        startTimer(expiresAt);
 
         // � Trigger vibration when job arrives
         await triggerJobAlert();
@@ -1039,6 +1043,25 @@ function WorkerHome() {
       }
     };
 
+    const handleJobExpired = async (data: any) => {
+      try {
+        console.log('📩 SOCKET: job expired event', data);
+        const expiredJobId = String(data._id || data.id || data.jobId || '').trim();
+        const currentJobId = String(currentJob?._id || currentJob?.id || '').trim();
+        if (currentJobId && expiredJobId && expiredJobId === currentJobId) {
+          try { cleanupJobAlert(); } catch (e) {}
+          if (timerRef.current) clearInterval(timerRef.current);
+          setOfferExpired(true);
+          displayedJobIds.current.delete(expiredJobId);
+          setCurrentJob(null);
+          try { await AsyncStorage.removeItem('currentOffer'); } catch (e) { console.warn('Failed to remove persisted offer:', e); }
+          Alert.alert('Offer Expired', 'This job offer has expired.');
+        }
+      } catch (err) {
+        console.warn('Error handling jobExpired in main socket handler', err);
+      }
+    };
+
     const handleJobRequest = (data: any) => {
       try {
         console.log("📩 SOCKET: job request received", data);
@@ -1114,11 +1137,7 @@ function WorkerHome() {
           socket.emit("registerWorker", {
             lat: currentLocation.lat,
             lon: currentLocation.lon,
-            workerType: workerType || "General",
-          });
-          socket.emit("updateWorkerLocation", {
-            lat: currentLocation.lat,
-            lon: currentLocation.lon,
+            workerType: workerType || "",
           });
         }
 
@@ -1164,6 +1183,7 @@ function WorkerHome() {
     socket.on("jobUpdated", handleJobUpdated);
     socket.on("jobAccepted", handleJobAccepted);
     socket.on("jobCancelled", handleJobCancelled);
+    socket.on('jobExpired', handleJobExpired);
     socket.on("walletUpdated", handleWalletUpdatedForStats);
     socket.on("notificationCountUpdated", handleNotificationCountUpdate);
     socket.on("workerStatusUpdate", handleWorkerStatusUpdate); // ✅ BUG #4: Listen for status changes
@@ -1171,18 +1191,29 @@ function WorkerHome() {
     socket.on("workerControlUpdated", handleWorkerControlUpdated);
     socket.on("jobRequest", handleJobRequest);
 
+    // Stop polling when socket connects; start polling when socket disconnects
+    const handleSocketConnect = () => stopPollingForJob();
+    const handleSocketDisconnect = () => {
+      if (currentJobRef.current) startPollingForJob(currentJobRef.current._id);
+    };
+    socket.on('connect', handleSocketConnect);
+    socket.on('disconnect', handleSocketDisconnect);
+
     return () => {
       stopLocationTracking();
       socket.off("newJob", handleNewJob);
       socket.off("jobUpdated", handleJobUpdated);
       socket.off("jobAccepted", handleJobAccepted);
       socket.off("jobCancelled", handleJobCancelled);
+      socket.off('jobExpired', handleJobExpired);
       socket.off("walletUpdated", handleWalletUpdatedForStats);
       socket.off("notificationCountUpdated", handleNotificationCountUpdate);
-      socket.off("workerStatusUpdate", handleWorkerStatusUpdate); // ✅ BUG #4
+      socket.off("workerStatusUpdate", handleWorkerStatusUpdate);
       socket.off("profilePhotoUpdated", handleProfilePhotoUpdate);
       socket.off("workerControlUpdated", handleWorkerControlUpdated);
       socket.off("jobRequest", handleJobRequest);
+      socket.off('connect', handleSocketConnect);
+      socket.off('disconnect', handleSocketDisconnect);
       console.log("[WorkerHome] job listeners removed (unmounted)");
     };
   }, [currentLocation, workerName, currentUserPhone, workerType, currentJob]); // ✅ Track currentJob to re-subscribe when job changes
@@ -1507,7 +1538,7 @@ function WorkerHome() {
   const toggleOnlineStatus = async () => {
     if (togglingStatus) return; // Prevent multiple clicks
     
-    let authToken = token || (await AsyncStorage.getItem("accessToken")) || (await AsyncStorage.getItem("token"));
+    let authToken = token || await getAuthAccessToken();
     
     // Check if user is trying to go online
     if (!isOnline) {
@@ -1689,7 +1720,7 @@ function WorkerHome() {
         socket.emit("registerWorker", {
           lat: locationToEmit.lat,
           lon: locationToEmit.lon,
-          workerType: workerType || "General",
+          workerType: workerType || "",
         });
         socket.emit("updateWorkerLocation", {
           lat: locationToEmit.lat,
@@ -1713,20 +1744,45 @@ function WorkerHome() {
 
   // 🔐 CRITICAL FIX #4: Timer counts down for UI display, but NO auto-decline
   // Backend manages job expiration - frontend just shows the countdown
-  const startTimer = () => {
+  // startTimer optionally accepts a server-provided expiry timestamp (ms since epoch)
+  const startTimer = (expiresAt?: number) => {
     if (timerRef.current) clearInterval(timerRef.current);
-    setTimer(AUTO_DECLINE_SECONDS);
+    // clear any previous expiry flag and start fresh
+    setOfferExpired(false);
+    // Determine initial seconds remaining from expiresAt if provided
+    let initial = AUTO_DECLINE_SECONDS;
+    if (expiresAt) {
+      const remainingMs = expiresAt - Date.now();
+      initial = Math.max(0, Math.ceil(remainingMs / 1000));
+    }
+    setTimer(initial);
 
     timerRef.current = setInterval(() => {
       setTimer(prev => {
-        if (prev <= 1) {
+        const next = Math.max(prev - 1, 0);
+        if (next === 0) {
           if (timerRef.current) clearInterval(timerRef.current);
-          // 🔐 CRITICAL FIX #4: DO NOT auto-decline on frontend
-          // Backend will handle job expiration via scheduler
-          // Frontend just shows the countdown and lets user decide
-          console.log('⏰ Job offer window closed, awaiting backend expiration check');
+          // mark locally expired and reconcile with backend
+          setOfferExpired(true);
+          console.log('⏰ Local timer reached 0 — reconciling with backend for job expiry');
+
+          (async () => {
+            try {
+              const jobId = currentJobRef.current?._id;
+              if (!jobId) return;
+              const updated = await fetchJobById(jobId);
+              if (!updated || updated.status === 'expired' || updated.status === 'cancelled') {
+                clearCurrentJobAndDedup(jobId);
+                Alert.alert('Offer Expired', 'This job offer has expired.');
+              } else {
+                console.log('Timer hit 0 but backend still shows pending — awaiting server event');
+              }
+            } catch (err) {
+              console.warn('Error reconciling job after timer expiry', err);
+            }
+          })();
         }
-        return Math.max(prev - 1, 0);
+        return next;
       });
     }, 1000);
   };
@@ -1766,14 +1822,25 @@ function WorkerHome() {
       // ✅ Mark as displayed before showing
       displayedJobIds.current.add(first._id);
 
+      // determine server-provided expiry if present; fallback to client AUTO_DECLINE
+      const expiresAt = first.expiresAt ? new Date(first.expiresAt).getTime() : Date.now() + AUTO_DECLINE_SECONDS * 1000;
+
       setCurrentJob({
         ...first,
         location,
         attendanceStatus: null,
         paymentStatus: null,
+        expiresAt,
       });
+      setOfferExpired(false);
 
-      startTimer();
+      try {
+        await AsyncStorage.setItem('currentOffer', JSON.stringify({ job: first, expiresAt }));
+      } catch (err) {
+        console.warn('Failed to persist current offer:', err);
+      }
+
+      startTimer(expiresAt);
     } catch (err: any) {
       if (err.name === 'AbortError') {
         console.log('📍 Fetch nearby jobs aborted (component unmounted)');
@@ -1798,6 +1865,64 @@ function WorkerHome() {
     }
   };
 
+  // ---------------- POLLING FALLBACK (when sockets are unreliable) ----------------
+  const pollingIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const stopPollingForJob = () => {
+    if (pollingIntervalRef.current) {
+      clearInterval(pollingIntervalRef.current);
+      pollingIntervalRef.current = null;
+      console.log('🛑 Stopped polling for job updates');
+    }
+  };
+
+  const startPollingForJob = (jobId?: string) => {
+    if (!jobId) return;
+    if (pollingIntervalRef.current) return; // already polling
+
+    console.log(`🔁 Starting polling fallback for job ${jobId}`);
+    pollingIntervalRef.current = setInterval(async () => {
+      try {
+        const updated = await fetchJobById(jobId);
+        if (!updated) return;
+
+        // If job is no longer pending, handle accordingly and stop polling
+        const status = (updated.status || '').toLowerCase();
+        if (status && status !== 'pending') {
+          stopPollingForJob();
+          // Expired or cancelled
+          if (status === 'expired' || status === 'cancelled') {
+            console.log(`🔔 Polled job ${jobId} is ${status}`);
+            if (currentJobRef.current && currentJobRef.current._id === jobId) {
+              if (timerRef.current) clearInterval(timerRef.current);
+              setOfferExpired(true);
+              clearCurrentJobAndDedup(jobId);
+              Alert.alert('Offer Expired', 'This job offer has expired.');
+            }
+            return;
+          }
+
+          // Accepted — determine whether accepted by this worker
+          if (status === 'accepted') {
+            const acceptedByThisWorker = String(updated.acceptedBy || '').trim() === String(currentUserPhone || '').trim() ||
+              !!getWorkerEntryForPhone(updated, currentUserPhone);
+
+            if (acceptedByThisWorker) {
+              clearCurrentJobAndDedup(jobId);
+              Alert.alert('✅ Job Accepted', 'You accepted this job!');
+            } else {
+              clearCurrentJobAndDedup(jobId);
+              Alert.alert('Notice', 'This job was accepted by someone else.');
+            }
+            return;
+          }
+        }
+      } catch (err) {
+        console.warn('Polling fallback error:', err);
+      }
+    }, 3000);
+  };
+
   // ---------------- REQUEST LOCATION ----------------
   useEffect(() => {
     let mounted = true;
@@ -1818,7 +1943,7 @@ function WorkerHome() {
       socket.emit("registerWorker", {
         lat: coords.lat,
         lon: coords.lon,
-        workerType: workerType || "General",
+        workerType: workerType || "",
       });
       socket.emit("updateWorkerLocation", {
         lat: coords.lat,
@@ -1838,31 +1963,37 @@ function WorkerHome() {
     };
   }, [workerName, token, workerType]);
 
-  // ---------------- LISTEN TO JOB UPDATES ----------------
+  // ---------------- RECOVER PERSISTED OFFER ----------------
   useEffect(() => {
-    const listener = async () => {
-      const job = currentJobRef.current;
-      if (!job) return;
+    (async () => {
+      try {
+        const saved = await AsyncStorage.getItem('currentOffer');
+        if (!saved) return;
+        const parsed = JSON.parse(saved);
+        if (!parsed || !parsed.job) return;
 
-      const updatedJob = await fetchJobById(job._id);
-      if (!updatedJob) return;
+        const expiresAt: number = parsed.expiresAt || (Date.now() + AUTO_DECLINE_SECONDS * 1000);
+        if (expiresAt <= Date.now()) {
+          // stale
+          await AsyncStorage.removeItem('currentOffer');
+          return;
+        }
 
-      if (
-        isCurrentWorkerPaid(updatedJob, currentUserPhone) &&
-        !isCurrentWorkerPaid(job, currentUserPhone)
-      ) {
-        Alert.alert("Payment Received", `You have received payment for ${updatedJob.title}`);
+        // restore shown job and resume timer
+        const job = parsed.job as Job;
+        setCurrentJob({ ...job, expiresAt });
+        setOfferExpired(false);
+        displayedJobIds.current.add(job._id);
+        startTimer(expiresAt);
+        console.log('🔁 Recovered persisted offer and resumed timer');
+      } catch (err) {
+        console.warn('Failed to recover persisted offer:', err);
       }
-
-      if (updatedJob.attendanceStatus && updatedJob.attendanceStatus !== job.attendanceStatus) {
-        Alert.alert("Attendance Updated", `Attendance for ${updatedJob.title} is ${updatedJob.attendanceStatus}`);
-      }
-
-      setCurrentJob(updatedJob);
-    };
-
-    return () => {};
+    })();
   }, []);
+
+  // NOTE: jobUpdated/jobAccepted/jobCancelled/jobExpired are handled
+  // centrally in the main socket registration above to avoid duplicate listeners.
 
   // ================== CLEAR JOB HELPER ==================
   const clearCurrentJobAndDedup = (jobId: string | null = null) => {
@@ -1872,6 +2003,14 @@ function WorkerHome() {
       console.log(`🗑️ Cleared job ${idToRemove} from deduplication set`);
     }
     setCurrentJob(null);
+    // remove persisted offer if any
+    (async () => {
+      try {
+        await AsyncStorage.removeItem('currentOffer');
+      } catch (err) {
+        console.warn('Failed to remove persisted offer:', err);
+      }
+    })();
   };
 
   // ---------------- HANDLE ACCEPT ----------------
@@ -1888,6 +2027,23 @@ function WorkerHome() {
   };
 
   const handleAccept = async (jobId: string) => {
+    // Prevent accepting if we've locally marked the offer expired
+    if (offerExpired) {
+      console.log('⏳ Attempted accept after local expiry — reconciling with backend');
+      try {
+        const updated = await fetchJobById(jobId);
+        if (!updated || updated.status === 'expired' || updated.status === 'cancelled') {
+          clearCurrentJobAndDedup(jobId);
+          Alert.alert('Offer Expired', 'This job offer has expired.');
+          return;
+        }
+        Alert.alert('Please try again', 'The offer appears to still be pending. Please try accepting again.');
+      } catch (err) {
+        console.warn('Error reconciling on accept after expiry', err);
+      }
+      return;
+    }
+
     if (pendingJobAction) {
       console.log("⚠️ Accept already in progress, ignoring duplicate tap");
       return;
@@ -2200,28 +2356,28 @@ function WorkerHome() {
                 {/* Timer */}
                 <View style={styles.timerBox}>
                   <MaterialIcons name="schedule" size={20} color="#fff" />
-                  <Text style={styles.timerText}>Auto-decline in {timer}s</Text>
+                  <Text style={styles.timerText}>{offerExpired ? 'Offer expired' : `Auto-decline in ${timer}s`}</Text>
                 </View>
               </ScrollView>
 
               {/* Action Buttons */}
               <View style={styles.buttonRow}>
                 <TouchableOpacity
-                  style={[styles.declineButton, pendingJobAction ? { opacity: 0.5 } : {}]}
+                  style={[styles.declineButton, (pendingJobAction || offerExpired) ? { opacity: 0.5 } : {}]}
                   onPress={() => handleDecline(currentJob._id)}
-                  disabled={pendingJobAction}
+                  disabled={pendingJobAction || offerExpired}
                 >
                   <MaterialIcons name="close" size={20} color="#fff" />
-                  <Text style={styles.buttonText}>{pendingJobAction ? 'Processing...' : 'Decline'}</Text>
+                  <Text style={styles.buttonText}>{pendingJobAction ? 'Processing...' : offerExpired ? 'Expired' : 'Decline'}</Text>
                 </TouchableOpacity>
 
                 <TouchableOpacity
-                  style={[styles.acceptButton, pendingJobAction ? { opacity: 0.5 } : {}]}
+                  style={[styles.acceptButton, (pendingJobAction || offerExpired) ? { opacity: 0.5 } : {}]}
                   onPress={() => handleAccept(currentJob._id)}
-                  disabled={pendingJobAction}
+                  disabled={pendingJobAction || offerExpired}
                 >
                   <MaterialIcons name="check" size={20} color="#fff" />
-                  <Text style={styles.buttonText}>{pendingJobAction ? 'Processing...' : 'Accept'}</Text>
+                  <Text style={styles.buttonText}>{pendingJobAction ? 'Processing...' : offerExpired ? 'Expired' : 'Accept'}</Text>
                 </TouchableOpacity>
               </View>
             </View>
@@ -2590,10 +2746,10 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     alignItems: "center",
     paddingHorizontal: 20,
-    paddingVertical: 15,
-    paddingTop: 25, // ✅ Added top padding to move content down
+    paddingVertical: 10,
     backgroundColor: "#fff",
     borderBottomWidth: 0,
+    minHeight: 60,
   },
   // ✅ Profile Photo Styles
   headerProfileContainer: {

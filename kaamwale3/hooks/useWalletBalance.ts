@@ -36,7 +36,8 @@ export const useWalletBalance = (): UseWalletBalanceReturn => {
     setError(null);
 
     try {
-      const data = await walletCacheManager.getStatus(accessToken);
+      // ✅ No need to pass accessToken - api client handles it automatically
+      const data = await walletCacheManager.getStatus();
       if (data?.success) {
         const resolvedBalance = data.balance ?? data.amount ?? data.pocketBalance ?? 0;
         setBalance(resolvedBalance);

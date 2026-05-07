@@ -18,7 +18,6 @@ import { MaterialIcons } from "@expo/vector-icons";
 if (Platform.OS === "android" && UIManager.setLayoutAnimationEnabledExperimental) {
   UIManager.setLayoutAnimationEnabledExperimental(true);
 }
-import { LinearGradient } from "expo-linear-gradient";
 import { useRouter } from "expo-router";
 
 interface FAQItem {
@@ -83,12 +82,6 @@ const faqData: FAQItem[] = [
     answer: "Open Jobs tab → Browse available positions near you → Click to view details → Apply to jobs you're interested in.",
   },
   {
-    id: "9",
-    category: "Workers",
-    question: "How are workers rated?",
-    answer: "After job completion, contractors rate your work 1-5 stars with feedback. This affects your ranking.",
-  },
-  {
     id: "10",
     category: "Workers",
     question: "How do I get paid?",
@@ -125,32 +118,6 @@ const faqData: FAQItem[] = [
     category: "Payments",
     question: "What are transaction fees?",
     answer: "Deposits are free. Withdrawals have a small fee (2-3%) depending on your withdrawal method.",
-  },
-
-  // Support & Issues
-  {
-    id: "16",
-    category: "Support",
-    question: "How do I report a problem?",
-    answer: "Go to Settings → Support Tickets → Submit New Ticket → Describe the issue with screenshots if needed.",
-  },
-  {
-    id: "17",
-    category: "Support",
-    question: "What is the response time for support?",
-    answer: "We respond to all tickets within 24 hours. Critical issues are handled within 2-4 hours.",
-  },
-  {
-    id: "18",
-    category: "Support",
-    question: "How do I dispute a rating?",
-    answer: "If you believe a rating is unfair, file a support ticket with evidence. Our team will review and take action if needed.",
-  },
-  {
-    id: "19",
-    category: "Support",
-    question: "What should I do if I have a safety concern?",
-    answer: "Immediately contact support with details. We have a dedicated safety team that responds to all concerns urgently.",
   },
 ];
 
@@ -213,51 +180,48 @@ export default function HelpCentre() {
   return (
     <SafeAreaView style={styles.container} edges={['top', 'left', 'right']}>
       <ScrollView style={styles.container} showsVerticalScrollIndicator={false}>
-      {/* Header with Gradient */}
-      <LinearGradient
-        colors={["#1a2f4d", "#2d5a8c"]}
-        start={{ x: 0, y: 0 }}
-        end={{ x: 1, y: 1 }}
-        style={[styles.header, { paddingTop: 10 }]}
-      >
-        <TouchableOpacity
-          style={styles.backButton}
-          onPress={() => router.back()}
-        >
-          <MaterialIcons name="arrow-back" size={24} color="#fff" />
-        </TouchableOpacity>
-        <View style={styles.headerContent}>
-          <Text style={styles.headerTitle}>Help Centre</Text>
-          <Text style={styles.headerSubtitle}>We're here to help you succeed</Text>
+        {/* Header with rounded corners and dark blue */}
+        <View style={styles.headerWrapper}>
+          <View style={styles.header}>
+            <TouchableOpacity
+              style={styles.backButton}
+              onPress={() => router.back()}
+            >
+              <MaterialIcons name="arrow-back" size={24} color="#fff" />
+            </TouchableOpacity>
+            <View style={styles.headerContent}>
+              <Text style={styles.headerTitle}>Help Centre</Text>
+              <Text style={styles.headerSubtitle}>Answers & support</Text>
+            </View>
+          </View>
         </View>
-      </LinearGradient>
 
-      {/* Quick Support Cards */}
+      <Text style={styles.sectionTitle}>Quick Support</Text>
       <View style={styles.quickSupportContainer}>
-        <TouchableOpacity style={styles.quickCard} onPress={handleCallSupport}>
-          <MaterialIcons name="phone" size={28} color="#fff" />
+        <TouchableOpacity style={[styles.quickCard, styles.quickCardPrimary]} onPress={handleCallSupport}>
+          <MaterialIcons name="phone" size={26} color="#fff" />
           <Text style={styles.quickCardText}>Call Us</Text>
           <Text style={styles.quickCardSub}>+91 9876 543210</Text>
         </TouchableOpacity>
 
-        <TouchableOpacity style={styles.quickCard} onPress={handleEmailSupport}>
-          <MaterialIcons name="email" size={28} color="#fff" />
+        <TouchableOpacity style={[styles.quickCard, styles.quickCardSecondary]} onPress={handleEmailSupport}>
+          <MaterialIcons name="email" size={26} color="#fff" />
           <Text style={styles.quickCardText}>Email</Text>
           <Text style={styles.quickCardSub}>support@kaamwale.com</Text>
         </TouchableOpacity>
 
-        <TouchableOpacity style={styles.quickCard} onPress={handleContactSupport}>
-          <MaterialIcons name="chat" size={28} color="#fff" />
-          <Text style={styles.quickCardText}>Chat</Text>
-          <Text style={styles.quickCardSub}>Support Ticket</Text>
+        <TouchableOpacity style={[styles.quickCard, styles.quickCardTertiary]} onPress={handleContactSupport}>
+          <MaterialIcons name="chat" size={26} color="#fff" />
+          <Text style={styles.quickCardText}>Support Ticket</Text>
+          <Text style={styles.quickCardSub}>Chat with us</Text>
         </TouchableOpacity>
       </View>
 
       {/* Search Bar */}
       <View style={styles.searchContainer}>
-        <MaterialIcons name="search" size={22} color="#888" />
+        <MaterialIcons name="search" size={20} color="#667eea" />
         <TextInput
-          placeholder="Search FAQs..."
+          placeholder="Search FAQs, topics or guides"
           style={styles.searchInput}
           value={searchText}
           onChangeText={setSearchText}
@@ -265,7 +229,7 @@ export default function HelpCentre() {
         />
         {searchText !== "" && (
           <TouchableOpacity onPress={() => setSearchText("")}>
-            <MaterialIcons name="close" size={22} color="#888" />
+            <MaterialIcons name="close" size={20} color="#667eea" />
           </TouchableOpacity>
         )}
       </View>
@@ -346,19 +310,12 @@ export default function HelpCentre() {
           Contact our support team for immediate assistance
         </Text>
 
-        <LinearGradient
-          colors={["#667eea", "#764ba2"]}
-          start={{ x: 0, y: 0 }}
-          end={{ x: 1, y: 1 }}
-          style={styles.contactButton}
-        >
-          <TouchableOpacity onPress={handleContactSupport}>
-            <View style={styles.contactButtonContent}>
-              <MaterialIcons name="support-agent" size={20} color="#fff" />
-              <Text style={styles.contactButtonText}>Contact Support</Text>
-            </View>
-          </TouchableOpacity>
-        </LinearGradient>
+        <TouchableOpacity style={styles.contactButton} onPress={handleContactSupport}>
+          <View style={styles.contactButtonContent}>
+            <MaterialIcons name="support-agent" size={20} color="#fff" />
+            <Text style={styles.contactButtonText}>Contact Support</Text>
+          </View>
+        </TouchableOpacity>
       </View>
 
       {/* Footer */}
@@ -397,95 +354,120 @@ export default function HelpCentre() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: "#F8F9FA",
+    backgroundColor: "#F1F5F9",
+  },
+  headerWrapper: {
+    paddingHorizontal: 16,
+    paddingTop: 14,
+    paddingBottom: 16,
+    backgroundColor: "#F1F5F9",
   },
   header: {
-    // ✅ paddingTop is now dynamic (set in component with insets.top)
-    paddingBottom: 30,
-    paddingHorizontal: 20,
+    backgroundColor: "#1a2f4d",
+    borderRadius: 20,
+    paddingHorizontal: 16,
+    paddingVertical: 16,
     flexDirection: "row",
-    alignItems: "flex-start",
+    alignItems: "center",
   },
   backButton: {
-    marginRight: 16,
-    marginTop: 4,
+    marginRight: 12,
+    padding: 6,
   },
   headerContent: {
     flex: 1,
   },
   headerTitle: {
-    fontSize: 28,
+    fontSize: 20,
     fontWeight: "700",
     color: "#fff",
-    marginBottom: 6,
+    marginBottom: 2,
   },
   headerSubtitle: {
-    fontSize: 14,
+    fontSize: 13,
     color: "rgba(255,255,255,0.8)",
+  },
+  sectionTitle: {
+    marginTop: 18,
+    marginHorizontal: 16,
+    fontSize: 16,
+    fontWeight: "700",
+    color: "#1a2f4d",
+    marginBottom: 14,
   },
   quickSupportContainer: {
     flexDirection: "row",
     paddingHorizontal: 16,
-    marginTop: -25,
     marginBottom: 20,
     gap: 12,
   },
   quickCard: {
     flex: 1,
-    backgroundColor: "#667eea",
-    borderRadius: 12,
+    minHeight: 120,
+    borderRadius: 16,
     padding: 16,
-    alignItems: "center",
-    shadowColor: "#667eea",
-    shadowOpacity: 0.3,
+    alignItems: "flex-start",
+    justifyContent: "space-between",
+    shadowColor: "#000",
+    shadowOpacity: 0.1,
     shadowOffset: { width: 0, height: 4 },
-    shadowRadius: 8,
-    elevation: 5,
+    shadowRadius: 12,
+    elevation: 4,
+  },
+  quickCardPrimary: {
+    backgroundColor: "#3b82f6",
+  },
+  quickCardSecondary: {
+    backgroundColor: "#10b981",
+  },
+  quickCardTertiary: {
+    backgroundColor: "#8b5cf6",
+    marginRight: 0,
   },
   quickCardText: {
-    fontSize: 13,
-    fontWeight: "600",
+    fontSize: 14,
+    fontWeight: "700",
     color: "#fff",
-    marginTop: 8,
+    marginTop: 12,
   },
   quickCardSub: {
-    fontSize: 10,
-    color: "rgba(255,255,255,0.7)",
-    marginTop: 2,
+    fontSize: 11,
+    color: "rgba(255,255,255,0.85)",
+    marginTop: 4,
   },
   searchContainer: {
     flexDirection: "row",
     alignItems: "center",
     backgroundColor: "#fff",
-    borderRadius: 12,
+    borderRadius: 14,
     paddingHorizontal: 14,
     paddingVertical: 12,
     marginHorizontal: 16,
-    marginBottom: 16,
+    marginBottom: 18,
     shadowColor: "#000",
-    shadowOpacity: 0.08,
+    shadowOpacity: 0.06,
     shadowOffset: { width: 0, height: 2 },
-    shadowRadius: 4,
+    shadowRadius: 8,
     elevation: 2,
   },
   searchInput: {
     flex: 1,
-    marginHorizontal: 10,
-    fontSize: 16,
+    marginHorizontal: 12,
+    fontSize: 15,
     color: "#333",
   },
   categoriesScroll: {
     paddingHorizontal: 16,
-    marginBottom: 16,
+    marginBottom: 18,
   },
   categoryBadge: {
     backgroundColor: "#fff",
-    borderRadius: 20,
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    marginRight: 8,
+    borderRadius: 22,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    marginRight: 10,
     borderWidth: 1,
-    borderColor: "#ddd",
+    borderColor: "#E5E7EB",
   },
   categoryBadgeActive: {
     backgroundColor: "#1a2f4d",
@@ -493,7 +475,7 @@ const styles = StyleSheet.create({
   },
   categoryText: {
     fontSize: 13,
-    fontWeight: "500",
+    fontWeight: "600",
     color: "#666",
   },
   categoryTextActive: {
@@ -501,17 +483,17 @@ const styles = StyleSheet.create({
   },
   faqContainer: {
     paddingHorizontal: 16,
-    marginBottom: 20,
+    marginBottom: 22,
   },
   faqItem: {
     backgroundColor: "#fff",
-    borderRadius: 12,
+    borderRadius: 14,
     marginBottom: 12,
     overflow: "hidden",
     shadowColor: "#000",
-    shadowOpacity: 0.08,
+    shadowOpacity: 0.04,
     shadowOffset: { width: 0, height: 2 },
-    shadowRadius: 4,
+    shadowRadius: 8,
     elevation: 2,
   },
   faqQuestion: {
@@ -519,11 +501,11 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "space-between",
     paddingHorizontal: 16,
-    paddingVertical: 14,
+    paddingVertical: 16,
   },
   questionContent: {
     flex: 1,
-    marginRight: 12,
+    marginRight: 14,
   },
   categoryLabel: {
     fontSize: 11,
@@ -541,7 +523,7 @@ const styles = StyleSheet.create({
   faqAnswer: {
     backgroundColor: "#f8f9fa",
     borderTopWidth: 1,
-    borderTopColor: "#eee",
+    borderTopColor: "#E5E7EB",
     paddingHorizontal: 16,
     paddingVertical: 14,
   },
@@ -567,35 +549,42 @@ const styles = StyleSheet.create({
   },
   stillNeedHelp: {
     marginHorizontal: 16,
-    marginBottom: 20,
+    marginBottom: 22,
     backgroundColor: "#fff",
-    borderRadius: 12,
+    borderRadius: 16,
     padding: 20,
     alignItems: "center",
+    shadowColor: "#000",
+    shadowOpacity: 0.04,
+    shadowOffset: { width: 0, height: 2 },
+    shadowRadius: 8,
+    elevation: 2,
   },
   stillNeedHelpTitle: {
     fontSize: 18,
     fontWeight: "700",
     color: "#1a2f4d",
-    marginBottom: 6,
+    marginBottom: 8,
   },
   stillNeedHelpSub: {
     fontSize: 13,
     color: "#666",
     marginBottom: 16,
     textAlign: "center",
+    lineHeight: 20,
   },
   contactButton: {
     width: "100%",
-    borderRadius: 12,
+    borderRadius: 14,
     overflow: "hidden",
+    backgroundColor: "#1a2f4d",
   },
   contactButtonContent: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
     paddingVertical: 14,
-    gap: 8,
+    gap: 10,
   },
   contactButtonText: {
     fontSize: 15,
@@ -604,16 +593,21 @@ const styles = StyleSheet.create({
   },
   footer: {
     marginHorizontal: 16,
-    marginBottom: 20,
-    gap: 14,
+    marginBottom: 22,
+    gap: 12,
   },
   footerRow: {
     flexDirection: "row",
     backgroundColor: "#fff",
-    borderRadius: 12,
-    padding: 14,
+    borderRadius: 14,
+    padding: 16,
     alignItems: "flex-start",
-    gap: 12,
+    gap: 14,
+    shadowColor: "#000",
+    shadowOpacity: 0.04,
+    shadowOffset: { width: 0, height: 2 },
+    shadowRadius: 8,
+    elevation: 2,
   },
   footerText: {
     flex: 1,
@@ -622,10 +616,11 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: "600",
     color: "#1a2f4d",
-    marginBottom: 2,
+    marginBottom: 3,
   },
   footerValue: {
     fontSize: 12,
     color: "#888",
+    lineHeight: 18,
   },
 });

@@ -64,7 +64,7 @@ class JobRequestCacheManager {
     this.isFetching = true;
     this.fetchPromise = (async () => {
       try {
-        const response = await fetch(`${API_BASE}/job-requests`, {
+        const response = await fetch(`${API_BASE}/workers/job-requests`, {
           headers: { Authorization: `Bearer ${accessToken}` },
         });
 

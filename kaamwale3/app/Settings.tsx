@@ -23,7 +23,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 export default function SettingsScreen(): React.ReactElement {
   const router = useRouter();
   const { logout } = useAuth();
-  const { setLanguage, t } = useLanguage();
+  const { setLanguage: applyLanguage, t } = useLanguage();
   const [notifications, setNotifications] = useState(true);
   const [emailAlerts, setEmailAlerts] = useState(true);
   const [language, setLanguageState] = useState<Language>('en');
@@ -76,9 +76,15 @@ export default function SettingsScreen(): React.ReactElement {
 
   const SETTINGS_STORAGE_KEY = "userSettings";
 
-  const persistLocalSettings = async (settings: { notifications: boolean; emailAlerts: boolean; }) => {
+  const persistLocalSettings = async (settings: { notifications: boolean; emailAlerts: boolean; language?: Language; updatedAt?: number }) => {
     try {
-      const json = JSON.stringify(settings);
+      const payload = {
+        notifications: settings.notifications,
+        emailAlerts: settings.emailAlerts,
+        language: settings.language ?? language,
+        updatedAt: settings.updatedAt ?? Date.now(),
+      };
+      const json = JSON.stringify(payload);
       await AsyncStorage.setItem(SETTINGS_STORAGE_KEY, json);
     } catch (error) {
       console.error("Error saving local settings:", error);
@@ -93,6 +99,7 @@ export default function SettingsScreen(): React.ReactElement {
           const parsed = JSON.parse(stored);
           setNotifications(parsed.notifications ?? true);
           setEmailAlerts(parsed.emailAlerts ?? true);
+          setLanguageState(parsed.language ?? 'en');
         } catch (parseErr) {
           console.warn('Corrupted local settings, clearing storage');
           await AsyncStorage.removeItem(SETTINGS_STORAGE_KEY);
@@ -105,14 +112,44 @@ export default function SettingsScreen(): React.ReactElement {
 
   const loadPreferences = async (signal?: AbortSignal) => {
     setIsLoadingPreferences(true);
+    let localSettings: any = null;
+
+    try {
+      const stored = await AsyncStorage.getItem(SETTINGS_STORAGE_KEY);
+      if (stored) {
+        localSettings = JSON.parse(stored);
+      }
+    } catch (error) {
+      console.warn('Could not read local settings before fetching preferences', error);
+    }
+
     try {
       const res = await api.get(`/users/preferences`, { signal });
       if (res.data?.success && res.data.preferences) {
         if (signal?.aborted) return;
-        setNotifications(res.data.preferences.notifications ?? true);
-        setEmailAlerts(res.data.preferences.emailAlerts ?? true);
-        setLanguageState(res.data.preferences.language ?? 'en');
-        await persistLocalSettings(res.data.preferences);
+
+        const serverPrefs = res.data.preferences;
+        const localUpdatedAt = localSettings?.updatedAt ?? 0;
+        const serverUpdatedAt = serverPrefs.updatedAt ?? 0;
+        const useLocal = localSettings && localUpdatedAt > serverUpdatedAt;
+        const effectivePrefs = useLocal
+          ? {
+              notifications: localSettings.notifications ?? serverPrefs.notifications ?? true,
+              emailAlerts: localSettings.emailAlerts ?? serverPrefs.emailAlerts ?? true,
+              language: localSettings.language ?? serverPrefs.language ?? 'en',
+              updatedAt: localUpdatedAt,
+            }
+          : {
+              notifications: serverPrefs.notifications ?? true,
+              emailAlerts: serverPrefs.emailAlerts ?? true,
+              language: serverPrefs.language ?? 'en',
+              updatedAt: serverUpdatedAt || Date.now(),
+            };
+
+        setNotifications(effectivePrefs.notifications);
+        setEmailAlerts(effectivePrefs.emailAlerts);
+        setLanguageState(effectivePrefs.language);
+        await persistLocalSettings(effectivePrefs);
         return;
       }
     } catch (err: any) {
@@ -122,8 +159,10 @@ export default function SettingsScreen(): React.ReactElement {
       }
       console.error("Error fetching user preferences:", err);
     } finally {
-      await loadLocalSettings();
-      setIsLoadingPreferences(false);
+      if (!signal?.aborted) {
+        await loadLocalSettings();
+        setIsLoadingPreferences(false);
+      }
     }
   };
 
@@ -138,8 +177,8 @@ export default function SettingsScreen(): React.ReactElement {
       };
       const res = await api.post(`/users/preferences`, payload);
       if (res.data?.success) {
-        await persistLocalSettings(payload);
-        setLanguage(language);
+        await persistLocalSettings({ ...payload, language, updatedAt: Date.now() });
+        applyLanguage(language);
         showStatusModal("success", t("success"), t("settingsSaved"));
       } else {
         showStatusModal("error", t("error"), res.data?.message || tx("serverError", "Something went wrong"));
@@ -162,8 +201,10 @@ export default function SettingsScreen(): React.ReactElement {
       const res = await api.delete(`/users/account`);
       if (res.data?.success) {
         setShowDeleteAccountModal(false);
+        await logout();
         await AsyncStorage.multiRemove([
           "token",
+          "accessToken",
           "profilePhoto",
           "userSettings",
           "locationProvidedOnLogin",
@@ -174,7 +215,6 @@ export default function SettingsScreen(): React.ReactElement {
           "myRank",
           "myScore",
         ]);
-        await logout();
         router.replace("/");
         return;
       }
@@ -317,7 +357,6 @@ export default function SettingsScreen(): React.ReactElement {
       const res = await api.post(`/wallet/bank-account/add`, bankDetails);
       if (res.data.success) {
         setBankAccount(res.data.bankAccount);
-        setPayoutMethod("bank");
         setShowAddBank(false);
         setShowBankInfo(true);
         setBankDetails({
@@ -328,7 +367,6 @@ export default function SettingsScreen(): React.ReactElement {
           bankName: "",
         });
         await persistPayoutMethod("bank");
-        showStatusModal("success", t("success"), tx("bankSaved", "Bank account saved"));
       }
     } catch (err: any) {
       showStatusModal("error", t("error"), err.response?.data?.message || t("failedAddBank"));
@@ -340,7 +378,7 @@ export default function SettingsScreen(): React.ReactElement {
   const handleAddUpiId = async () => {
     if (isSavingUpi) return;
     const candidate = upiIdInput.trim().toLowerCase();
-    const upiRegex = /^[a-zA-Z0-9._-]{2,256}@[a-zA-Z]{2,64}$/;
+    const upiRegex = /^[a-zA-Z0-9._-]{2,256}@[a-zA-Z0-9.-]{2,64}$/;
     if (!candidate) {
       showStatusModal("error", t("error"), tx("enterUpiId", "Please enter a UPI ID"));
       return;
@@ -355,12 +393,10 @@ export default function SettingsScreen(): React.ReactElement {
       const res = await api.post(`/wallet/upi/add`, { upiId: candidate });
       if (res.data.success) {
         setUpiAccount(res.data.upi || null);
-        setPayoutMethod("upi");
         setShowUpiInfo(true);
         setShowAddUpi(false);
         setUpiIdInput("");
         await persistPayoutMethod("upi");
-        showStatusModal("success", t("success"), res.data.message || tx("success", "UPI ID saved successfully"));
       }
     } catch (err: any) {
       showStatusModal("error", t("error"), err.response?.data?.message || tx("error", "Failed to save UPI ID"));
@@ -446,9 +482,9 @@ export default function SettingsScreen(): React.ReactElement {
         showsVerticalScrollIndicator={false}
       >
       {/* Header */}
-      <LinearGradient colors={["#6C63FF", "#A78BFA"]} style={styles.header}>
+      <LinearGradient colors={["#17263A", "#243B55"]} style={styles.header}>
         <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}>
-          <Ionicons name="arrow-back" size={24} color="#fff" />
+          <Ionicons name="arrow-back" size={24} color="#111827" />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>{t('settings')}</Text>
         <View style={{ width: 40 }} />
@@ -473,12 +509,16 @@ export default function SettingsScreen(): React.ReactElement {
                 </View>
 
                 {item.type === "toggle" ? (
-                 <Switch
-  value={item.value}
-  onValueChange={(value) => item.onChange(value)}
-  trackColor={{ false: "#D3D3D3", true: section.color + "40" }}
-  thumbColor={item.value ? section.color : "#f4f3f4"}
- />
+                             <Switch
+                    value={item.value}
+                    onValueChange={(value) => {
+                      if (typeof item.onChange === 'function') {
+                        item.onChange(value);
+                      }
+                    }}
+                    trackColor={{ false: "#D3D3D3", true: section.color + "40" }}
+                    thumbColor={item.value ? section.color : "#f4f3f4"}
+                  />
 
                 ) : (
                   <TouchableOpacity
@@ -498,51 +538,37 @@ export default function SettingsScreen(): React.ReactElement {
       ))}
 
       <View style={styles.actionRow}>
-        {/* Verification Button */}
-        <TouchableOpacity
-          style={[styles.verificationButton, styles.rowButton]}
-          onPress={() => router.push("/Verification" as any)}
-        >
-          <MaterialIcons name="verified-user" size={18} color="#fff" />
-          <Text style={styles.rowButtonText}>Verification</Text>
-        </TouchableOpacity>
-
-        {/* Save Button */}
-        <TouchableOpacity style={[styles.saveButton, styles.rowButton]} onPress={handleSave} disabled={isSavingSettings}>
+        <TouchableOpacity style={[styles.actionButton, styles.saveButton]} onPress={handleSave} disabled={isSavingSettings}>
           {isSavingSettings ? (
-            <ActivityIndicator size="small" color="#fff" />
+            <ActivityIndicator size="small" color="#111827" />
           ) : (
             <>
-              <MaterialIcons name="save" size={18} color="#fff" />
-              <Text style={styles.rowButtonText}>{t('saveSettings')}</Text>
+              <MaterialIcons name="save" size={18} color="#111827" />
+              <Text style={styles.rowButtonText}>{tx('save', 'Save')}</Text>
             </>
           )}
         </TouchableOpacity>
+
+        <TouchableOpacity style={[styles.actionButton, styles.verificationButton]} onPress={() => router.push("/Verification" as any)}>
+          <MaterialIcons name="verified-user" size={18} color="#111827" />
+          <Text style={styles.rowButtonText}>{t('verification')}</Text>
+        </TouchableOpacity>
+
+        {isPayoutAllowed && (
+          <TouchableOpacity
+            style={[styles.actionButton, styles.paymentMethodButton, isSavingPayoutMethod && styles.buttonDisabled]}
+            disabled={isSavingPayoutMethod}
+            onPress={() => setShowPayoutMethodModal(true)}
+          >
+            <MaterialIcons name="payment" size={18} color="#111827" />
+            <Text style={styles.rowButtonText} numberOfLines={1}>
+              {tx("payment", "Payment")}
+            </Text>
+          </TouchableOpacity>
+        )}
       </View>
 
-      {isPayoutAllowed && (
-        <TouchableOpacity
-          style={[styles.paymentMethodButton, isSavingPayoutMethod && styles.buttonDisabled]}
-          disabled={isSavingPayoutMethod}
-          onPress={() => setShowPayoutMethodModal(true)}
-        >
-          <MaterialIcons name="payment" size={20} color="#fff" />
-          <Text style={styles.paymentMethodText}>
-            {tx("paymentMethods", "Payment Methods")} ({payoutMethod === "bank" ? tx("bankAccount", "Bank") : tx("upiId", "UPI")})
-          </Text>
-          {isSavingPayoutMethod ? (
-            <ActivityIndicator size="small" color="#fff" />
-          ) : (
-            <MaterialIcons name="arrow-forward" size={20} color="#fff" />
-          )}
-        </TouchableOpacity>
-      )}
-
       <View style={styles.accountActionsCard}>
-        <Text style={styles.accountActionsTitle}>Account</Text>
-        <Text style={styles.accountActionsText}>
-          Delete your account and permanently remove your linked data.
-        </Text>
         <TouchableOpacity
           style={[styles.deleteAccountButton, isDeletingAccount && styles.buttonDisabled]}
           onPress={() => setShowDeleteAccountModal(true)}
@@ -870,11 +896,11 @@ export default function SettingsScreen(): React.ReactElement {
 const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
-    backgroundColor: "#6C63FF",
+    backgroundColor: "#F4F6F8",
   },
   container: {
     flex: 1,
-    backgroundColor: "#F8F9FA",
+    backgroundColor: "#F4F6F8",
   },
   contentContainer: {
     paddingBottom: 84,
@@ -883,71 +909,91 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    paddingHorizontal: 14,
-    paddingTop: 6,
-    paddingBottom: 10,
+    paddingHorizontal: 16,
+    paddingVertical: 16,
+    marginHorizontal: 16,
+    marginTop: 16,
+    borderRadius: 22,
+    backgroundColor: "#FFFFFF",
+    shadowColor: "#000",
+    shadowOpacity: 0.05,
+    shadowRadius: 18,
+    shadowOffset: { width: 0, height: 8 },
+    elevation: 3,
   },
   backBtn: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    backgroundColor: "rgba(255,255,255,0.16)",
+    width: 40,
+    height: 40,
+    borderRadius: 14,
+    backgroundColor: "#ffffff",
     justifyContent: "center",
     alignItems: "center",
+    borderWidth: 1,
+    borderColor: "#E5E7EB",
   },
   headerTitle: {
-    fontSize: 18,
+    fontSize: 20,
     fontWeight: "700",
     color: "#fff",
   },
   sectionContainer: {
     backgroundColor: "#fff",
-    marginHorizontal: 14,
-    marginTop: 14,
-    borderRadius: 10,
-    overflow: "hidden",
+    marginHorizontal: 16,
+    marginTop: 16,
+    borderRadius: 20,
+    padding: 18,
+    shadowColor: "#000",
+    shadowOpacity: 0.05,
+    shadowRadius: 18,
+    shadowOffset: { width: 0, height: 8 },
+    elevation: 3,
   },
   sectionHeader: {
     flexDirection: "row",
     alignItems: "center",
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: "#F0F0F0",
+    marginBottom: 16,
   },
   iconBg: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
+    width: 42,
+    height: 42,
+    borderRadius: 14,
     justifyContent: "center",
     alignItems: "center",
-    marginRight: 10,
+    marginRight: 12,
+    backgroundColor: "#EEF2FF",
   },
   sectionTitle: {
-    fontSize: 17,
-    fontWeight: "600",
-    color: "#1A1A1A",
+    fontSize: 18,
+    fontWeight: "700",
+    color: "#111827",
+  },
+  sectionSubtitle: {
+    fontSize: 13,
+    color: "#6B7280",
+    marginTop: 4,
+    lineHeight: 18,
   },
   settingRow: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    paddingHorizontal: 14,
-    paddingVertical: 12,
+    paddingVertical: 14,
+    borderTopWidth: 1,
+    borderTopColor: "#F3F4F6",
   },
   settingInfo: {
     flex: 1,
     paddingRight: 10,
   },
   settingLabel: {
-    fontSize: 16,
+    fontSize: 15,
     fontWeight: "600",
-    color: "#333",
+    color: "#111827",
   },
   settingDesc: {
     fontSize: 13,
-    color: "#7C8493",
-    marginTop: 3,
+    color: "#6B7280",
+    marginTop: 4,
   },
   radioBtn: {
     width: 22,
@@ -962,30 +1008,36 @@ const styles = StyleSheet.create({
     width: 10,
     height: 10,
     borderRadius: 5,
+    backgroundColor: "#17263A",
   },
   divider: {
     height: 1,
     backgroundColor: "#F5F5F5",
     marginLeft: 56,
   },
-  verificationButton: {
-    marginTop: 18,
-    flexDirection: "row",
-    backgroundColor: "#10B981",
-    borderRadius: 10,
-    paddingHorizontal: 12,
-    paddingVertical: 12,
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  verificationText: {
-    fontSize: 16,
-    fontWeight: "700",
-    color: "#fff",
+  actionButton: {
     flex: 1,
-    marginLeft: 12,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: 16,
+    paddingVertical: 12,
+    paddingHorizontal: 10,
+    minHeight: 50,
+    marginHorizontal: 4,
+    backgroundColor: "#ffffff",
+    borderWidth: 1,
+    borderColor: "#E5E7EB",
   },
-  // ✅ Referral Button Styles
+  saveButton: {
+    backgroundColor: "#ffffff",
+  },
+  verificationButton: {
+    backgroundColor: "#ffffff",
+  },
+  paymentMethodButton: {
+    backgroundColor: "#ffffff",
+  },
   referralButton: {
     marginHorizontal: 16,
     marginTop: 12,
@@ -1005,32 +1057,11 @@ const styles = StyleSheet.create({
     flex: 1,
     marginLeft: 12,
   },
-  saveButton: {
-    marginTop: 18,
-    backgroundColor: "#6C63FF",
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    paddingVertical: 12,
-    borderRadius: 10,
-  },
   saveText: {
     color: "#fff",
     fontSize: 16,
     fontWeight: "600",
     marginLeft: 8,
-  },
-  paymentMethodButton: {
-    marginHorizontal: 14,
-    marginTop: 12,
-    marginBottom: 12,
-    flexDirection: "row",
-    backgroundColor: "#2563EB",
-    borderRadius: 10,
-    paddingHorizontal: 16,
-    paddingVertical: 13,
-    justifyContent: "space-between",
-    alignItems: "center",
   },
   paymentMethodText: {
     fontSize: 16,
@@ -1226,25 +1257,26 @@ const styles = StyleSheet.create({
   },
   actionRow: {
     flexDirection: "row",
-    marginHorizontal: 14,
-    columnGap: 8,
+    justifyContent: "space-between",
+    marginHorizontal: 16,
+    marginTop: 20,
   },
   rowButton: {
     flex: 1,
   },
   rowButtonText: {
-    color: "#fff",
+    color: "#111827",
     fontSize: 15,
     fontWeight: "700",
-    marginLeft: 6,
+    marginLeft: 8,
     textAlign: "center",
   },
   accountActionsCard: {
-    marginHorizontal: 14,
-    marginTop: 4,
-    marginBottom: 12,
-    padding: 14,
-    borderRadius: 10,
+    marginHorizontal: 16,
+    marginTop: 20,
+    marginBottom: 24,
+    padding: 18,
+    borderRadius: 16,
     backgroundColor: "#FFF7F7",
     borderWidth: 1,
     borderColor: "#F5CACA",
@@ -1266,8 +1298,8 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     backgroundColor: "#DC2626",
-    borderRadius: 10,
-    paddingVertical: 12,
+    borderRadius: 12,
+    paddingVertical: 14,
   },
   deleteAccountButtonText: {
     color: "#fff",

@@ -18,6 +18,7 @@ import { useRouter, useFocusEffect } from "expo-router";
 import axios from "axios";
 import { API_BASE } from "../../../utils/config";
 import { clearAllUserData } from "../../../utils/socket";
+import { getAuthAccessToken } from "../../../utils/secureStore";
 import ReferralModal from "../../../components/ReferralModal";
 import { useLanguage } from "../../../context/LanguageContext";
 import { useAuth } from "../../../context/AuthContext";
@@ -517,7 +518,7 @@ export default function Profile(): React.ReactElement {
       try {
         const userStr = await AsyncStorage.getItem("user");
         const profileStr = await AsyncStorage.getItem("profilePhoto");
-        const token = await AsyncStorage.getItem("token");
+        const token = await getAuthAccessToken();
 
         if (userStr) {
           const parsed = JSON.parse(userStr);
@@ -553,7 +554,7 @@ export default function Profile(): React.ReactElement {
 
   const fetchWorkerRating = async () => {
     try {
-      const token = await AsyncStorage.getItem("token");
+      const token = await getAuthAccessToken();
       if (!token) return;
 
       const response = await fetch(`${API_BASE}/worker/profile`, {
@@ -574,7 +575,7 @@ export default function Profile(): React.ReactElement {
 
   const fetchEarningsData = async () => {
     try {
-      const token = await AsyncStorage.getItem("token");
+      const token = await getAuthAccessToken();
       if (!token) return;
 
       const response = await fetch(`${API_BASE}/worker/earnings`, {
@@ -619,7 +620,7 @@ export default function Profile(): React.ReactElement {
       setUploadProgress(0);
 
       try {
-        const authToken = accessToken || userToken || await AsyncStorage.getItem("token") || await AsyncStorage.getItem("accessToken");
+        const authToken = accessToken || userToken || await getAuthAccessToken();
         if (!authToken) {
           Alert.alert(t("error"), t("photoUploadError"));
           return;
@@ -634,21 +635,25 @@ export default function Profile(): React.ReactElement {
         } as any);
         formData.append("type", "profilePhoto");
 
-        const response = await axios.post(`${API_BASE}/upload/upload`, formData, {
-          timeout: 30000,
+        // Use fetch multipart upload (works reliably in React Native)
+        setUploadProgress(40);
+        const response = await fetch(`${API_BASE}/upload/upload`, {
+          method: "POST",
           headers: {
             Authorization: `Bearer ${authToken}`,
           },
+          body: formData,
         });
         setUploadProgress(90);
+        const data = await response.json();
 
-        if (response.data.success && response.data.profilePhoto) {
-          setProfilePhoto(response.data.profilePhoto);
-          await AsyncStorage.setItem("profilePhoto", response.data.profilePhoto);
-          await updateUserField("profilePhoto", response.data.profilePhoto);
+        if (data.success && data.profilePhoto) {
+          setProfilePhoto(data.profilePhoto);
+          await AsyncStorage.setItem("profilePhoto", data.profilePhoto);
+          await updateUserField("profilePhoto", data.profilePhoto);
           Alert.alert(t("success"), t("profilePhotoUpdated"));
         } else {
-          Alert.alert(t("error"), t("serverError"));
+          Alert.alert(t("error"), data.message || t("serverError"));
           setProfilePhoto(previousPhoto || null);
         }
       } catch (err: any) {
@@ -693,7 +698,7 @@ export default function Profile(): React.ReactElement {
     }
 
     try {
-      const authToken = accessToken || userToken || await AsyncStorage.getItem("token") || await AsyncStorage.getItem("accessToken");
+      const authToken = accessToken || userToken || await getAuthAccessToken();
       const response = await axios.post(
         `${API_BASE}/users/update-profile`,
         {
