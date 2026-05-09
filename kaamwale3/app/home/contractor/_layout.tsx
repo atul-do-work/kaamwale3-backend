@@ -26,6 +26,8 @@ export default function ContractorLayout() {
           paddingTop: 4,
           borderTopWidth: 1,
           borderTopColor: "#e0e0e0",
+          borderTopLeftRadius: 20,
+          borderTopRightRadius: 20,
         },
       }}
       initialRouteName="index"

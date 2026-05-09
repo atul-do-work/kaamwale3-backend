@@ -1119,9 +1119,7 @@ export default function ContractorWalletAttendance() {
               {item.profilePhoto ? (
                 <Image source={{ uri: item.profilePhoto }} style={styles.workerAvatar} />
               ) : (
-                <View style={styles.workerAvatarPlaceholder}>
-                  <MaterialIcons name="person" size={20} color="#fff" />
-                </View>
+                <Image source={require("../../../assets/avatar1.png")} style={styles.workerAvatar} />
               )}
               <View style={styles.workerIdentityText}>
                 <Text style={styles.workerName}>{item.workerName || item.acceptedBy || 'Worker'}</Text>

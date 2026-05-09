@@ -126,8 +126,35 @@ export default function Jobs(): React.ReactElement {
   const { jobs: hookJobs, loading, error: jobError, refresh: refreshJobs } = useJobStatus();
   const [acceptedJobs, setAcceptedJobs] = useState<Job[]>([]);
 
+  // ✅ Geocode jobs without location names
   useEffect(() => {
-    setAcceptedJobs(Array.isArray(hookJobs) ? hookJobs : []);
+    const geocodeJobs = async () => {
+      const jobsToGeocode = Array.isArray(hookJobs) ? hookJobs.filter(job => !job.location && job.lat && job.lon) : [];
+      
+      if (jobsToGeocode.length === 0) {
+        setAcceptedJobs(Array.isArray(hookJobs) ? hookJobs : []);
+        return;
+      }
+
+      const geocodedJobs = await Promise.all(
+        jobsToGeocode.map(async (job) => {
+          const location = await getAddressFromCoords(job.lat, job.lon);
+          console.log("🌍 Geocoded job", job._id, "Location:", location);
+          return { ...job, location };
+        })
+      );
+
+      setAcceptedJobs(
+        Array.isArray(hookJobs)
+          ? hookJobs.map(job => {
+              const geocoded = geocodedJobs.find(g => g._id === job._id);
+              return geocoded || job;
+            })
+          : []
+      );
+    };
+
+    geocodeJobs();
   }, [hookJobs]);
   
   const [refreshing, setRefreshing] = useState<boolean>(false); // ✅ Pull-to-refresh state
@@ -385,6 +412,7 @@ export default function Jobs(): React.ReactElement {
       }
 
       const location = job.location || (await getAddressFromCoords(job.lat, job.lon));
+      console.log("📍 Location resolved for job:", job._id, "Location:", location, "From backend:", job.location);
       
       // ✅ Optimized: Use findIndex to avoid double .find() calls
       setAcceptedJobs((prev) => {
@@ -405,6 +433,7 @@ export default function Jobs(): React.ReactElement {
           };
           console.log("✅ Merged job with rating:", updated[index].rating);
           console.log("📋 Full merged job object:", updated[index]);
+          console.log("📍 Location in merged job:", updated[index].location);
           return updated;
         } else if (job.status === "accepted") {
           // New job - add to list
@@ -621,8 +650,20 @@ export default function Jobs(): React.ReactElement {
 
   const renderJobCard = ({ item: job }: { item: Job }) => {
     const jobImageUri = normalizeMediaUrl(job.imageUrl);
+    const formatDateRange = () => {
+      if (!job.date) return "";
+      const jobDate = new Date(job.date);
+      const endDate = new Date(jobDate);
+      if (job.numberOfDays) {
+        endDate.setDate(endDate.getDate() + job.numberOfDays - 1);
+      }
+      const startStr = jobDate.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+      const endStr = endDate.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+      return jobDate.getTime() === endDate.getTime() ? startStr : `${startStr} to ${endStr}`;
+    };
+
     return (
-      <View style={{ marginHorizontal: 16, marginBottom: 16 }}>
+      <View style={{ marginHorizontal: 12, marginBottom: 14 }}>
         <View
           style={{
             borderRadius: 12,
@@ -635,256 +676,311 @@ export default function Jobs(): React.ReactElement {
             elevation: 4,
           }}
         >
-          {!isPaid(job, currentUserPhone) && (
+          {/* Top Image with Category Badge */}
+          <View style={{ height: 150, overflow: "hidden", backgroundColor: "#EEE", position: "relative" }}>
+            <Image
+              source={jobImageUri ? { uri: jobImageUri } : require("../../../assets/demp.jpg")}
+              style={{ width: "100%", height: "100%", resizeMode: "cover" }}
+            />
+            {/* Category Badge - Top Left */}
             <View
               style={{
                 position: "absolute",
-                right: 10,
                 top: 10,
-                zIndex: 5,
-                flexDirection: "row",
-                alignItems: "center",
-                gap: 8,
+                left: 10,
+                backgroundColor: "#fff",
+                paddingHorizontal: 10,
+                paddingVertical: 4,
+                borderRadius: 12,
+                shadowColor: "#000",
+                shadowOpacity: 0.15,
+                shadowRadius: 4,
+                elevation: 3,
               }}
             >
-              <TouchableOpacity
-                onPress={() => dialNumber(job.contractorPhone || "")}
-                disabled={!job.contractorPhone}
-                style={{
-                  width: 36,
-                  height: 36,
-                  borderRadius: 18,
-                  backgroundColor: "#22c55e",
-                  justifyContent: "center",
-                  alignItems: "center",
-                  opacity: job.contractorPhone ? 1 : 0.4,
-                  shadowColor: "#000",
-                  shadowOffset: { width: 0, height: 2 },
-                  shadowOpacity: 0.25,
-                  shadowRadius: 4,
-                  elevation: 4,
-                }}
-              >
-                <MaterialIcons name="phone" size={18} color="#fff" />
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                onPress={() => showHelpOptions(job)}
-                style={{
-                  width: 36,
-                  height: 36,
-                  borderRadius: 18,
-                  backgroundColor: "#ef4444",
-                  justifyContent: "center",
-                  alignItems: "center",
-                  shadowColor: "#000",
-                  shadowOffset: { width: 0, height: 2 },
-                  shadowOpacity: 0.25,
-                  shadowRadius: 4,
-                  elevation: 4,
-                }}
-              >
-                <MaterialIcons name="notification-important" size={20} color="#fff" />
-              </TouchableOpacity>
+              <Text style={{ color: "#374151", fontSize: 11, fontWeight: "600" }}>
+                {job.title || job.description || "Job"}
+              </Text>
             </View>
-          )}
 
-          {/* Top Image */}
-          <View style={{ height: 180, overflow: "hidden", backgroundColor: "#EEE" }}>
-            <Image
-              source={jobImageUri ? { uri: jobImageUri } : require("../../../assets/oip2.jpg")}
-              style={{ width: "100%", height: "100%", resizeMode: "cover" }}
-            />
+            {/* Help Icons - Top Right (only if not paid) */}
+            {!isPaid(job, currentUserPhone) && (
+              <View
+                style={{
+                  position: "absolute",
+                  right: 10,
+                  bottom: 10,
+                  flexDirection: "row",
+                  alignItems: "center",
+                  gap: 6,
+                }}
+              >
+                <TouchableOpacity
+                  onPress={() => dialNumber(job.contractorPhone || "")}
+                  disabled={!job.contractorPhone}
+                  style={{
+                    width: 32,
+                    height: 32,
+                    borderRadius: 16,
+                    backgroundColor: "#22c55e",
+                    justifyContent: "center",
+                    alignItems: "center",
+                    opacity: job.contractorPhone ? 1 : 0.4,
+                    shadowColor: "#000",
+                    shadowOpacity: 0.25,
+                    shadowRadius: 3,
+                    elevation: 3,
+                  }}
+                >
+                  <MaterialIcons name="phone" size={16} color="#fff" />
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  onPress={() => showHelpOptions(job)}
+                  style={{
+                    width: 32,
+                    height: 32,
+                    borderRadius: 16,
+                    backgroundColor: "#ef4444",
+                    justifyContent: "center",
+                    alignItems: "center",
+                    shadowColor: "#000",
+                    shadowOpacity: 0.25,
+                    shadowRadius: 3,
+                    elevation: 3,
+                  }}
+                >
+                  <MaterialIcons name="notification-important" size={16} color="#fff" />
+                </TouchableOpacity>
+              </View>
+            )}
           </View>
 
           {/* Content Section */}
-          <View style={{ paddingHorizontal: 16, paddingVertical: 14 }}>
-            {/* Contractor Name - Prominent */}
-            <Text style={{ color: "#333", fontSize: 16, fontWeight: "700", marginBottom: 4 }}>
-              👤 {job.contractorName}
-            </Text>
-
-            {/* Main Skill / Description */}
-            {job.description && (
-              <Text style={{ color: "#666", fontSize: 13, marginBottom: 10 }}>
-                {job.description}
-              </Text>
-            )}
-
-            {/* Expected Wages */}
-            <Text style={{ color: "#2ecc71", fontSize: 18, fontWeight: "900", marginBottom: 12 }}>
-              ₹{job.amount}
-            </Text>
-
-            {/* Date & Time Row */}
-            <View style={{ flexDirection: "row", marginBottom: 10 }}>
-              {/* Date */}
-              <View style={{ flexDirection: "row", alignItems: "center", flex: 1 }}>
-                <MaterialIcons name="event" size={14} color="#999" />
-                <Text style={{ color: "#666", fontSize: 12, marginLeft: 6 }}>
-                  {job.date && !isNaN(Date.parse(job.date))
-                    ? new Date(job.date).toLocaleDateString()
-                    : t('notAvailable')}
+          <View style={{ paddingHorizontal: 14, paddingVertical: 12 }}>
+            {/* Header Row: Contractor Name + Description | Amount + Paid (stacked) */}
+            <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 12, gap: 12 }}>
+              {/* Left: Contractor Name + Description */}
+              <View style={{ flex: 1 }}>
+                <Text style={{ color: "#111827", fontSize: 15, fontWeight: "700", marginBottom: 2 }}>
+                  {job.contractorName}
+                </Text>
+                <Text style={{ color: "#666", fontSize: 12, fontWeight: "500" }}>
+                  {job.description || "Labour"}
                 </Text>
               </View>
 
-              {/* Time */}
-              {(job.startTime || job.endTime) && (
-                <View style={{ flexDirection: "row", alignItems: "center", flex: 1, marginLeft: 10 }}>
-                  <MaterialIcons name="schedule" size={14} color="#999" />
-                  <Text style={{ color: "#666", fontSize: 12, marginLeft: 6 }}>
-                    {job.startTime || t('notAvailable')} - {job.endTime || t('notAvailable')}
+              {/* Right: Amount and Paid (vertically stacked) */}
+              <View style={{ alignItems: "flex-end", gap: 6 }}>
+                {/* Amount */}
+                <Text style={{ color: "#16A34A", fontSize: 18, fontWeight: "800" }}>
+                  ₹{job.amount || "0"}
+                </Text>
+
+                {/* Paid Status Badge */}
+                <View
+                  style={{
+                    paddingHorizontal: 8,
+                    paddingVertical: 4,
+                    borderRadius: 16,
+                    backgroundColor: isPaid(job, currentUserPhone) ? "#DCFCE7" : "#FEF3C7",
+                  }}
+                >
+                  <Text
+                    style={{
+                      fontSize: 11,
+                      fontWeight: "600",
+                      color: isPaid(job, currentUserPhone) ? "#16A34A" : "#CA8A04",
+                    }}
+                  >
+                    {isPaid(job, currentUserPhone) ? "Paid" : "Pending"}
                   </Text>
                 </View>
-              )}
+              </View>
             </View>
 
-            {/* Duration (Days) - ✅ Show job duration */}
-            {job.numberOfDays && (
-              <View style={{ flexDirection: "row", alignItems: "center", marginBottom: 10 }}>
-                <MaterialIcons name="timer" size={14} color="#999" />
-                <Text style={{ color: "#666", fontSize: 12, marginLeft: 6 }}>
-                  {t('durationLabel')}: {job.numberOfDays} {job.numberOfDays === 1 ? t('day') : t('days')}
-                </Text>
+            {/* Grey Container - Date, Time, Duration, Location */}
+            <View style={{
+              backgroundColor: "#F3F4F6",
+              borderRadius: 10,
+              paddingHorizontal: 12,
+              paddingVertical: 12,
+              marginBottom: 12,
+              gap: 10,
+              overflow: "visible"
+            }}>
+              {/* Date, Time, Duration Row */}
+              <View style={{ flexDirection: "row", gap: 8, justifyContent: "space-between" }}>
+                {/* Date */}
+                <View style={{ flex: 1, flexDirection: "column", alignItems: "center", gap: 3 }}>
+                  <MaterialIcons name="event" size={16} color="#666" />
+                  <Text style={{ color: "#666", fontSize: 10, fontWeight: "500", textAlign: "center" }}>
+                    {formatDateRange()}
+                  </Text>
+                </View>
+
+                {/* Time */}
+                {job.startTime && job.endTime && (
+                  <View style={{ flex: 1, flexDirection: "column", alignItems: "center", gap: 3 }}>
+                    <MaterialIcons name="access-time" size={16} color="#666" />
+                    <Text style={{ color: "#666", fontSize: 10, fontWeight: "500", textAlign: "center" }}>
+                      {job.startTime} - {job.endTime}
+                    </Text>
+                  </View>
+                )}
+
+                {/* Duration */}
+                {job.numberOfDays && (
+                  <View style={{ flex: 1, flexDirection: "column", alignItems: "center", gap: 3 }}>
+                    <MaterialIcons name="schedule" size={16} color="#666" />
+                    <Text style={{ color: "#666", fontSize: 10, fontWeight: "500", textAlign: "center" }}>
+                      {job.numberOfDays} {job.numberOfDays === 1 ? t('day') : t('days')}
+                    </Text>
+                  </View>
+                )}
               </View>
-            )}
 
-            {/* Location */}
-            <TouchableOpacity
-              style={{ flexDirection: "row", alignItems: "flex-start", marginBottom: 12 }}
-              onPress={() => {
-                setSelectedJobForMap(job);
-                setMapModalVisible(true);
-              }}
-            >
-              <MaterialIcons name="location-on" size={14} color="#FF6B6B" style={{ marginTop: 1 }} />
-              <Text style={{ color: "#666", fontSize: 12, marginLeft: 6, flex: 1 }}>
-                {job.location}
-              </Text>
-            </TouchableOpacity>
-
-            {/* Bottom Row: [Paid] Badge & Rating */}
-            <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
-              {/* Paid Badge */}
-              {isPaid(job, currentUserPhone) ? (
-                <View style={{ 
-                  flexDirection: "row", 
+              {/* Location - Below date/time/duration - Always Show */}
+              <TouchableOpacity
+                style={{
+                  flexDirection: "row",
                   alignItems: "center",
-                  backgroundColor: "#E8F5E9",
-                  paddingHorizontal: 10,
-                  paddingVertical: 6,
-                  borderRadius: 20,
-                }}>
-                  <MaterialIcons name="check-circle" size={14} color="#2ecc71" />
-                  <Text style={{ color: "#2ecc71", fontSize: 12, fontWeight: "600", marginLeft: 6 }}>
-                    {t('paid')}
-                  </Text>
-                </View>
-              ) : (
-                <View style={{ 
-                  flexDirection: "row", 
-                  alignItems: "center",
-                  backgroundColor: "#FFF3E0",
-                  paddingHorizontal: 10,
-                  paddingVertical: 6,
-                  borderRadius: 20,
-                }}>
-                  <MaterialIcons name="schedule" size={14} color="#FF9800" />
-                  <Text style={{ color: "#FF9800", fontSize: 12, fontWeight: "600", marginLeft: 6 }}>
-                    {t('pending')}
-                  </Text>
-                </View>
-              )}
+                  gap: 10,
+                  paddingTop: 12,
+                  paddingBottom: 4,
+                  borderTopWidth: 1,
+                  borderTopColor: "#E5E7EB",
+                  minHeight: 44
+                }}
+                onPress={() => {
+                  setSelectedJobForMap(job);
+                  setMapModalVisible(true);
+                }}
+              >
+                <MaterialIcons name="location-on" size={20} color="#16A34A" style={{ marginTop: 2, flexShrink: 0 }} />
+                <Text 
+                  style={{ color: "#1F2937", fontSize: 13, flex: 1, fontWeight: "600", lineHeight: 18 }}
+                  numberOfLines={2}
+                >
+                  {job.location || "Loading location..."}
+                </Text>
+                <MaterialIcons name="chevron-right" size={20} color="#999" style={{ marginTop: 2, flexShrink: 0 }} />
+              </TouchableOpacity>
+            </View>
 
-              {/* Rating */}
-              {typeof job.rating?.stars === "number" ? (
-                <View style={{ flexDirection: "row", alignItems: "center" }}>
-                  {[1, 2, 3, 4, 5].map((star) => (
-                    <MaterialIcons
-                      key={star}
-                      name="star"
-                      size={14}
-                      color={star <= (job.rating?.stars ?? 0) ? "#FFD700" : "#DDD"}
-                      style={{ marginRight: 2 }}
-                    />
-                  ))}
-                  <Text style={{ color: "#333", fontSize: 12, fontWeight: "700", marginLeft: 8 }}>
-                    {job.rating?.stars}/5
+            {/* Ratings Row - Side by Side */}
+            <View style={{ flexDirection: "row", justifyContent: "space-between", gap: 8, marginBottom: isPaid(job, currentUserPhone) ? 10 : 0 }}>
+              {/* Your Rating */}
+              <View style={{ flex: 1, alignItems: "center", paddingVertical: 8, backgroundColor: "#F9FAFB", borderRadius: 8 }}>
+                <Text style={{ color: "#6B7280", fontSize: 10, fontWeight: "500", marginBottom: 3 }}>
+                  Your Rating
+                </Text>
+                {typeof job.rating?.stars === "number" ? (
+                  <View style={{ alignItems: "center" }}>
+                    <View style={{ flexDirection: "row" }}>
+                      {[1, 2, 3, 4, 5].map((star) => (
+                        <MaterialIcons
+                          key={star}
+                          name="star"
+                          size={12}
+                          color={star <= (job.rating?.stars ?? 0) ? "#FFD700" : "#DDD"}
+                          style={{ marginHorizontal: 1 }}
+                        />
+                      ))}
+                    </View>
+                    <Text style={{ color: "#333", fontSize: 11, fontWeight: "700", marginTop: 2 }}>
+                      {job.rating?.stars}/5
+                    </Text>
+                  </View>
+                ) : (
+                  <Text style={{ color: "#999", fontSize: 10 }}>—</Text>
+                )}
+              </View>
+
+              {/* Contractor Rating (only if paid) */}
+              {isPaid(job, currentUserPhone) && (
+                <View style={{ flex: 1, alignItems: "center", paddingVertical: 8, backgroundColor: "#F9FAFB", borderRadius: 8 }}>
+                  <Text style={{ color: "#6B7280", fontSize: 10, fontWeight: "500", marginBottom: 3 }}>
+                    Contractor Rating
                   </Text>
+                  {job.contractorRating?.stars ? (
+                    <View style={{ alignItems: "center" }}>
+                      <View style={{ flexDirection: "row" }}>
+                        {[1, 2, 3, 4, 5].map((star) => (
+                          <MaterialIcons
+                            key={star}
+                            name="star"
+                            size={12}
+                            color={star <= (job.contractorRating?.stars ?? 0) ? "#FFD700" : "#DDD"}
+                            style={{ marginHorizontal: 1 }}
+                          />
+                        ))}
+                      </View>
+                      <Text style={{ color: "#333", fontSize: 11, fontWeight: "700", marginTop: 2 }}>
+                        {job.contractorRating?.stars}/5
+                      </Text>
+                    </View>
+                  ) : (
+                    <Text style={{ color: "#999", fontSize: 10 }}>—</Text>
+                  )}
                 </View>
-              ) : (
-                <Text style={{ color: "#999", fontSize: 12 }}>{t('noRatingYet')}</Text>
               )}
             </View>
 
             {/* Feedback (if available) */}
             {job.rating?.feedback && (
-              <View style={{ 
-                backgroundColor: "#F5F5F5", 
-                borderLeftWidth: 3, 
-                borderLeftColor: "#FFD700", 
-                paddingHorizontal: 10, 
-                paddingVertical: 8, 
-                borderRadius: 4,
-                marginTop: 10
-              }}>
-                <Text style={{ color: "#666", fontSize: 12, fontStyle: "italic", lineHeight: 14 }}>
-                  💬 "{job.rating.feedback}"
+              <View
+                style={{
+                  backgroundColor: "#FFFACD",
+                  borderLeftWidth: 3,
+                  borderLeftColor: "#FFD700",
+                  paddingHorizontal: 8,
+                  paddingVertical: 6,
+                  borderRadius: 4,
+                  marginBottom: 8,
+                }}
+              >
+                <Text style={{ color: "#666", fontSize: 10, fontStyle: "italic", lineHeight: 12 }}>
+                  "{job.rating.feedback}"
                 </Text>
               </View>
             )}
 
-            {isPaid(job, currentUserPhone) && (
-              <View style={{ marginTop: 12 }}>
-                {job.contractorRating?.stars ? (
-                  <View style={{ backgroundColor: "#EEF6FF", borderRadius: 8, padding: 10 }}>
-                    <Text style={{ color: "#1e3a8a", fontWeight: "700", fontSize: 12, marginBottom: 4 }}>
-                      {t('yourRatingForContractor')}
-                    </Text>
-                    <Text style={{ color: "#1e3a8a", fontSize: 13, fontWeight: "700" }}>
-                      {"⭐".repeat(job.contractorRating.stars)} ({job.contractorRating.stars}/5)
-                    </Text>
-                    {!!job.contractorRating.feedback && (
-                      <Text style={{ color: "#334155", fontSize: 12, marginTop: 4 }}>
-                        "{job.contractorRating.feedback}"
-                      </Text>
-                    )}
-                  </View>
-                ) : (
-                  <TouchableOpacity
-                    style={{
-                      backgroundColor: "#1d4ed8",
-                      height: 38,
-                      borderRadius: 8,
-                      justifyContent: "center",
-                      alignItems: "center",
-                    }}
-                    onPress={() => openRateContractorModal(job)}
-                  >
-                    <Text style={{ color: "#fff", fontSize: 13, fontWeight: "700" }}>
-                      {t('rateContractor')}
-                    </Text>
-                  </TouchableOpacity>
-                )}
-              </View>
+            {/* Action Buttons */}
+            {isPaid(job, currentUserPhone) && !job.contractorRating?.stars && (
+              <TouchableOpacity
+                style={{
+                  backgroundColor: "#1d4ed8",
+                  height: 36,
+                  borderRadius: 8,
+                  justifyContent: "center",
+                  alignItems: "center",
+                  marginTop: 8,
+                }}
+                onPress={() => openRateContractorModal(job)}
+              >
+                <Text style={{ color: "#fff", fontSize: 12, fontWeight: "700" }}>
+                  {t('rateContractor')}
+                </Text>
+              </TouchableOpacity>
             )}
 
             {!isPaid(job, currentUserPhone) && (job.status === "accepted" || job.status === "in_progress") && job.acceptedBy === currentUserPhone && (
-              <View style={{ marginTop: 14 }}>
-                <Text style={{ color: "#b91c1c", fontSize: 12, marginBottom: 8 }}>
+              <View style={{ marginTop: 8 }}>
+                <Text style={{ color: "#b91c1c", fontSize: 11, marginBottom: 6, fontWeight: "500" }}>
                   {t('cancelJobCardWarning')}
                 </Text>
                 <TouchableOpacity
                   style={{
                     backgroundColor: "#dc2626",
-                    height: 42,
-                    borderRadius: 10,
+                    height: 36,
+                    borderRadius: 8,
                     justifyContent: "center",
                     alignItems: "center",
                   }}
                   onPress={() => openCancelModal(job)}
                 >
-                  <Text style={{ color: "#fff", fontSize: 14, fontWeight: "700" }}>
+                  <Text style={{ color: "#fff", fontSize: 12, fontWeight: "700" }}>
                     {t('cancelJob')}
                   </Text>
                 </TouchableOpacity>
