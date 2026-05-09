@@ -409,7 +409,8 @@ async function payJob({ jobId, mode, workerPhone, idempotencyKey, userPhone, use
         });
 
         if (!existingDeposit) {
-          await CashDeposit.create({
+          console.log(`[jobsLifecycleService] creating CashDeposit jobId=${job._id} workerPhone=${normalizedWorkerPhone} amount=${job.amount} isBulk=true`);
+          const created = await CashDeposit.create({
             jobId: job._id,
             workerPhone: normalizedWorkerPhone,
             contractorPhone: job.contractorPhone,
@@ -422,6 +423,7 @@ async function payJob({ jobId, mode, workerPhone, idempotencyKey, userPhone, use
             workerName: target.name,
             isBulkJob: true,
           });
+          console.log(`[jobsLifecycleService] CashDeposit created id=${created?._id}`);
         } else {
           // Update existing deposit if found (idempotency handling)
           await CashDeposit.findOneAndUpdate(
@@ -653,7 +655,8 @@ async function payJob({ jobId, mode, workerPhone, idempotencyKey, userPhone, use
       });
 
       if (!existingDeposit) {
-        await CashDeposit.create({
+        console.log(`[jobsLifecycleService] creating CashDeposit jobId=${job._id} workerPhone=${job.acceptedBy} amount=${job.amount} isBulk=false`);
+        const created = await CashDeposit.create({
           jobId: job._id,
           workerPhone: job.acceptedBy,
           contractorPhone: job.contractorPhone,
@@ -666,6 +669,7 @@ async function payJob({ jobId, mode, workerPhone, idempotencyKey, userPhone, use
           workerName: job.acceptedWorker?.name,
           isBulkJob: false,
         });
+        console.log(`[jobsLifecycleService] CashDeposit created id=${created?._id}`);
       } else {
         // Update existing deposit if found (idempotency handling)
         await CashDeposit.findOneAndUpdate(
@@ -811,6 +815,7 @@ async function payJob({ jobId, mode, workerPhone, idempotencyKey, userPhone, use
           });
           if (cashDeposit) {
             // Notify worker about pending cash deposit
+            console.log(`[jobsLifecycleService] emitting cashDepositCreated to ${targetPhone} depositId=${cashDeposit._id}`);
             io.to(targetPhone).emit("cashDepositCreated", {
               depositId: cashDeposit._id,
               jobId: job._id,
