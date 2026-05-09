@@ -289,6 +289,7 @@ async function payJob({ jobId, mode, workerPhone, idempotencyKey, userPhone, use
   }
 
   const normalizedWorkerPhone = normalizeWorkerPhone(workerPhone);
+  const normalizedPaymentMode = String(mode || "").trim().toLowerCase();
   const lockKey = `${jobId}:${normalizedWorkerPhone || "single"}`;
   if (payInFlightLocks.has(lockKey)) {
     return { code: 409, body: { success: false, message: "Payment already processing for this job/worker. Please wait." } };
@@ -345,7 +346,7 @@ async function payJob({ jobId, mode, workerPhone, idempotencyKey, userPhone, use
       paymentTime: target.paymentTime,
     };
     target.paymentStatus = "paid";
-    target.paymentMode = mode;
+    target.paymentMode = normalizedPaymentMode;
     target.paymentTime = new Date();
 
     const allPaid = (job.acceptedWorkers || []).length > 0 &&
@@ -559,7 +560,7 @@ async function payJob({ jobId, mode, workerPhone, idempotencyKey, userPhone, use
 
   const oldState = { status: job.status, paymentStatus: job.paymentStatus, paymentMode: job.paymentMode, paymentTime: job.paymentTime };
   job.paymentStatus = "paid";
-  job.paymentMode = mode;
+  job.paymentMode = normalizedPaymentMode;
   job.paymentTime = new Date();
   job.status = normalizePaidJobStatus(job.status);
   if (job.acceptedAt) {
@@ -925,7 +926,7 @@ async function depositCash({ jobId, workerPhone, idempotencyKey, deps }) {
       return finalize({ code: 404, body: { success: false, message: "Job not found" } });
     }
 
-    if (job.status !== 'completed' || job.paymentStatus !== 'paid' || job.paymentMode !== 'cash') {
+    if (job.status !== 'completed' || job.paymentStatus !== 'paid' || String(job.paymentMode || "").trim().toLowerCase() !== 'cash') {
       return finalize({ code: 400, body: { success: false, message: "Job is not in a valid state for cash deposit" } });
     }
 
@@ -1122,7 +1123,7 @@ async function depositCashById({ depositId, workerPhone, idempotencyKey, deps })
       return finalize({ code: 404, body: { success: false, message: "Associated job not found" } });
     }
 
-    if (job.status !== 'completed' || job.paymentStatus !== 'paid' || job.paymentMode !== 'cash') {
+    if (job.status !== 'completed' || job.paymentStatus !== 'paid' || String(job.paymentMode || "").trim().toLowerCase() !== 'cash') {
       return finalize({ code: 400, body: { success: false, message: "Job is not in a valid state for cash deposit" } });
     }
 
