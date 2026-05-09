@@ -227,6 +227,23 @@ function maskUpiId(upiId) {
   return `${visible}***@${provider}`;
 }
 
+async function findPendingDuplicateWithdrawal({ phone, amount, payoutMethod, idempotencyKey }) {
+  if (!phone) return null;
+  const baseQuery = { phone, status: { $in: ["initiated", "processing"] } };
+  if (idempotencyKey) {
+    return Withdrawal.findOne({ ...baseQuery, idempotencyKey }).sort({ createdAt: -1 });
+  }
+  if (!Number.isFinite(amount) || !payoutMethod) return null;
+
+  const recentThreshold = new Date(Date.now() - 10 * 60 * 1000);
+  return Withdrawal.findOne({
+    ...baseQuery,
+    amount,
+    payoutMethod,
+    createdAt: { $gte: recentThreshold }
+  }).sort({ createdAt: -1 });
+}
+
 const PAYOUT_CYCLE_ANCHOR_ISO = process.env.PAYOUT_CYCLE_ANCHOR_ISO || "2025-02-25T00:00:00+05:30";
 const PAYOUT_CYCLE_MS = 7 * 24 * 60 * 60 * 1000;
 
@@ -904,8 +921,9 @@ router.post("/withdraw", authenticateToken, withdrawLimiter, async (req, res) =>
       return res.status(503).json({ success: false, message: "Payouts not configured on server. Withdrawals are disabled.", note: "Set RAZORPAY_PAYOUTS_ENABLED=true and configure payouts to enable this endpoint." });
     }
     if (!(await requirePayoutAccess(req, res))) return;
-    const { amount, payoutMethod: payoutMethodInput } = req.body;
+    const { amount, payoutMethod: payoutMethodInput, idempotencyKey } = req.body;
     const payoutMethod = String(payoutMethodInput || "bank").toLowerCase();
+    const normalizedIdempotencyKey = idempotencyKey ? String(idempotencyKey).trim() : null;
     
     // 🔐 PRECHECK: Enforce contractor weekly withdrawal restrictions
     const role = String(req.user?.role || "").toLowerCase();
@@ -913,7 +931,9 @@ router.post("/withdraw", authenticateToken, withdrawLimiter, async (req, res) =>
       const lastWithdrawal = await getLastWithdrawal(req.user.phone);
       const blockInfo = isWeeklyWithdrawalBlocked(lastWithdrawal);
       if (blockInfo.blocked) {
-        return res.status(400).json({ success: false, message: blockInfo.message });
+        if (!normalizedIdempotencyKey || !lastWithdrawal?.idempotencyKey || lastWithdrawal.idempotencyKey !== normalizedIdempotencyKey) {
+          return res.status(400).json({ success: false, message: blockInfo.message });
+        }
       }
     }
 
@@ -943,6 +963,39 @@ router.post("/withdraw", authenticateToken, withdrawLimiter, async (req, res) =>
 
     if (!["bank", "upi"].includes(payoutMethod)) {
       return res.status(400).json({ success: false, message: "Invalid payout method" });
+    }
+
+    if (normalizedIdempotencyKey) {
+      const existingWithdrawal = await Withdrawal.findOne({ phone: req.user.phone, idempotencyKey: normalizedIdempotencyKey });
+      if (existingWithdrawal) {
+        return res.json({
+          success: true,
+          message: existingWithdrawal.status === 'failed' || existingWithdrawal.status === 'reversed'
+            ? 'Previous withdrawal request completed with failure. Please use a new idempotency key to retry.'
+            : 'Withdrawal already submitted',
+          isDuplicate: true,
+          withdrawalId: existingWithdrawal._id,
+          status: existingWithdrawal.status,
+          amount: existingWithdrawal.amount,
+          failureReason: existingWithdrawal.failureReason || null,
+        });
+      }
+    } else {
+      const duplicatePendingWithdrawal = await findPendingDuplicateWithdrawal({
+        phone: req.user.phone,
+        amount: withdrawAmount,
+        payoutMethod,
+      });
+      if (duplicatePendingWithdrawal) {
+        return res.status(200).json({
+          success: true,
+          message: 'A withdrawal with the same amount is already pending. Please wait for it to complete.',
+          isDuplicate: true,
+          withdrawalId: duplicatePendingWithdrawal._id,
+          status: duplicatePendingWithdrawal.status,
+          amount: duplicatePendingWithdrawal.amount,
+        });
+      }
     }
 
     // 🔐 STEP 3: Verify selected payout method
@@ -1011,6 +1064,28 @@ router.post("/withdraw", authenticateToken, withdrawLimiter, async (req, res) =>
     const openingBalance = isContractor ? rawPocket : openingAvailable;
     const closingBalance = openingBalance - withdrawAmount;
 
+    // 🔐 EDGE CASE: Available balance vs ledger truth
+    // Double-check balance constraints before attempting atomic operation
+    if (isContractor && rawPocket < withdrawAmount) {
+      return res.status(400).json({
+        success: false,
+        message: "Insufficient pocket balance for withdrawal",
+        availableBalance: rawPocket,
+        requiredAmount: withdrawAmount,
+        hint: "Pocket balance may have changed. Please refresh and try again.",
+      });
+    }
+
+    if (!isContractor && rawAvailable < withdrawAmount) {
+      return res.status(400).json({
+        success: false,
+        message: "Insufficient available balance for withdrawal",
+        availableBalance: rawAvailable,
+        requiredAmount: withdrawAmount,
+        hint: "Available balance may have changed due to ongoing transactions. Please refresh and try again.",
+      });
+    }
+
     const query = isContractor
       ? {
           phone: req.user.phone,
@@ -1059,9 +1134,10 @@ router.post("/withdraw", authenticateToken, withdrawLimiter, async (req, res) =>
     if (!wallet) {
       return res.status(400).json({
         success: false,
-        message: "Insufficient available balance",
+        message: "Insufficient available balance. Another withdrawal may be in progress.",
         availableBalance: rawAvailable,
         requiredAmount: withdrawAmount,
+        hint: "Please refresh and try again.",
       });
     }
 
@@ -1070,6 +1146,8 @@ router.post("/withdraw", authenticateToken, withdrawLimiter, async (req, res) =>
       phone: req.user.phone,
       amount: withdrawAmount,
       status: 'initiated',
+      payoutMethod,
+      idempotencyKey: normalizedIdempotencyKey,
       balanceSource,
       deductedFromAvailable: isContractor ? 0 : deductedFromAvailable,
       deductedFromPocket: isContractor ? withdrawAmount : deductedFromPocket,
@@ -1319,9 +1397,13 @@ router.get("/upi", authenticateToken, async (req, res) => {
 
 // Razorpay webhook for wallet deposits (payment.captured)
 router.post("/deposit/webhook", async (req, res) => {
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
   try {
     const webhookSecret = process.env.RAZORPAY_WEBHOOK_SECRET;
     if (!webhookSecret) {
+      await session.abortTransaction();
       return res.status(500).json({ success: false, message: "Webhook secret not configured" });
     }
 
@@ -1329,17 +1411,23 @@ router.post("/deposit/webhook", async (req, res) => {
     const rawBody = req.rawBody || (req.body && typeof req.body === "object"
       ? JSON.stringify(req.body)
       : String(req.body || ""));
+    
+    // 🔐 CRITICAL: Signature verification MUST pass before any state changes
     const expected = crypto
       .createHmac("sha256", webhookSecret)
       .update(rawBody)
       .digest("hex");
 
     if (expected !== signature) {
+      // Log invalid signature attempt for fraud detection
+      console.error("🔴 WALLET DEPOSIT WEBHOOK: Invalid signature - rejecting");
+      await session.abortTransaction();
       return res.status(403).json({ success: false, message: "Invalid webhook signature" });
     }
 
     const event = req.body?.event;
     if (event !== "payment.captured") {
+      await session.commitTransaction();
       return res.status(200).json({ success: true, ignored: true });
     }
 
@@ -1353,32 +1441,51 @@ router.post("/deposit/webhook", async (req, res) => {
     // This endpoint is only for wallet deposit events.
     // If a job payment webhook reaches here, ACK as ignored to prevent noisy 400 retries.
     if (type !== "wallet_deposit") {
+      await session.commitTransaction();
       return res.status(200).json({ success: true, ignored: true, reason: "non_wallet_deposit_event" });
     }
 
     if (!paymentId || !phone || amount <= 0 || amount < 100) {
+      await session.abortTransaction();
       return res.status(400).json({ success: false, message: "Invalid wallet deposit webhook payload" });
     }
 
-    // Idempotency: if payment already present, ACK success
-    const existing = await Wallet.findOne({ phone, "transactions.paymentId": paymentId });
-    if (existing) {
-      return res.status(200).json({ success: true, duplicate: true });
+    // 🔐 EDGE CASE: Deposit flow - success vs verification failure
+    // Check if this payment ID has already been processed
+    // If YES → idempotently return success (no duplicate credit)
+    // If NO → proceed to credit wallet atomically within transaction
+    const existingWallet = await Wallet.findOne({ phone, "transactions.paymentId": paymentId }).session(session);
+    if (existingWallet) {
+      await session.commitTransaction();
+      console.log(`✅ DEPOSIT WEBHOOK IDEMPOTENCY: Payment ${paymentId} already processed`);
+      return res.status(200).json({ success: true, duplicate: true, message: "Payment already processed" });
     }
 
-    const walletDoc = await Wallet.findOne({ phone });
+    const walletDoc = await Wallet.findOne({ phone }).session(session);
     if (!walletDoc) {
-      return res.status(404).json({ success: false, message: "Wallet not found for webhook user" });
+      // Create wallet if doesn't exist (idempotent upsert will handle this)
+      const newWallet = new Wallet({
+        phone,
+        balance: 0,
+        availableBalance: 0,
+        pocketBalance: 0,
+        transactions: [],
+      });
+      await newWallet.save({ session });
     }
+
     let role = String(payment?.notes?.role || "").toLowerCase();
     if (!role) {
-      const userDoc = await User.findOne({ phone }).select("role").lean();
+      const userDoc = await User.findOne({ phone }).select("role").lean().session(session);
       role = String(userDoc?.role || "worker").toLowerCase();
     }
     const isWorker = role === "worker";
     const isContractor = role === "contractor";
     const usePocketBalance = isWorker || isContractor;
     const targetBalanceField = isContractor ? "pocketBalance" : "availableBalance";
+    
+    // 🔐 ATOMIC: Credit wallet only after signature verification passes
+    // This ensures wallet never credited if callback succeeds but verification fails on retry
     const updatedWallet = await Wallet.findOneAndUpdate(
       { phone, "transactions.paymentId": { $ne: paymentId } },
       {
@@ -1391,8 +1498,8 @@ router.post("/deposit/webhook", async (req, res) => {
           transactions: appendAuditFields({
             type: isContractor ? "pocket_deposit" : "deposit",
             amount,
-            openingBalance: Number(walletDoc[targetBalanceField] || 0),
-            closingBalance: Number(walletDoc[targetBalanceField] || 0) + amount,
+            openingBalance: Number(walletDoc?.[targetBalanceField] || 0),
+            closingBalance: (Number(walletDoc?.[targetBalanceField] || 0) + amount),
             orderId,
             paymentId,
             status: "completed",
@@ -1404,19 +1511,26 @@ router.post("/deposit/webhook", async (req, res) => {
             source: "webhook",
             provider: "razorpay",
             providerEventId: paymentId,
+            idempotencyKey: paymentId,
             metadata: {
               webhookEvent: event,
               balanceType: isContractor ? "pocket" : isWorker ? "available+pocket" : "available",
+              verifiedAt: new Date(),
             },
           }),
         },
       },
-      { new: true }
+      { new: true, session }
     );
 
+    // If update returns null, payment was already processed (idempotency)
     if (!updatedWallet) {
-      return res.status(200).json({ success: true, duplicate: true });
+      await session.commitTransaction();
+      console.log(`✅ DEPOSIT WEBHOOK IDEMPOTENCY: Payment ${paymentId} already processed (null result)`);
+      return res.status(200).json({ success: true, duplicate: true, message: "Payment already processed" });
     }
+
+    await session.commitTransaction();
 
     const io = req.app?.get('io');
     if (io) {

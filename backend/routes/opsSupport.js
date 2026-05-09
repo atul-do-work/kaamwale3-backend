@@ -205,6 +205,8 @@ function createOpsSupportRouter({ upload, PORT }) {
     }
   });
 
+  const ALLOWED_DOCUMENT_TYPES = new Set(["aadhar", "pan", "voter", "bank_account"]);
+
   const verificationUploadMiddleware = upload.single('file');
 
   router.post("/verification/upload", authenticateToken, verificationUploadMiddleware, async (req, res) => {
@@ -212,6 +214,14 @@ function createOpsSupportRouter({ upload, PORT }) {
       const type = req.body?.type || req.body?.documentType || req.query?.type;
       const documentNumber = req.body?.documentNumber || req.query?.documentNumber;
       const expiryDate = req.body?.expiryDate || req.query?.expiryDate;
+
+      // Validate document type
+      if (!type) {
+        return res.status(400).json({ success: false, message: "Missing document type" });
+      }
+      if (!ALLOWED_DOCUMENT_TYPES.has(type)) {
+        return res.status(400).json({ success: false, message: `Invalid document type. Allowed types: ${Array.from(ALLOWED_DOCUMENT_TYPES).join(", ")}` });
+      }
 
       // Check if it's a direct Cloudinary URL upload (new method)
       if (req.body?.fileUrl && req.body?.cloudinaryPublicId) {
@@ -226,10 +236,20 @@ function createOpsSupportRouter({ upload, PORT }) {
           });
         }
 
+        // Check if document with this type already has pending or approved status
+        const existingDoc = verification.documents.find((doc) => doc.type === type);
+        if (existingDoc && (existingDoc.verificationStatus === "pending" || existingDoc.verificationStatus === "approved")) {
+          return res.status(400).json({
+            success: false,
+            message: `A ${type} document with status "${existingDoc.verificationStatus}" already exists. Please wait for verification to complete or contact support.`,
+            existingStatus: existingDoc.verificationStatus,
+          });
+        }
+
         verification.documents.push({
-          type: type || "unknown",
+          type,
           fileUrl: req.body.fileUrl,
-          fileName: req.body.fileName || `${type || "doc"}_${Date.now()}`,
+          fileName: req.body.fileName || `${type}_${Date.now()}`,
           documentNumber: documentNumber || undefined,
           uploadedAt: new Date(),
           verificationStatus: "pending",
@@ -242,8 +262,8 @@ function createOpsSupportRouter({ upload, PORT }) {
       }
 
       // Legacy method - handle file upload via multer
-      if (!type && !req.file && !req.body?.imageData) {
-        return res.status(400).json({ success: false, message: "Missing document type or file" });
+      if (!req.file && !req.body?.imageData) {
+        return res.status(400).json({ success: false, message: "Missing file" });
       }
 
       let verification = await VerificationDocument.findOne({ phone: req.user.phone });
@@ -253,6 +273,16 @@ function createOpsSupportRouter({ upload, PORT }) {
           phone: req.user.phone,
           documents: [],
           accountStatus: "restricted",
+        });
+      }
+
+      // Check if document with this type already has pending or approved status
+      const existingDoc = verification.documents.find((doc) => doc.type === type);
+      if (existingDoc && (existingDoc.verificationStatus === "pending" || existingDoc.verificationStatus === "approved")) {
+        return res.status(400).json({
+          success: false,
+          message: `A ${type} document with status "${existingDoc.verificationStatus}" already exists. Please wait for verification to complete or contact support.`,
+          existingStatus: existingDoc.verificationStatus,
         });
       }
 
@@ -279,11 +309,11 @@ function createOpsSupportRouter({ upload, PORT }) {
         cloudinaryPublicId = uploadResult.public_id;
       } else if (req.body?.imageData) {
         fileUrl = req.body.imageData;
-        fileName = req.body.fileName || `${type || "doc"}_${Date.now()}`;
+        fileName = req.body.fileName || `${type}_${Date.now()}`;
       }
 
       verification.documents.push({
-        type: type || "unknown",
+        type,
         fileUrl,
         fileName: fileName || "",
         documentNumber: documentNumber || undefined,

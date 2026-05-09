@@ -12,6 +12,8 @@ const withdrawalSchema = new mongoose.Schema(
     },
     walletTransactionId: { type: mongoose.Schema.Types.ObjectId, default: null },
     provider: { type: String, default: 'razorpay' },
+    payoutMethod: { type: String, enum: ['bank', 'upi'], default: null, index: true, sparse: true },
+    idempotencyKey: { type: String, default: null, index: true, sparse: true },
     providerPayoutId: { type: String, index: true, sparse: true },
     providerReferenceId: { type: String, default: null },
     providerEventId: { type: String, default: null },
@@ -37,5 +39,6 @@ const withdrawalSchema = new mongoose.Schema(
 );
 
 withdrawalSchema.index({ phone: 1, createdAt: -1 });
+withdrawalSchema.index({ phone: 1, idempotencyKey: 1 }, { unique: true, sparse: true });
 
 module.exports = mongoose.model('Withdrawal', withdrawalSchema);

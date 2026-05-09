@@ -9,6 +9,7 @@ const CancellationLog = require("../models/CancellationLog");
 const ActivityLog = require("../models/ActivityLog");
 const CashDeposit = require("../models/CashDeposit");
 const { updateGigDataOnCompletion, updateGigDataOnCancellation } = require("../utils/gigsDataTracker");
+const { normalizePhoneNumber } = require("../utils/dataNormalization");
 const { createGigHistoryEvent } = require("./gigHistoryService");
 const { cancelDispatchState } = require("./dispatchStateService");
 
@@ -45,8 +46,18 @@ const ALLOWED_CANCELLATION_REASONS = new Set([
   "other",
 ]);
 
+function normalizeWorkerPhone(phone) {
+  return normalizePhoneNumber(phone);
+}
+
+function areSamePhone(a, b) {
+  const first = normalizeWorkerPhone(a);
+  const second = normalizeWorkerPhone(b);
+  return first && second && first === second;
+}
+
 function getPayKey({ jobId, workerPhone, mode, idempotencyKey }) {
-  const target = `${jobId}:${workerPhone || "single"}:${String(mode || "cash").toLowerCase()}`;
+  const target = `${jobId}:${normalizeWorkerPhone(workerPhone) || "single"}:${String(mode || "cash").toLowerCase()}`;
   return `${target}:${idempotencyKey || ""}`;
 }
 
@@ -199,20 +210,30 @@ async function markAttendance({ jobId, status, workerPhone, userPhone, deps }) {
   const job = await Job.findById(jobId);
   if (!job) return { code: 404, body: { message: "Job not found" } };
 
+  const normalizedStatus = String(status || "").trim().toLowerCase();
+  const allowedStatuses = new Set(["present", "absent"]);
+  if (!allowedStatuses.has(normalizedStatus)) {
+    return { code: 400, body: { success: false, message: "Invalid attendance status. Allowed values: Present, Absent" } };
+  }
+  const canonicalStatus = normalizedStatus === "present" ? "Present" : "Absent";
+
   if (job.bulkHiring && workerPhone) {
-    const normalizedWorkerPhone = String(workerPhone || "").replace(/\D/g, "");
-    const target = (job.acceptedWorkers || []).find((w) => String(w?.phone || "").replace(/\D/g, "") === normalizedWorkerPhone);
+    if (!areSamePhone(userPhone, job.contractorPhone)) {
+      return { code: 403, body: { success: false, message: "Only the contractor can mark attendance for this bulk job" } };
+    }
+    const normalizedWorkerPhone = normalizeWorkerPhone(workerPhone);
+    const target = (job.acceptedWorkers || []).find((w) => normalizeWorkerPhone(w?.phone) === normalizedWorkerPhone);
     if (!target) {
       return { code: 404, body: { success: false, message: "Worker not found on this bulk job" } };
     }
 
-    target.attendanceStatus = status;
+    target.attendanceStatus = canonicalStatus;
     target.attendanceTime = new Date();
-    if (status === "Present" && job.status === "accepted") {
+    if (canonicalStatus === "Present" && job.status === "accepted") {
       job.status = "in_progress";
     }
 
-    const anyPresent = (job.acceptedWorkers || []).some((w) => String(w?.attendanceStatus || "") === "Present");
+    const anyPresent = (job.acceptedWorkers || []).some((w) => String(w?.attendanceStatus || "").toLowerCase() === "present");
     job.attendanceStatus = anyPresent ? "Present" : null;
     job.attendanceTime = anyPresent ? target.attendanceTime : null;
 
@@ -234,16 +255,16 @@ async function markAttendance({ jobId, status, workerPhone, userPhone, deps }) {
   }
 
   const oldState = { status: job.status, attendanceStatus: job.attendanceStatus, paymentStatus: job.paymentStatus };
-  job.attendanceStatus = status;
+  job.attendanceStatus = canonicalStatus;
   job.attendanceTime = new Date();
-  if (status === "Present" && job.status === "accepted") {
+  if (canonicalStatus === "Present" && job.status === "accepted") {
     job.status = "in_progress";
   }
   await job.save();
 
   await logJobEvent({
     jobId: job._id,
-    eventType: status === "Present" ? "job_started" : "attendance_marked",
+    eventType: canonicalStatus === "Present" ? "job_started" : "attendance_marked",
     actorType: "contractor",
     actorPhone: userPhone,
     source: "app",
@@ -267,7 +288,7 @@ async function payJob({ jobId, mode, workerPhone, idempotencyKey, userPhone, use
     return payIdempotencyResults.get(idemKey).result;
   }
 
-  const normalizedWorkerPhone = workerPhone ? String(workerPhone).replace(/\D/g, "") : null;
+  const normalizedWorkerPhone = normalizeWorkerPhone(workerPhone);
   const lockKey = `${jobId}:${normalizedWorkerPhone || "single"}`;
   if (payInFlightLocks.has(lockKey)) {
     return { code: 409, body: { success: false, message: "Payment already processing for this job/worker. Please wait." } };
@@ -290,6 +311,10 @@ async function payJob({ jobId, mode, workerPhone, idempotencyKey, userPhone, use
   const job = await Job.findById(jobId);
   if (!job) return finalize({ code: 404, body: { message: "Job not found" } });
 
+  if (!areSamePhone(job.contractorPhone, userPhone)) {
+    return finalize({ code: 403, body: { success: false, message: "Only the contractor can make payments for this job" } });
+  }
+
   if (["cancelled", "expired"].includes(String(job.status || "").toLowerCase()) || job.isCancelled) {
     return finalize({ code: 400, body: { success: false, message: "Payment not allowed for cancelled or expired jobs" } });
   }
@@ -299,17 +324,17 @@ async function payJob({ jobId, mode, workerPhone, idempotencyKey, userPhone, use
   }
 
   if (job.bulkHiring && workerPhone) {
-    const normalizedWorkerPhone = String(workerPhone || "").replace(/\D/g, "");
+    const normalizedWorkerPhone = normalizeWorkerPhone(workerPhone);
     const target = (job.acceptedWorkers || []).find((w) =>
-      String(w?.phone || "").replace(/\D/g, "") === normalizedWorkerPhone
+      normalizeWorkerPhone(w?.phone) === normalizedWorkerPhone
     );
     if (!target) {
       return finalize({ code: 404, body: { success: false, message: "Worker not found on this bulk job" } });
     }
-    if (target.attendanceStatus !== "Present") {
+    if (String(target.attendanceStatus || "").toLowerCase() !== "present") {
       return finalize({ code: 400, body: { success: false, message: "Payment allowed only for PRESENT workers" } });
     }
-    if (target.paymentStatus === "paid") {
+    if (String(target.paymentStatus || "").toLowerCase() === "paid") {
       return finalize({ code: 400, body: { success: false, message: "This worker is already paid for this job" } });
     }
 
@@ -412,9 +437,9 @@ async function payJob({ jobId, mode, workerPhone, idempotencyKey, userPhone, use
         });
       } else {
         // For non-cash payments, credit wallet immediately
-        let workerWallet = await Wallet.findOne({ phone: workerPhone });
+        let workerWallet = await Wallet.findOne({ phone: normalizedWorkerPhone });
         if (!workerWallet) {
-          workerWallet = new Wallet({ phone: workerPhone, balance: 0, availableBalance: 0, pocketBalance: 0 });
+          workerWallet = new Wallet({ phone: normalizedWorkerPhone, balance: 0, availableBalance: 0, pocketBalance: 0 });
           await workerWallet.save();
         }
 
@@ -462,7 +487,7 @@ async function payJob({ jobId, mode, workerPhone, idempotencyKey, userPhone, use
     try {
       await upsertWorkerEarningForJobPayment({
         job,
-        workerPhone,
+        workerPhone: normalizedWorkerPhone,
         amount: job.amount,
         mode,
       });
@@ -471,7 +496,7 @@ async function payJob({ jobId, mode, workerPhone, idempotencyKey, userPhone, use
     }
 
     try {
-      await updateGigDataOnCompletion(workerPhone, {
+      await updateGigDataOnCompletion(normalizedWorkerPhone, {
         jobId: job._id.toString(),
         title: job.title,
         amount: job.amount,
@@ -482,12 +507,12 @@ async function payJob({ jobId, mode, workerPhone, idempotencyKey, userPhone, use
       console.error("Error updating gigs data on completion:", e);
     }
 
-    await setWorkerOfflineByPhone(workerPhone);
-    if (io && workerPhone) {
+    await setWorkerOfflineByPhone(normalizedWorkerPhone);
+    if (io && normalizedWorkerPhone) {
       try {
-        io.to(workerPhone).emit("workerStatusUpdate", {
+        io.to(normalizedWorkerPhone).emit("workerStatusUpdate", {
           isAvailable: false,
-          phone: workerPhone,
+          phone: normalizedWorkerPhone,
           source: "payment",
           jobId: job._id.toString(),
           timestamp: new Date(),
@@ -750,10 +775,10 @@ async function depositCash({ jobId, workerPhone, idempotencyKey, deps }) {
   const { emitJobUpdatedToUsers, logJobEvent, io } = deps;
 
   // Normalize phone number
-  const normalizedWorkerPhone = String(workerPhone || "").replace(/\D/g, "");
+  const normalizedWorkerPhone = normalizeWorkerPhone(workerPhone);
 
   // Check for idempotency
-  const depositKey = `${jobId}:${normalizedWorkerPhone}:${idempotencyKey || ""}`;
+  const depositKey = `${jobId}:${normalizedWorkerPhone || ""}:${idempotencyKey || ""}`;
   if (depositIdempotencyResults.has(depositKey)) {
     return depositIdempotencyResults.get(depositKey).result;
   }
@@ -942,10 +967,10 @@ async function depositCashById({ depositId, workerPhone, idempotencyKey, deps })
   const { emitJobUpdatedToUsers, logJobEvent, io } = deps;
 
   // Normalize phone number
-  const normalizedWorkerPhone = String(workerPhone || "").replace(/\D/g, "");
+  const normalizedWorkerPhone = normalizeWorkerPhone(workerPhone);
 
   // Check for idempotency
-  const depositKey = `deposit:${depositId}:${normalizedWorkerPhone}:${idempotencyKey || ""}`;
+  const depositKey = `deposit:${depositId}:${normalizedWorkerPhone || ""}:${idempotencyKey || ""}`;
   if (depositIdempotencyResults.has(depositKey)) {
     return depositIdempotencyResults.get(depositKey).result;
   }
@@ -1140,26 +1165,49 @@ async function rateJob({ jobId, stars, feedback, workerPhone, userPhone, userNam
     return { code: 400, body: { message: "Rating must be between 1 and 5 stars" } };
   }
 
+  // 🔐 Fetch fresh job state to prevent race conditions (multiple rating attempts)
   const job = await Job.findById(jobId);
   if (!job) return { code: 404, body: { message: "Job not found" } };
+
+  if (!areSamePhone(job.contractorPhone, userPhone)) {
+    return { code: 403, body: { success: false, message: "Only the contractor can rate this worker" } };
+  }
 
   const isBulkTarget = job.bulkHiring && workerPhone;
   let ratingTargetPhone = workerPhone || job.acceptedWorker?.phone || job.acceptedBy;
 
+  // 🔐 EDGE CASE: Rating attempted before payment settled
+  // Webhook may still be processing or payment response not received yet
+  // Must enforce strict payment state validation
   if (isBulkTarget) {
-    const target = (job.acceptedWorkers || []).find((w) => w.phone === workerPhone);
+    const normalizedWorkerPhone = normalizeWorkerPhone(workerPhone);
+    const target = (job.acceptedWorkers || []).find((w) => normalizeWorkerPhone(w?.phone) === normalizedWorkerPhone);
     if (!target) {
       return { code: 404, body: { success: false, message: "Worker not found on this bulk job" } };
     }
-    if (target.paymentStatus !== "paid") {
-      return { code: 400, body: { success: false, message: "Can only rate workers that have been paid" } };
+    
+    // 🔐 STRICT: Only "paid" status allows rating (not "authorized" or "captured")
+    const normalizedPaymentStatus = String(target.paymentStatus || "").toLowerCase();
+    if (normalizedPaymentStatus !== "paid") {
+      return { code: 400, body: { success: false, message: `Can only rate workers with payment status 'paid'. Current status: ${normalizedPaymentStatus}. Please wait for payment settlement.` } };
     }
+    
     if (target.attendanceStatus !== "Present") {
       return { code: 400, body: { success: false, message: "Can only rate workers marked as Present" } };
     }
+    
+    // 🔐 EDGE CASE: User submits rating twice (duplicate submission)
+    // Return success idempotently if same rating submitted again
     if (target.rating?.stars) {
-      return { code: 400, body: { success: false, message: "This worker is already rated for this job" } };
+      const existingRating = target.rating;
+      // If attempting exact same rating, return success (idempotent)
+      if (existingRating.stars === parseInt(stars, 10) && existingRating.feedback === (feedback || "")) {
+        return { code: 200, body: { success: true, message: "Rating already submitted", isDuplicate: true, job } };
+      }
+      // Different rating attempt on already-rated worker = block with clear message
+      return { code: 400, body: { success: false, message: "Rating is final. Cannot change an existing rating. Contact support if changes needed." } };
     }
+    
     target.rating = {
       stars: parseInt(stars, 10),
       feedback: feedback || "",
@@ -1167,14 +1215,25 @@ async function rateJob({ jobId, stars, feedback, workerPhone, userPhone, userNam
       ratedBy: userPhone || job.contractorName,
     };
   } else {
-    if (job.paymentStatus !== "paid") {
-      return { code: 400, body: { message: "Can only rate jobs that have been paid" } };
+    // 🔐 STRICT: Only "paid" status allows rating (not "authorized" or "captured")
+    const normalizedPaymentStatus = String(job.paymentStatus || "").toLowerCase();
+    if (normalizedPaymentStatus !== "paid") {
+      return { code: 400, body: { message: `Can only rate jobs with payment status 'paid'. Current status: ${normalizedPaymentStatus}. Please wait for payment settlement.` } };
     }
+    
     if (job.attendanceStatus !== "Present") {
       return { code: 400, body: { message: "Can only rate workers marked as Present" } };
     }
+    
+    // 🔐 EDGE CASE: Duplicate rating submission
     if (job.rating?.stars) {
-      return { code: 400, body: { success: false, message: "Worker already rated for this job" } };
+      const existingRating = job.rating;
+      // If attempting exact same rating, return success (idempotent)
+      if (existingRating.stars === parseInt(stars, 10) && existingRating.feedback === (feedback || "")) {
+        return { code: 200, body: { success: true, message: "Rating already submitted", isDuplicate: true, job } };
+      }
+      // Different rating attempt on already-rated job = block
+      return { code: 400, body: { success: false, message: "Rating is final. Cannot change an existing rating. Contact support if changes needed." } };
     }
 
     job.rating = {
@@ -1399,10 +1458,10 @@ async function cancelJob({ jobId, reason, reasonDescription, idempotencyKey, use
 
   let cancellationFee = 0;
   let cancelledBy = "admin";
-  if (userPhone === job.contractorPhone) cancelledBy = "contractor";
-  if (userPhone === job.acceptedBy) cancelledBy = "worker";
+  if (areSamePhone(userPhone, job.contractorPhone)) cancelledBy = "contractor";
+  if (areSamePhone(userPhone, job.acceptedBy)) cancelledBy = "worker";
   if (cancelledBy === "worker" && Array.isArray(job.acceptedWorkers)) {
-    const acceptedWorkerIndex = job.acceptedWorkers.findIndex((w) => String(w?.phone || "").trim() === String(userPhone || "").trim());
+    const acceptedWorkerIndex = job.acceptedWorkers.findIndex((w) => areSamePhone(w?.phone, userPhone));
     if (acceptedWorkerIndex !== -1) cancelledBy = "worker";
   }
 
@@ -1428,9 +1487,9 @@ async function cancelJob({ jobId, reason, reasonDescription, idempotencyKey, use
       });
     }
 
-    const normalizedWorkerPhone = String(userPhone || "").replace(/\D/g, "").slice(-10);
+    const normalizedWorkerPhone = normalizeWorkerPhone(userPhone);
     const acceptedWorkerEntry = Array.isArray(job.acceptedWorkers)
-      ? job.acceptedWorkers.find((w) => String(w?.phone || "").replace(/\D/g, "").slice(-10) === normalizedWorkerPhone)
+      ? job.acceptedWorkers.find((w) => normalizeWorkerPhone(w?.phone) === normalizedWorkerPhone)
       : null;
     const acceptanceTime = acceptedWorkerEntry?.acceptedAt
       ? new Date(acceptedWorkerEntry.acceptedAt)
@@ -1549,8 +1608,9 @@ async function cancelJob({ jobId, reason, reasonDescription, idempotencyKey, use
     const isInProgressCancel = job.status === "in_progress";
 
     if (job.bulkHiring) {
+      const normalizedUserPhone = normalizeWorkerPhone(userPhone);
       job.acceptedWorkers = (job.acceptedWorkers || []).filter(
-        (w) => String(w?.phone || "").replace(/\D/g, "").slice(-10) !== String(userPhone || "").replace(/\D/g, "").slice(-10)
+        (w) => normalizeWorkerPhone(w?.phone) !== normalizedUserPhone
       );
       const remaining = job.acceptedWorkers.length;
       const anyPresent = job.acceptedWorkers.some((w) => String(w?.attendanceStatus || "") === "Present");
@@ -1785,7 +1845,7 @@ async function getCancellations({ userPhone }) {
 }
 
 async function getCashDeposits({ workerPhone }) {
-  const normalizedWorkerPhone = String(workerPhone || "").replace(/\D/g, "");
+  const normalizedWorkerPhone = normalizeWorkerPhone(workerPhone);
 
   try {
     const deposits = await CashDeposit.find({

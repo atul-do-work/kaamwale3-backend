@@ -13,6 +13,7 @@ const ActivityLog = require('../models/ActivityLog');
 const JobEventLog = require('../models/JobEventLog');
 const { createGigHistoryEvent } = require('../services/gigHistoryService');
 const { updateGigDataOnCompletion } = require('../utils/gigsDataTracker');
+const { normalizePhoneNumber } = require('../utils/dataNormalization');
 const { sendOpsAlert } = require('../utils/opsAlert');
 const { buildLogContext, info, warn, error } = require('../utils/logContext');
 
@@ -49,7 +50,8 @@ function computeFinalJobStatusForPaid(currentStatus) {
 
 function isBulkWorkerAlreadyPaid(job, workerPhone) {
   if (!job || !workerPhone || !Array.isArray(job.acceptedWorkers)) return false;
-  const target = job.acceptedWorkers.find((w) => String(w?.phone || "") === String(workerPhone));
+  const normalizedWorkerPhone = normalizePhoneNumber(workerPhone);
+  const target = job.acceptedWorkers.find((w) => normalizePhoneNumber(w?.phone) === normalizedWorkerPhone);
   return String(target?.paymentStatus || "").toLowerCase() === "paid";
 }
 
@@ -59,10 +61,10 @@ function buildJobPaymentUpdate(job, workerPhone, paymentTime) {
   };
 
   if (job.bulkHiring && workerPhone && Array.isArray(job.acceptedWorkers)) {
-    const normalizedWorkerPhone = String(workerPhone || "");
+    const normalizedWorkerPhone = normalizePhoneNumber(workerPhone);
     const allPaidAfter = job.acceptedWorkers.length > 0 &&
       job.acceptedWorkers.every((w) =>
-        String(w?.phone || "") === normalizedWorkerPhone ||
+        normalizePhoneNumber(w?.phone) === normalizedWorkerPhone ||
         String(w?.paymentStatus || "").toLowerCase() === "paid"
       );
 
@@ -117,7 +119,7 @@ router.post('/create-order', authenticateToken, async (req, res) => {
     // Only contractor (or admin) may create payment orders for the job
     const requesterPhone = String(req.user?.phone || '');
     const requesterRole = String(req.user?.role || '').toLowerCase();
-    if (requesterPhone !== String(job.contractorPhone || '') && requesterRole !== 'admin') {
+    if (normalizePhoneNumber(requesterPhone) !== normalizePhoneNumber(job.contractorPhone) && requesterRole !== 'admin') {
       return res.status(403).json({ success: false, message: 'Forbidden: you are not the contractor for this job' });
     }
 
@@ -127,6 +129,25 @@ router.post('/create-order', authenticateToken, async (req, res) => {
       : String(job.paymentStatus || '').toLowerCase() === 'paid';
     if (alreadyPaid) {
       return res.status(400).json({ success: false, message: 'Job already paid' });
+    }
+
+    // 🔐 Validate attendance precondition: worker must be marked "Present" before payment can be initiated
+    if (job.bulkHiring && workerPhone) {
+      const normalizedWorkerPhone = normalizePhoneNumber(workerPhone);
+      const targetWorker = (job.acceptedWorkers || []).find((w) =>
+        normalizePhoneNumber(w?.phone) === normalizedWorkerPhone
+      );
+      if (!targetWorker) {
+        return res.status(404).json({ success: false, message: 'Worker not found on this bulk job' });
+      }
+      if (String(targetWorker.attendanceStatus || "").toLowerCase() !== "present") {
+        return res.status(400).json({ success: false, message: 'Payment allowed only for PRESENT workers. Mark attendance first.' });
+      }
+    } else {
+      // For non-bulk jobs, validate overall job attendance
+      if (String(job.attendanceStatus || "").toLowerCase() !== "present") {
+        return res.status(400).json({ success: false, message: 'Payment allowed only for PRESENT workers. Mark attendance first.' });
+      }
     }
 
     // Use server-side canonical amount (prevent client-controlled amount)
@@ -260,7 +281,7 @@ router.post('/verify-payment', authenticateToken, async (req, res) => {
       });
     }
 
-    if (payment.notes.workerPhone !== workerPhone) {
+    if (normalizePhoneNumber(payment.notes.workerPhone) !== normalizePhoneNumber(workerPhone)) {
       await session.abortTransaction();
       return res.status(400).json({
         success: false,
@@ -278,7 +299,7 @@ router.post('/verify-payment', authenticateToken, async (req, res) => {
     }
 
     // 🔐 CRITICAL: Verify contractor identity (prevent unauthorized payment)
-    if (job.contractorPhone !== req.user.phone) {
+    if (normalizePhoneNumber(job.contractorPhone) !== normalizePhoneNumber(req.user.phone)) {
       await session.abortTransaction();
       return res.status(403).json({
         success: false,
@@ -636,6 +657,13 @@ router.post('/webhook', async (req, res) => {
       return res.status(200).json({ received: true, message: 'Job not found' });
     }
 
+    // 🔐 CRITICAL: Webhook deduplication using provider event ID (paymentId)
+    if (job.processedWebhookEvents && job.processedWebhookEvents.includes(paymentId)) {
+      info('⚠️ WEBHOOK DEDUPLICATION: Event already processed', buildLogContext(req, { paymentId, orderId, jobId, workerPhone, idempotencyKey: paymentId }));
+      await session.commitTransaction();
+      return res.status(200).json({ received: true, message: 'Event already processed' });
+    }
+
     // Verify contractor identity embedded in order notes (defense-in-depth)
     const noteContractor = String(notes?.contractorPhone || "").trim();
     if (noteContractor && String(job.contractorPhone || "") !== noteContractor) {
@@ -780,6 +808,7 @@ router.post('/webhook', async (req, res) => {
     const { update: paymentUpdate, arrayFilters } = buildJobPaymentUpdate(job, workerPhone, webhookPaymentTime);
     paymentUpdate.timeSpentMinutes = webhookTimeSpentMinutes;
     paymentUpdate.hoursWorked = webhookHoursWorked;
+    paymentUpdate.$addToSet = { processedWebhookEvents: paymentId }; // Track processed webhook event
 
     const updatedJobFromWebhook = await Job.findByIdAndUpdate(
       jobId,
@@ -943,12 +972,13 @@ router.get('/payment-status/:jobId', authenticateToken, async (req, res) => {
     }
 
     const requesterPhone = String(req.user?.phone || "");
+    const normalizedRequesterPhone = normalizePhoneNumber(requesterPhone);
     const canAccess =
-      requesterPhone &&
+      normalizedRequesterPhone &&
       (
-        requesterPhone === String(job.contractorPhone || "") ||
-        requesterPhone === String(job.acceptedBy || "") ||
-        (Array.isArray(job.acceptedWorkers) && job.acceptedWorkers.some((w) => String(w?.phone || "") === requesterPhone))
+        normalizedRequesterPhone === normalizePhoneNumber(job.contractorPhone) ||
+        normalizedRequesterPhone === normalizePhoneNumber(job.acceptedBy) ||
+        (Array.isArray(job.acceptedWorkers) && job.acceptedWorkers.some((w) => normalizePhoneNumber(w?.phone) === normalizedRequesterPhone))
       );
     if (!canAccess && String(req.user?.role || "").toLowerCase() !== "admin") {
       return res.status(403).json({ success: false, message: "Forbidden" });
@@ -956,11 +986,48 @@ router.get('/payment-status/:jobId', authenticateToken, async (req, res) => {
 
     let isPaid = String(job.paymentStatus || "").toLowerCase() === "paid";
     let workerPaymentStatus = null;
-    if (workerPhone && Array.isArray(job.acceptedWorkers) && job.acceptedWorkers.length > 0) {
-      const target = job.acceptedWorkers.find((w) => String(w?.phone || "") === workerPhone);
-      if (target) {
-        workerPaymentStatus = target.paymentStatus || null;
-        isPaid = String(target.paymentStatus || "").toLowerCase() === "paid";
+    if (workerPhone) {
+      const normalizedWorkerPhone = normalizePhoneNumber(workerPhone);
+      if (Array.isArray(job.acceptedWorkers) && job.acceptedWorkers.length > 0) {
+        const target = job.acceptedWorkers.find((w) => normalizePhoneNumber(w?.phone) === normalizedWorkerPhone);
+        if (target) {
+          workerPaymentStatus = target.paymentStatus || null;
+          isPaid = String(target.paymentStatus || "").toLowerCase() === "paid";
+          return res.json({
+            success: true,
+            jobId: job._id,
+            status: job.status,
+            paymentStatus: job.paymentStatus,
+            paymentMode: job.paymentMode || null,
+            paymentTime: job.paymentTime || null,
+            isPaid,
+            workerPaymentStatus,
+            workerPaymentMode: target.paymentMode || null,
+            workerPaymentTime: target.paymentTime || null,
+            workerAttendanceStatus: target.attendanceStatus || null,
+            workerAttendanceTime: target.attendanceTime || null,
+            workerRating: target.rating || null,
+            walletTransactions: await Wallet.aggregate([
+              { $match: { phone: normalizedWorkerPhone, "transactions.jobId": job._id } },
+              { $unwind: "$transactions" },
+              { $match: { "transactions.jobId": job._id } },
+              { $sort: { "transactions.date": -1 } },
+              {
+                $project: {
+                  _id: 0,
+                  walletPhone: "$phone",
+                  orderId: "$transactions.orderId",
+                  paymentId: "$transactions.paymentId",
+                  status: "$transactions.status",
+                  date: "$transactions.date",
+                  providerEventId: "$transactions.providerEventId",
+                  idempotencyKey: "$transactions.idempotencyKey",
+                },
+              },
+              { $limit: 5 },
+            ]),
+          });
+        }
       }
     }
 

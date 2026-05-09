@@ -123,6 +123,7 @@ const jobSchema = new mongoose.Schema(
       ratedAt: Date,
       ratedBy: String,
     },
+    processedWebhookEvents: [{ type: String, index: true }], // Track processed webhook event IDs for deduplication
   },
   { timestamps: true }
 );

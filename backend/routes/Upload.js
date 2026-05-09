@@ -104,29 +104,65 @@ router.post("/upload", authenticateToken, upload.single("file"), async (req, res
       ? `profile-${req.user.phone}-${Date.now()}`
       : `${req.user.phone}-${Date.now()}-${req.file.originalname}`;
 
-    const uploadResult = await uploadFileBufferToCloudinary({
-      buffer: req.file.buffer,
-      mimeType,
-      folder,
-      publicId,
-      resourceType,
-    });
-
-    const fileUrl = uploadResult.secure_url;
-
-    const newUpload = new Upload({
+    // 🔐 EDGE CASE: Upload failure mid-way
+    // Create a placeholder upload record BEFORE Cloudinary upload
+    // This allows retry detection and prevents duplicate uploads on client timeout
+    const uploadRecord = new Upload({
       userId: user._id,
       type: normalizedType,
       fileName: req.file.originalname,
-      fileUrl,
-      cloudinaryPublicId: uploadResult.public_id,
+      fileUrl: null,
+      cloudinaryPublicId: publicId,
+      status: "uploading", // Track upload state
+      uploadedAt: new Date(),
     });
-    await newUpload.save();
+    await uploadRecord.save();
 
+    let uploadResult;
+    try {
+      uploadResult = await uploadFileBufferToCloudinary({
+        buffer: req.file.buffer,
+        mimeType,
+        folder,
+        publicId,
+        resourceType,
+      });
+    } catch (cloudinaryErr) {
+      // Mark upload as failed but keep the record for audit/retry
+      uploadRecord.status = "failed";
+      uploadRecord.failureReason = cloudinaryErr?.message || String(cloudinaryErr);
+      await uploadRecord.save();
+      
+      console.error("Cloudinary upload failed for record:", uploadRecord._id, cloudinaryErr);
+      return res.status(500).json({ 
+        success: false, 
+        message: "File upload to Cloudinary failed. Please retry.",
+        uploadId: uploadRecord._id, // Allow client to retry with this ID
+        retryable: true,
+      });
+    }
+
+    const fileUrl = uploadResult.secure_url;
+
+    // 🔐 Update upload record with successful Cloudinary URL
+    uploadRecord.fileUrl = fileUrl;
+    uploadRecord.cloudinaryPublicId = uploadResult.public_id;
+    uploadRecord.status = "completed";
+    uploadRecord.completedAt = new Date();
+    await uploadRecord.save();
+
+    // Update user profile with new photo URL (non-blocking)
     if (normalizedType === "profilePhoto") {
-      user.profilePhoto = fileUrl;
-      user.profilePhotoPublicId = uploadResult.public_id || "";
-      await user.save();
+      try {
+        user.profilePhoto = fileUrl;
+        user.profilePhotoPublicId = uploadResult.public_id || "";
+        await user.save();
+      } catch (userUpdateErr) {
+        // If user update fails, upload is still tracked and can be referenced
+        console.error("Failed to update user profile photo link:", userUpdateErr);
+        // Don't fail the response - the upload itself succeeded
+        // Client can retry user update separately
+      }
     }
 
     return res.json({
@@ -134,11 +170,50 @@ router.post("/upload", authenticateToken, upload.single("file"), async (req, res
       fileUrl,
       profilePhoto: normalizedType === "profilePhoto" ? fileUrl : undefined,
       cloudinaryPublicId: uploadResult.public_id,
-      upload: newUpload,
+      upload: uploadRecord,
+      uploadId: uploadRecord._id, // Return ID for future reference/retry
     });
   } catch (err) {
     console.error("Upload error", err);
-    return res.status(500).json({ success: false, message: "Internal server error" });
+    return res.status(500).json({ 
+      success: false, 
+      message: "Upload failed. Please try again.",
+      error: err?.message,
+      retryable: true,
+    });
+  }
+});
+
+// 🔐 RETRY ENDPOINT: Check upload status and resume if needed
+// Allows client to detect if previous upload succeeded/failed after network timeout
+router.get("/upload-status/:uploadId", authenticateToken, async (req, res) => {
+  try {
+    const { uploadId } = req.params;
+    const upload = await Upload.findById(uploadId);
+
+    if (!upload) {
+      return res.status(404).json({ success: false, message: "Upload record not found" });
+    }
+
+    // Verify user owns this upload
+    const user = await User.findOne({ phone: req.user.phone });
+    if (!user || String(upload.userId) !== String(user._id)) {
+      return res.status(403).json({ success: false, message: "Unauthorized" });
+    }
+
+    return res.json({
+      success: true,
+      uploadId: upload._id,
+      status: upload.status, // "uploading", "completed", "failed"
+      fileUrl: upload.fileUrl,
+      cloudinaryPublicId: upload.cloudinaryPublicId,
+      failureReason: upload.failureReason,
+      completedAt: upload.completedAt,
+      retryable: upload.status === "failed",
+    });
+  } catch (err) {
+    console.error("Upload status check error:", err);
+    return res.status(500).json({ success: false, message: "Error checking upload status" });
   }
 });
 

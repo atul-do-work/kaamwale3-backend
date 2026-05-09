@@ -6,7 +6,12 @@ const uploadSchema = new mongoose.Schema({
   fileName: String,
   fileUrl: String,
   cloudinaryPublicId: String,
+  status: { type: String, enum: ["uploading", "completed", "failed"], default: "completed" },
+  failureReason: String,
+  uploadedAt: Date,
+  completedAt: Date,
   createdAt: { type: Date, default: Date.now },
+  updatedAt: { type: Date, default: Date.now },
 });
 
 module.exports = mongoose.model("Upload", uploadSchema);
