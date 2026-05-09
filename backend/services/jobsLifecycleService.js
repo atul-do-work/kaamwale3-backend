@@ -402,39 +402,64 @@ async function payJob({ jobId, mode, workerPhone, idempotencyKey, userPhone, use
         // For cash payments, create a pending cash deposit record instead of crediting wallet
         const depositDeadline = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours from now
 
-        await CashDeposit.create({
+        // ✅ Use upsert to handle idempotency - if duplicate exists, update it instead of failing
+        const existingDeposit = await CashDeposit.findOne({
           jobId: job._id,
           workerPhone: normalizedWorkerPhone,
-          contractorPhone: job.contractorPhone,
-          amount: job.amount,
-          status: 'pending',
-          paymentMode: 'cash',
-          depositDeadline,
-          jobTitle: job.title,
-          contractorName: job.contractorName,
-          workerName: target.name,
-          isBulkJob: true,
         });
 
-        // Send notification to worker about cash deposit requirement
-        await NotificationHistory.create({
-          recipientPhone: normalizedWorkerPhone,
-          senderPhone: userPhone,
-          senderName: userName || job.contractorName || "Contractor",
-          type: "cash_deposit_required",
-          title: `Cash Deposit Required: ₹${job.amount}`,
-          body: `You received ₹${job.amount} in cash for "${job.title}". Please deposit this amount back to your app wallet within 24 hours.`,
-          jobId: job._id,
-          metadata: {
-            jobTitle: job.title,
+        if (!existingDeposit) {
+          await CashDeposit.create({
+            jobId: job._id,
+            workerPhone: normalizedWorkerPhone,
+            contractorPhone: job.contractorPhone,
             amount: job.amount,
-            actionRequired: true,
-            depositDeadline: depositDeadline.toISOString(),
-            workerPhone: normalizedWorkerPhone
-          },
-          deepLink: "worker/wallet",
-          pushNotificationSent: false,
-        });
+            status: 'pending',
+            paymentMode: 'cash',
+            depositDeadline,
+            jobTitle: job.title,
+            contractorName: job.contractorName,
+            workerName: target.name,
+            isBulkJob: true,
+          });
+        } else {
+          // Update existing deposit if found (idempotency handling)
+          await CashDeposit.findOneAndUpdate(
+            { jobId: job._id, workerPhone: normalizedWorkerPhone },
+            {
+              $set: {
+                status: 'pending',
+                depositDeadline,
+                amount: job.amount,
+                updatedAt: new Date(),
+              }
+            },
+            { new: true }
+          );
+        }
+
+        // Send notification to worker about cash deposit requirement
+        // Only send if this is a new deposit
+        if (!existingDeposit) {
+          await NotificationHistory.create({
+            recipientPhone: normalizedWorkerPhone,
+            senderPhone: userPhone,
+            senderName: userName || job.contractorName || "Contractor",
+            type: "cash_deposit_required",
+            title: `Cash Deposit Required: ₹${job.amount}`,
+            body: `You received ₹${job.amount} in cash for "${job.title}". Please deposit this amount back to your app wallet within 24 hours.`,
+            jobId: job._id,
+            metadata: {
+              jobTitle: job.title,
+              amount: job.amount,
+              actionRequired: true,
+              depositDeadline: depositDeadline.toISOString(),
+              workerPhone: normalizedWorkerPhone
+            },
+            deepLink: "worker/wallet",
+            pushNotificationSent: false,
+          });
+        }
       } else {
         // For non-cash payments, credit wallet immediately
         let workerWallet = await Wallet.findOne({ phone: normalizedWorkerPhone });
@@ -621,38 +646,63 @@ async function payJob({ jobId, mode, workerPhone, idempotencyKey, userPhone, use
       // For cash payments, create a pending cash deposit record instead of crediting wallet
       const depositDeadline = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours from now
 
-      await CashDeposit.create({
+      // ✅ Use upsert to handle idempotency - if duplicate exists, update it instead of failing
+      const existingDeposit = await CashDeposit.findOne({
         jobId: job._id,
         workerPhone: job.acceptedBy,
-        contractorPhone: job.contractorPhone,
-        amount: job.amount,
-        status: 'pending',
-        paymentMode: 'cash',
-        depositDeadline,
-        jobTitle: job.title,
-        contractorName: job.contractorName,
-        workerName: job.acceptedWorker?.name,
-        isBulkJob: false,
       });
 
-      // Send notification to worker about cash deposit requirement
-      await NotificationHistory.create({
-        recipientPhone: job.acceptedBy,
-        senderPhone: userPhone,
-        senderName: userName || job.contractorName || "Contractor",
-        type: "cash_deposit_required",
-        title: `Cash Deposit Required: ₹${job.amount}`,
-        body: `You received ₹${job.amount} in cash for "${job.title}". Please deposit this amount back to your app wallet within 24 hours.`,
-        jobId: job._id,
-        metadata: {
-          jobTitle: job.title,
+      if (!existingDeposit) {
+        await CashDeposit.create({
+          jobId: job._id,
+          workerPhone: job.acceptedBy,
+          contractorPhone: job.contractorPhone,
           amount: job.amount,
-          actionRequired: true,
-          depositDeadline: depositDeadline.toISOString(),
-        },
-        deepLink: "worker/wallet",
-        pushNotificationSent: false,
-      });
+          status: 'pending',
+          paymentMode: 'cash',
+          depositDeadline,
+          jobTitle: job.title,
+          contractorName: job.contractorName,
+          workerName: job.acceptedWorker?.name,
+          isBulkJob: false,
+        });
+      } else {
+        // Update existing deposit if found (idempotency handling)
+        await CashDeposit.findOneAndUpdate(
+          { jobId: job._id, workerPhone: job.acceptedBy },
+          {
+            $set: {
+              status: 'pending',
+              depositDeadline,
+              amount: job.amount,
+              updatedAt: new Date(),
+            }
+          },
+          { new: true }
+        );
+      }
+
+      // Send notification to worker about cash deposit requirement
+      // Only send if this is a new deposit
+      if (!existingDeposit) {
+        await NotificationHistory.create({
+          recipientPhone: job.acceptedBy,
+          senderPhone: userPhone,
+          senderName: userName || job.contractorName || "Contractor",
+          type: "cash_deposit_required",
+          title: `Cash Deposit Required: ₹${job.amount}`,
+          body: `You received ₹${job.amount} in cash for "${job.title}". Please deposit this amount back to your app wallet within 24 hours.`,
+          jobId: job._id,
+          metadata: {
+            jobTitle: job.title,
+            amount: job.amount,
+            actionRequired: true,
+            depositDeadline: depositDeadline.toISOString(),
+          },
+          deepLink: "worker/wallet",
+          pushNotificationSent: false,
+        });
+      }
     } else {
       // For non-cash payments, credit wallet immediately
       const updatedWorkerWallet = await Wallet.findOneAndUpdate(
@@ -750,6 +800,30 @@ async function payJob({ jobId, mode, workerPhone, idempotencyKey, userPhone, use
       } catch (emitErr) {
         console.error("Error emitting workerStatusUpdate after payment:", emitErr);
       }
+
+      // ✅ CRITICAL: Emit real-time cash deposit update for cash payments
+      const normalizedMode = String(mode || "").trim().toLowerCase();
+      if (normalizedMode === "cash") {
+        try {
+          const cashDeposit = await CashDeposit.findOne({
+            jobId: job._id,
+            workerPhone: targetPhone,
+          });
+          if (cashDeposit) {
+            // Notify worker about pending cash deposit
+            io.to(targetPhone).emit("cashDepositCreated", {
+              depositId: cashDeposit._id,
+              jobId: job._id,
+              amount: job.amount,
+              depositDeadline: cashDeposit.depositDeadline,
+              jobTitle: job.title,
+              timestamp: new Date(),
+            });
+          }
+        } catch (cashEmitErr) {
+          console.error("Error emitting cashDepositCreated event:", cashEmitErr);
+        }
+      }
     }
 
     await updateGigDataOnCompletion(targetPhone, {
@@ -763,7 +837,28 @@ async function payJob({ jobId, mode, workerPhone, idempotencyKey, userPhone, use
     console.error("Error updating gigs data on completion:", e);
   }
 
+  // ✅ CRITICAL: Emit job update to both contractor and worker so UI updates in real-time
   await emitJobUpdatedToUsers(job, [job.contractorPhone, normalizedWorkerPhone || job.acceptedBy || job.contractorPhone]);
+
+  // ✅ CRITICAL: Emit wallet update to contractor for real-time UI refresh
+  if (io && job.contractorPhone) {
+    try {
+      const normalizedMode = String(mode || "").trim().toLowerCase();
+      if (normalizedMode === "cash") {
+        // For cash payments, emit a specific cash payment notification
+        io.to(job.contractorPhone).emit("cashPaymentCreated", {
+          jobId: job._id,
+          workerId: normalizedWorkerPhone || job.acceptedBy,
+          amount: job.amount,
+          jobTitle: job.title,
+          timestamp: new Date(),
+          message: `Cash payment initiated for ₹${job.amount}`,
+        });
+      }
+    } catch (contractorEmitErr) {
+      console.error("Error emitting cash payment event to contractor:", contractorEmitErr);
+    }
+  }
   return finalize({ code: 200, body: { success: true, message: "Payment successful", job } });
   } catch (err) {
     payInFlightLocks.delete(lockKey);
@@ -1848,6 +1943,7 @@ async function getCashDeposits({ workerPhone }) {
   const normalizedWorkerPhone = normalizeWorkerPhone(workerPhone);
 
   try {
+    console.log(`[jobsLifecycleService] getCashDeposits for workerPhone=${workerPhone}, normalized=${normalizedWorkerPhone}`);
     const deposits = await CashDeposit.find({
       workerPhone: normalizedWorkerPhone,
       status: { $in: ['pending', 'expired'] }
@@ -1855,6 +1951,7 @@ async function getCashDeposits({ workerPhone }) {
     .populate('jobId', 'title amount contractorName')
     .sort({ createdAt: -1 })
     .lean();
+    console.log(`[jobsLifecycleService] found ${Array.isArray(deposits) ? deposits.length : 0} deposits`);
 
     return {
       code: 200,
