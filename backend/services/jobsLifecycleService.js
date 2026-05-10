@@ -1128,38 +1128,50 @@ async function depositCashById({ depositId, workerPhone, idempotencyKey, deps })
     }
 
     // Update cash deposit status
-    cashDeposit.status = 'completed';
-    cashDeposit.depositedAt = new Date();
-    await cashDeposit.save();
+    try {
+      cashDeposit.status = 'completed';
+      cashDeposit.depositedAt = new Date();
+      await cashDeposit.save();
+    } catch (saveErr) {
+      console.error("Error saving cash deposit status:", saveErr);
+      return finalize({ code: 500, body: { success: false, message: "Failed to update deposit status" } });
+    }
 
     // Credit the worker's wallet
-    const updatedWorkerWallet = await Wallet.findOneAndUpdate(
-      { phone: normalizedWorkerPhone },
-      {
-        $inc: {
-          balance: cashDeposit.amount,
-          availableBalance: cashDeposit.amount,
-          totalEarned: cashDeposit.amount
-        },
-        $push: {
-          transactions: {
-            type: "cash_deposit",
-            amount: cashDeposit.amount,
-            date: new Date(),
-            jobId: job._id,
-            source: "app",
-            provider: "cash_deposit",
-            status: "completed",
-            description: `Cash deposit credited to available balance (${job.title})`,
-            metadata: { balanceType: "available", workerPhone: normalizedWorkerPhone },
+    let updatedWorkerWallet;
+    try {
+      updatedWorkerWallet = await Wallet.findOneAndUpdate(
+        { phone: normalizedWorkerPhone },
+        {
+          $inc: {
+            balance: cashDeposit.amount,
+            availableBalance: cashDeposit.amount,
+            totalEarned: cashDeposit.amount
+          },
+          $push: {
+            transactions: {
+              type: "cash_deposit",
+              amount: cashDeposit.amount,
+              date: new Date(),
+              jobId: job._id,
+              source: "app",
+              provider: "cash_deposit",
+              status: "completed",
+              description: `Cash deposit credited to available balance (${job.title})`,
+              metadata: { balanceType: "available", workerPhone: normalizedWorkerPhone },
+            }
           }
-        }
-      },
-      { new: true, upsert: true }
-    );
+        },
+        { new: true, upsert: true }
+      );
 
-    if (!updatedWorkerWallet) {
-      throw new Error("Failed to update worker wallet after cash deposit");
+      if (!updatedWorkerWallet) {
+        console.error("Wallet update returned null for worker:", normalizedWorkerPhone);
+        return finalize({ code: 500, body: { success: false, message: "Failed to update worker wallet" } });
+      }
+    } catch (walletErr) {
+      console.error("Error updating worker wallet:", walletErr);
+      return finalize({ code: 500, body: { success: false, message: "Failed to credit wallet" } });
     }
 
     // Update gig data and earnings
@@ -2012,6 +2024,7 @@ async function getCashDeposits({ workerPhone }) {
           depositDeadline,
           createdAt: paymentTime,
           contractorName: job.contractorName || '',
+          depositable: false,
         };
       });
 
@@ -2029,6 +2042,7 @@ async function getCashDeposits({ workerPhone }) {
             depositDeadline: deposit.depositDeadline,
             createdAt: deposit.createdAt,
             contractorName: deposit.jobId?.contractorName || deposit.contractorName,
+            depositable: true,
           })),
           ...fallbackDeposits
         ]
