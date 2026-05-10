@@ -399,6 +399,7 @@ async function payJob({ jobId, mode, workerPhone, idempotencyKey, userPhone, use
 
     try {
       const normalizedMode = String(mode || "").trim().toLowerCase();
+      console.log(`[jobsLifecycleService] payJob mode=${mode}, normalizedMode=${normalizedMode}, workerPhone=${workerPhone}`);
       if (normalizedMode === "cash") {
         // For cash payments, create a pending cash deposit record instead of crediting wallet
         const depositDeadline = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours from now
@@ -424,9 +425,10 @@ async function payJob({ jobId, mode, workerPhone, idempotencyKey, userPhone, use
             workerName: target.name,
             isBulkJob: true,
           });
-          console.log(`[jobsLifecycleService] CashDeposit created id=${created?._id}`);
+          console.log(`[jobsLifecycleService] CashDeposit created successfully id=${created?._id}`);
         } else {
           // Update existing deposit if found (idempotency handling)
+          console.log(`[jobsLifecycleService] updating existing CashDeposit id=${existingDeposit._id}`);
           await CashDeposit.findOneAndUpdate(
             { jobId: job._id, workerPhone: normalizedWorkerPhone },
             {
