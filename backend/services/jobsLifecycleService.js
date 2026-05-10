@@ -1959,20 +1959,79 @@ async function getCashDeposits({ workerPhone }) {
     .lean();
     console.log(`[jobsLifecycleService] found ${Array.isArray(deposits) ? deposits.length : 0} deposits`);
 
+    const existingJobIds = new Set(
+      deposits
+        .map((deposit) => String(deposit.jobId?._id || deposit.jobId || ''))
+        .filter(Boolean)
+    );
+
+    const cutoffDate = new Date(Date.now() - 48 * 60 * 60 * 1000); // 48 hours
+    const legacyJobs = await Job.find({
+      $and: [
+        {
+          $or: [
+            { acceptedBy: normalizedWorkerPhone },
+            { 'acceptedWorkers.phone': normalizedWorkerPhone }
+          ]
+        },
+        { status: 'completed' },
+        { paymentStatus: 'paid' },
+        {
+          $or: [
+            { paymentMode: { $regex: /^cash$/i } },
+            {
+              acceptedWorkers: {
+                $elemMatch: {
+                  phone: normalizedWorkerPhone,
+                  paymentMode: { $regex: /^cash$/i },
+                  paymentStatus: 'paid'
+                }
+              }
+            }
+          ]
+        },
+        {
+          paymentTime: { $gte: cutoffDate }
+        }
+      ]
+    })
+    .select('title amount contractorName paymentTime updatedAt createdAt paymentMode acceptedWorkers')
+    .lean();
+
+    const fallbackDeposits = (Array.isArray(legacyJobs) ? legacyJobs : [])
+      .filter((job) => !existingJobIds.has(String(job._id)))
+      .map((job) => {
+        const paymentTime = job.paymentTime || job.updatedAt || job.createdAt || new Date();
+        const depositDeadline = new Date(new Date(paymentTime).getTime() + 24 * 60 * 60 * 1000);
+        return {
+          id: `legacy-${job._id}`,
+          jobId: job._id,
+          jobTitle: job.title || 'Unknown Job',
+          amount: Number(job.amount || 0),
+          status: new Date() > depositDeadline ? 'expired' : 'pending',
+          depositDeadline,
+          createdAt: paymentTime,
+          contractorName: job.contractorName || '',
+        };
+      });
+
     return {
       code: 200,
       body: {
         success: true,
-        deposits: deposits.map(deposit => ({
-          id: deposit._id,
-          jobId: deposit.jobId?._id,
-          jobTitle: deposit.jobId?.title || deposit.jobTitle,
-          amount: deposit.amount,
-          status: deposit.status,
-          depositDeadline: deposit.depositDeadline,
-          createdAt: deposit.createdAt,
-          contractorName: deposit.jobId?.contractorName || deposit.contractorName,
-        }))
+        deposits: [
+          ...deposits.map(deposit => ({
+            id: deposit._id,
+            jobId: deposit.jobId?._id,
+            jobTitle: deposit.jobId?.title || deposit.jobTitle,
+            amount: deposit.amount,
+            status: deposit.status,
+            depositDeadline: deposit.depositDeadline,
+            createdAt: deposit.createdAt,
+            contractorName: deposit.jobId?.contractorName || deposit.contractorName,
+          })),
+          ...fallbackDeposits
+        ]
       }
     };
   } catch (err) {
