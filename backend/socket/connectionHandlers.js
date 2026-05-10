@@ -1,5 +1,6 @@
 function attachSocketConnectionHandlers(io, deps) {
   const { scheduleDispatchState, cancelDispatchState } = require("../services/dispatchStateService");
+  const jobsLifecycleService = require("../services/jobsLifecycleService");
   const {
     Job,
     connectedWorkers,
@@ -162,27 +163,16 @@ io.on("connection", (socket) => {
       }
 
       // 🔐 CRITICAL: Check for pending cash deposits before allowing worker registration
-      const pendingDeposits = await CashDeposit.find({
-        workerPhone: phone,
-        status: 'pending'
-      }).select('amount jobTitle contractorName depositDeadline').lean();
+      const { totalPendingAmount, pendingDeposits } = await jobsLifecycleService.getPendingCashDepositsForWorker({ workerPhone: phone });
 
       if (pendingDeposits.length > 0) {
-        const totalPendingAmount = pendingDeposits.reduce((sum, deposit) => sum + deposit.amount, 0);
-        const depositDetails = pendingDeposits.map(deposit => ({
-          amount: deposit.amount,
-          jobTitle: deposit.jobTitle,
-          contractorName: deposit.contractorName,
-          depositDeadline: deposit.depositDeadline
-        }));
-
         console.log(`❌ BLOCKED worker registration for ${phone}: ₹${totalPendingAmount} pending cash deposits`);
         
         socket.emit('registrationBlocked', {
           code: "PENDING_CASH_DEPOSIT",
           message: `You have ₹${totalPendingAmount} in pending cash deposits that must be deposited before you can go online.`,
           requiredDepositAmount: totalPendingAmount,
-          pendingDeposits: depositDetails,
+          pendingDeposits,
           actionRequired: "deposit_cash"
         });
         return; // Block registration

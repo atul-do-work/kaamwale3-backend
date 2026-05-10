@@ -9,6 +9,7 @@ const District = require("../models/City");
 const GigHistory = require("../models/GigHistory");
 const CashDeposit = require("../models/CashDeposit");
 const { calculateEligibility } = require("../services/incentiveEligibilityService");
+const jobsLifecycleService = require("../services/jobsLifecycleService");
 
 function createWorkersRouter({
   io,
@@ -859,26 +860,15 @@ function createWorkersRouter({
         }
 
         // 🔐 CRITICAL: Check for pending cash deposits before allowing worker to go online
-        const pendingDeposits = await CashDeposit.find({
-          workerPhone: phone,
-          status: 'pending'
-        }).select('amount jobTitle contractorName depositDeadline').lean();
+        const { totalPendingAmount, pendingDeposits } = await jobsLifecycleService.getPendingCashDepositsForWorker({ workerPhone: phone });
 
         if (pendingDeposits.length > 0) {
-          const totalPendingAmount = pendingDeposits.reduce((sum, deposit) => sum + deposit.amount, 0);
-          const depositDetails = pendingDeposits.map(deposit => ({
-            amount: deposit.amount,
-            jobTitle: deposit.jobTitle,
-            contractorName: deposit.contractorName,
-            depositDeadline: deposit.depositDeadline
-          }));
-
           return res.status(403).json({
             success: false,
             code: "PENDING_CASH_DEPOSIT",
             message: `You have ₹${totalPendingAmount} in pending cash deposits that must be deposited before you can go online.`,
             requiredDepositAmount: totalPendingAmount,
-            pendingDeposits: depositDetails,
+            pendingDeposits,
             actionRequired: "deposit_cash"
           });
         }

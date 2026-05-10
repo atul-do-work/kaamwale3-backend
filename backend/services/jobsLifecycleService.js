@@ -2043,6 +2043,19 @@ async function getCashDeposits({ workerPhone }) {
   }
 }
 
+async function getPendingCashDepositsForWorker({ workerPhone }) {
+  try {
+    const result = await getCashDeposits({ workerPhone });
+    const deposits = Array.isArray(result?.body?.deposits) ? result.body.deposits : [];
+    const pendingDeposits = deposits.filter((deposit) => String(deposit.status).toLowerCase() === 'pending');
+    const totalPendingAmount = pendingDeposits.reduce((sum, deposit) => sum + Number(deposit.amount || 0), 0);
+    return { totalPendingAmount, pendingDeposits };
+  } catch (err) {
+    console.error("Error calculating pending cash deposits:", err);
+    return { totalPendingAmount: 0, pendingDeposits: [] };
+  }
+}
+
 module.exports = {
   markAttendance,
   payJob,
