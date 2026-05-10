@@ -95,9 +95,10 @@ export const useWorkerAvailability = (): UseWorkerAvailabilityReturn => {
       } else {
         throw new Error(response.data?.message || 'Failed to update availability');
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error('❌ Availability toggle error:', err);
-      setError(err instanceof Error ? err.message : 'Unknown error');
+      const backendMessage = err?.response?.data?.message || err?.message || 'Unknown error';
+      setError(backendMessage);
     } finally {
       setLoading(false);
     }

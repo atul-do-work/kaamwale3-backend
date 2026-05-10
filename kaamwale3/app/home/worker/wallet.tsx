@@ -49,6 +49,7 @@ type CashDepositType = {
   depositDeadline: string;
   createdAt: string;
   contractorName: string;
+  depositable?: boolean;
 };
 
 import { useAuth } from '../../../context/AuthContext';
@@ -263,12 +264,24 @@ export default function Wallet(): React.ReactElement {
       };
 
       socket.on("walletUpdated", handleWalletUpdated);
+      const handleCashDepositCreated = (data: any) => {
+        try {
+          console.log('💵 Received cashDepositCreated socket event in Wallet:', data);
+          // Refresh deposits and wallet when a cash deposit is created
+          fetchCashDeposits().catch(e => console.warn('Failed refresh cash deposits on socket event', e));
+          fetchWallet().catch(e => console.warn('Failed refresh wallet on cash deposit event', e));
+        } catch (err) {
+          console.error('Error handling cashDepositCreated in Wallet:', err);
+        }
+      };
+      socket.on('cashDepositCreated', handleCashDepositCreated);
 
       // ✅ Cleanup function
       return () => {
         isMounted = false; // Mark as unmounted
         clearTimeout(timer);
         socket.off("walletUpdated", handleWalletUpdated);
+        socket.off('cashDepositCreated', handleCashDepositCreated);
       };
     }
   }, [currentUserPhone]);
@@ -326,8 +339,11 @@ export default function Wallet(): React.ReactElement {
     if (!accessToken) return;
     try {
       const res = await api.get('/jobs/cash-deposits');
+      console.log('wallet.fetchCashDeposits response:', res.data);
       if (res.data?.success) {
         setCashDeposits(res.data.deposits || []);
+      } else {
+        console.warn('wallet.fetchCashDeposits: no success flag', res.data);
       }
     } catch (err) {
       console.error('Failed to load cash deposits:', err);
@@ -691,6 +707,19 @@ export default function Wallet(): React.ReactElement {
 
   // ✅ Handle Cash Deposit
   const handleCashDeposit = async (depositId: string) => {
+    const deposit = cashDeposits.find(d => d.id === depositId);
+    if (!deposit) {
+      Alert.alert(t('error'), 'Deposit not found');
+      return;
+    }
+    if (deposit.depositable === false) {
+      Alert.alert(
+        t('error'),
+        'This is a legacy cash payment record and cannot be deposited directly from the app. Please contact support if you believe this is in error.'
+      );
+      return;
+    }
+
     setIsDepositingCash(true);
     setDepositingJobId(depositId);
     try {
@@ -727,6 +756,9 @@ export default function Wallet(): React.ReactElement {
       `${String(d.getDate()).padStart(2, '0')} ${d.toLocaleString('en-IN', { month: 'short' })}`;
     return `${fmt(start)} - ${fmt(end)}`;
   };
+  const pendingCashDepositItems = cashDeposits.filter((deposit) => String(deposit.status || '').toLowerCase() === 'pending' && deposit.depositable !== false);
+  const totalPendingCashDepositAmount = pendingCashDepositItems.reduce((sum, deposit) => sum + Number(deposit.amount || 0), 0);
+  const pendingCashDepositCount = pendingCashDepositItems.length;
   const weekRangeText = formatWeekRange(weekly);
   const weeklyEarningsAmount = Number(weekly?.earnings ?? 0);
   const currentAvailableAmount = Number(wallet.availableBalance ?? wallet.balance ?? 0);
@@ -765,6 +797,17 @@ export default function Wallet(): React.ReactElement {
         </View>
       </View>
 
+      {pendingCashDepositCount > 0 && (
+        <View style={{ marginHorizontal: 16, marginTop: 12, padding: 14, borderRadius: 12, backgroundColor: '#fff7ed', borderLeftWidth: 4, borderLeftColor: '#f97316' }}>
+          <Text style={{ color: '#92400e', fontWeight: '700', fontSize: 14, marginBottom: 6 }}>
+            Deposit ₹{totalPendingCashDepositAmount} to wallet to go online
+          </Text>
+          <Text style={{ color: '#92400e', fontSize: 13 }}>
+            This is a UI-only reminder. Use the Deposit Cash button below to settle each pending amount.
+          </Text>
+        </View>
+      )}
+
       {/* Cash Deposits Section */}
       {cashDeposits.length > 0 && (
         <View style={styles.cashDepositsCard}>
@@ -782,15 +825,17 @@ export default function Wallet(): React.ReactElement {
                 style={[
                   styles.cashDepositButton,
                   {
-                    opacity: isDepositingCash && depositingJobId === deposit.id ? 0.6 : 1
+                    opacity: isDepositingCash && depositingJobId === deposit.id ? 0.6 : deposit.depositable === false ? 0.5 : 1
                   }
                 ]}
                 onPress={() => handleCashDeposit(deposit.id)}
-                disabled={isDepositingCash}
+                disabled={isDepositingCash || deposit.depositable === false}
               >
                 <Text style={styles.cashDepositButtonText}>
                   {isDepositingCash && depositingJobId === deposit.id
                     ? 'Depositing...'
+                    : deposit.depositable === false
+                    ? 'Legacy record'
                     : 'Deposit Cash'
                   }
                 </Text>

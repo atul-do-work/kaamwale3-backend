@@ -411,10 +411,27 @@ export default function ContractorWalletAttendance() {
     const handleJobCancelled = () => {
       if (isFocused) fetchJobs();
     };
+    
+    // ✅ Handle cash payment real-time updates
+    const handleCashPaymentCreated = (data: any) => {
+      if (isFocused) {
+        console.log("Cash payment created notification received:", data);
+        fetchJobs();
+      }
+    };
+    
+    const handleCashDepositCreated = (data: any) => {
+      if (isFocused) {
+        console.log("Cash deposit created notification received:", data);
+        fetchJobs();
+      }
+    };
 
     socket.on("jobUpdated", handleJobUpdated);
     socket.on("jobAccepted", handleJobAccepted);
     socket.on("jobCancelled", handleJobCancelled);
+    socket.on("cashPaymentCreated", handleCashPaymentCreated);
+    socket.on("cashDepositCreated", handleCashDepositCreated);
     // ✅ walletUpdated now handled by useWalletBalance hook
 
     return () => {
@@ -422,6 +439,8 @@ export default function ContractorWalletAttendance() {
       socket.off("jobUpdated", handleJobUpdated);
       socket.off("jobAccepted", handleJobAccepted);
       socket.off("jobCancelled", handleJobCancelled);
+      socket.off("cashPaymentCreated", handleCashPaymentCreated);
+      socket.off("cashDepositCreated", handleCashDepositCreated);
     };
   }, [activeTab, fetchJobs, isFocused]);
 
@@ -488,11 +507,13 @@ export default function ContractorWalletAttendance() {
         // Keep UI responsive even if socket update is delayed.
         await fetchJobs();
       } else {
+        console.error("Payment error response:", data.message);
         showAppModal("error", t('error'), data.message || t('paymentFailed'));
       }
-    } catch (err) {
-      console.error("Payment failed:", err);
-      showAppModal("error", t('error'), t('paymentFailed'));
+    } catch (err: any) {
+      console.error("Payment failed:", err?.response?.data || err?.message || err);
+      const errorMsg = err?.response?.data?.message || err?.message || t('paymentFailed');
+      showAppModal("error", t('error'), errorMsg);
     }
   };
 

@@ -209,7 +209,13 @@ function WorkerHome() {
   const [isOnline, setIsOnline] = useState<boolean>(false);
   const [togglingStatus, setTogglingStatus] = useState<boolean>(false);
   const [profileIncompleteModalVisible, setProfileIncompleteModalVisible] = useState<boolean>(false);
-  
+  const [pendingCashDeposits, setPendingCashDeposits] = useState<{
+    totalAmount: number;
+    count: number;
+    deposits: Array<{ id: string; jobTitle: string; amount: number; depositDeadline: string; contractorName: string; status: string }>;
+  }>({ totalAmount: 0, count: 0, deposits: [] });
+  const [showCashDepositToaster, setShowCashDepositToaster] = useState(false);
+
   // ✅ Location permission modal state (shown post-login)
   const [showLocationModal, setShowLocationModal] = useState<boolean>(false);
   const [requestingLocation, setRequestingLocation] = useState<boolean>(false);
@@ -227,6 +233,13 @@ function WorkerHome() {
     Number.isFinite(coords.lat) && Number.isFinite(coords.lon) &&
     coords.lat >= -90 && coords.lat <= 90 &&
     coords.lon >= -180 && coords.lon <= 180;
+
+  useEffect(() => {
+    if (pendingCashDeposits.count === 0) {
+      // Hide toaster when there are no pending deposits left
+      setShowCashDepositToaster(false);
+    }
+  }, [pendingCashDeposits.count]);
 
   const router = useRouter();
 
@@ -475,6 +488,8 @@ function WorkerHome() {
         } catch (syncErr) {
           console.warn("Could not sync availability from backend on focus:", syncErr);
         }
+
+        await fetchPendingCashDeposits();
       })();
     }, [token])
   );
@@ -1152,6 +1167,25 @@ function WorkerHome() {
       }
     };
 
+    const handleCashDepositCreated = (data: any) => {
+      try {
+        console.log('socket cashDepositCreated event received (WorkerHome):', data);
+        if (!data) return;
+        // Refresh pending deposits list when server notifies
+        fetchPendingCashDeposits().catch((e) => console.warn('Failed to refresh cash deposits on socket event', e));
+        // Optionally show an alert when a new deposit is required
+        if (data.phone === currentUserPhone || data.workerPhone === currentUserPhone) {
+          Alert.alert(
+            'Cash Deposit Required',
+            `You have a pending cash deposit of ₹${data.amount} for ${data.jobTitle || 'a job'}. Please deposit to your wallet to remain online.`,
+            [{ text: 'OK' }]
+          );
+        }
+      } catch (err) {
+        console.error('Error handling cashDepositCreated:', err);
+      }
+    };
+
     const handleWalletUpdatedForStats = (data: any) => {
       try {
         if (!data || data.phone !== currentUserPhone) return;
@@ -1189,6 +1223,7 @@ function WorkerHome() {
     socket.on("workerStatusUpdate", handleWorkerStatusUpdate); // ✅ BUG #4: Listen for status changes
     socket.on("profilePhotoUpdated", handleProfilePhotoUpdate);
     socket.on("workerControlUpdated", handleWorkerControlUpdated);
+    socket.on("cashDepositCreated", handleCashDepositCreated);
     socket.on("jobRequest", handleJobRequest);
 
     // Stop polling when socket connects; start polling when socket disconnects
@@ -1211,6 +1246,7 @@ function WorkerHome() {
       socket.off("workerStatusUpdate", handleWorkerStatusUpdate);
       socket.off("profilePhotoUpdated", handleProfilePhotoUpdate);
       socket.off("workerControlUpdated", handleWorkerControlUpdated);
+      socket.off("cashDepositCreated", handleCashDepositCreated);
       socket.off("jobRequest", handleJobRequest);
       socket.off('connect', handleSocketConnect);
       socket.off('disconnect', handleSocketDisconnect);
@@ -1248,6 +1284,48 @@ function WorkerHome() {
       }
     } catch (err) {
       console.error('Error fetching notification count:', err);
+    }
+  };
+
+  const fetchPendingCashDeposits = async () => {
+    try {
+      let authToken = token;
+      if (!authToken) {
+        authToken = await getAuthAccessToken();
+      }
+      if (!authToken) return;
+
+      const res = await fetch(`${API_BASE}/jobs/cash-deposits`, {
+        headers: { Authorization: `Bearer ${authToken}` },
+      });
+      if (!res.ok) {
+        console.warn('fetchPendingCashDeposits: non-ok response', res.status);
+        return;
+      }
+      const data = await res.json();
+      console.log('fetchPendingCashDeposits: response', data);
+      if (!data.success) {
+        console.warn('fetchPendingCashDeposits: success flag false', data);
+        return;
+      }
+      const pending = Array.isArray(data.deposits)
+        ? data.deposits.filter((deposit: any) => String(deposit.status || '').toLowerCase() === 'pending')
+        : [];
+      const totalAmount = pending.reduce((sum: number, deposit: any) => sum + Number(deposit.amount || 0), 0);
+      setPendingCashDeposits({
+        totalAmount,
+        count: pending.length,
+        deposits: pending.map((deposit: any) => ({
+          id: deposit.id || deposit._id,
+          jobTitle: deposit.jobTitle || deposit.jobTitle || 'Unknown Job',
+          amount: Number(deposit.amount || 0),
+          depositDeadline: deposit.depositDeadline || '',
+          contractorName: deposit.contractorName || '',
+          status: deposit.status || 'pending',
+        })),
+      });
+    } catch (err) {
+      console.error('Failed to fetch pending cash deposits:', err);
     }
   };
 
@@ -1669,6 +1747,38 @@ function WorkerHome() {
             "Account Blocked",
             "You are blocked and cannot go online. Please contact support."
           );
+          return;
+        }
+        // Backend enforces pending cash deposits before allowing online
+        if (data?.code === "PENDING_CASH_DEPOSIT") {
+          try {
+            // Populate local pending deposits state if provided
+            if (Array.isArray(data.pendingDeposits)) {
+              const pending = data.pendingDeposits.map((d: any) => ({
+                id: d._id || d.id || '',
+                jobTitle: d.jobTitle || d.jobTitle || 'Unknown Job',
+                amount: Number(d.amount || 0),
+                depositDeadline: d.depositDeadline || '',
+                contractorName: d.contractorName || '',
+                status: d.status || 'pending',
+              }));
+              const total = pending.reduce((s: number, p: any) => s + Number(p.amount || 0), 0);
+              setPendingCashDeposits({ totalAmount: total, count: pending.length, deposits: pending });
+            }
+          } catch (e) {
+            console.warn('Failed to populate pending deposits from backend response', e);
+          }
+
+          setShowCashDepositToaster(true);
+          Alert.alert(
+            'Pending Cash Deposit',
+            data.message || `You have ₹${data.requiredDepositAmount || 0} in pending cash deposits that must be deposited before you can go online.`,
+            [
+              { text: 'Open Wallet', onPress: () => router.push('/home/worker/wallet' as any) },
+              { text: 'OK' },
+            ]
+          );
+          setTogglingStatus(false);
           return;
         }
         const backendMessage = data?.message || "Failed to update availability";
@@ -2216,6 +2326,22 @@ function WorkerHome() {
       </View>
 
       <View style={styles.topSection}>
+        {pendingCashDeposits && pendingCashDeposits.count > 0 && showCashDepositToaster && (
+          <View style={styles.cashDepositToaster}>
+            <Text style={styles.cashDepositToasterText} numberOfLines={2}>
+              ₹{pendingCashDeposits.totalAmount} pending cash deposit. Please deposit to wallet before going online.
+            </Text>
+            <TouchableOpacity
+              onPress={() => {
+                setShowCashDepositToaster(false);
+                router.push('/home/worker/wallet' as any);
+              }}
+              style={styles.cashDepositToasterButton}
+            >
+              <Text style={styles.cashDepositToasterButtonText}>Deposit</Text>
+            </TouchableOpacity>
+          </View>
+        )}
         <WorkerMap style={styles.map} />
         <TouchableOpacity style={styles.mapHelpIcon} onPress={openSupportCallOptions}>
           <MaterialIcons name="notification-important" size={22} color="#fff" />
@@ -2819,6 +2945,45 @@ const styles = StyleSheet.create({
     color: "#fff",
     fontSize: 10,
     fontWeight: "700",
+  },
+  cashDepositToaster: {
+    position: "absolute",
+    top: 14,
+    left: 14,
+    right: 14,
+    zIndex: 10,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    backgroundColor: "#fff4e5",
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "#fde3c3",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.12,
+    shadowRadius: 6,
+    elevation: 6,
+  },
+  cashDepositToasterText: {
+    flex: 1,
+    color: "#92400e",
+    fontSize: 13,
+    fontWeight: "600",
+    marginRight: 10,
+  },
+  cashDepositToasterButton: {
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+    backgroundColor: "#f97316",
+    borderRadius: 8,
+  },
+  cashDepositToasterButtonText: {
+    color: "#fff",
+    fontWeight: "700",
+    fontSize: 12,
   },
   topSection: { zIndex: 0, marginBottom: -1, overflow: "hidden", backgroundColor: "#f5f5f5" },
   mapHelpIcon: {
