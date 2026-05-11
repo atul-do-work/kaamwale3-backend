@@ -77,11 +77,21 @@ async function rollbackJobPayment(job, oldJobState, target = null, oldTargetStat
       target.paymentMode = oldTargetState.paymentMode;
       target.paymentTime = oldTargetState.paymentTime;
     }
-    job.paymentStatus = oldJobState.paymentStatus;
-    job.paymentMode = oldJobState.paymentMode;
-    job.paymentTime = oldJobState.paymentTime;
-    job.status = oldJobState.status;
-    await job.save();
+
+    // Use a raw collection update to bypass model-level hooks that may reject
+    // the rollback transition, while still restoring the original values.
+    await Job.collection.updateOne(
+      { _id: job._id },
+      {
+        $set: {
+          paymentStatus: oldJobState.paymentStatus,
+          paymentMode: oldJobState.paymentMode,
+          paymentTime: oldJobState.paymentTime,
+          status: oldJobState.status,
+          updatedAt: new Date(),
+        },
+      }
+    );
   } catch (err) {
     console.error("Error rolling back payment state:", err);
   }
@@ -1283,6 +1293,7 @@ async function depositCashById({ depositId, workerPhone, idempotencyKey, deps })
 }
 
 async function rateJob({ jobId, stars, feedback, workerPhone, userPhone, userName, deps }) {
+  const { emitJobUpdatedToUsers } = deps;
   if (!stars || stars < 1 || stars > 5) {
     return { code: 400, body: { message: "Rating must be between 1 and 5 stars" } };
   }

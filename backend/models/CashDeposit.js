@@ -70,9 +70,8 @@ cashDepositSchema.index({ jobId: 1, workerPhone: 1 }, { unique: true });
 cashDepositSchema.index({ depositDeadline: 1, status: 1 });
 
 // Auto-update updatedAt
-cashDepositSchema.pre('save', function(next) {
+cashDepositSchema.pre('save', function() {
   this.updatedAt = new Date();
-  next();
 });
 
 // TTL index for automatic expiration (24 hours after deadline)
