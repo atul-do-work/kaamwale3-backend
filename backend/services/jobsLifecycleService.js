@@ -825,6 +825,8 @@ async function payJob({ jobId, mode, workerPhone, idempotencyKey, userPhone, use
               amount: job.amount,
               depositDeadline: cashDeposit.depositDeadline,
               jobTitle: job.title,
+              workerPhone: targetPhone,
+              phone: targetPhone,
               timestamp: new Date(),
             });
           }
@@ -846,7 +848,12 @@ async function payJob({ jobId, mode, workerPhone, idempotencyKey, userPhone, use
   }
 
   // ✅ CRITICAL: Emit job update to both contractor and worker so UI updates in real-time
-  await emitJobUpdatedToUsers(job, [job.contractorPhone, normalizedWorkerPhone || job.acceptedBy || job.contractorPhone]);
+  try {
+    await emitJobUpdatedToUsers(job, [job.contractorPhone, normalizedWorkerPhone || job.acceptedBy || job.contractorPhone]);
+  } catch (emitErr) {
+    console.error("Error emitting job update after payment:", emitErr);
+    // Don't fail the payment for emit errors
+  }
 
   // ✅ CRITICAL: Emit wallet update to contractor for real-time UI refresh
   if (io && job.contractorPhone) {
@@ -1423,7 +1430,12 @@ async function rateJob({ jobId, stars, feedback, workerPhone, userPhone, userNam
     console.error("Error creating rating notification:", e);
   }
 
-  await emitJobUpdatedToUsers(job, [job.contractorPhone, job.acceptedBy || job.contractorPhone]);
+  try {
+    await emitJobUpdatedToUsers(job, [job.contractorPhone, job.acceptedBy || job.contractorPhone]);
+  } catch (emitErr) {
+    console.error("Error emitting job update after rating:", emitErr);
+    // Don't fail the rating for emit errors
+  }
   return { code: 200, body: { success: true, message: "Rating submitted successfully", job } };
 }
 
@@ -1510,7 +1522,12 @@ async function rateContractor({ jobId, stars, feedback, userPhone, userName, dep
     console.error("Error creating contractor rating notification:", e);
   }
 
-  await emitJobUpdatedToUsers(job, [job.contractorPhone, job.acceptedBy || job.contractorPhone]);
+  try {
+    await emitJobUpdatedToUsers(job, [job.contractorPhone, job.acceptedBy || job.contractorPhone]);
+  } catch (emitErr) {
+    console.error("Error emitting job update after contractor rating:", emitErr);
+    // Don't fail the rating for emit errors
+  }
   return { code: 200, body: { success: true, message: "Contractor rated successfully", job } };
 }
 
