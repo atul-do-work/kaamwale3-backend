@@ -8,6 +8,9 @@ const Wallet = require("../models/Wallet");
 const User = require("../models/User");
 const BankAccount = require("../models/BankAccount");
 const Withdrawal = require("../models/Withdrawal");
+const CashDeposit = require("../models/CashDeposit");
+const Job = require("../models/Jobs");
+const NotificationHistory = require("../models/NotificationHistory");
 const { sendOpsAlert } = require("../utils/opsAlert");
 const axios = require('axios');
 
@@ -432,7 +435,7 @@ router.post("/deposit/create-order", authenticateToken, depositOrderLimiter, asy
       return res.status(500).json({ success: false, message: "Payment service not configured" });
     }
 
-    const { amount } = req.body;
+    const { amount, depositId } = req.body;
     
     // 🔐 INPUT VALIDATION: Type safety
     if (amount === undefined || amount === null) {
@@ -467,8 +470,9 @@ router.post("/deposit/create-order", authenticateToken, depositOrderLimiter, asy
       notes: {
         phone: req.user.phone,
         role: req.user.role || "worker",
-        type: 'wallet_deposit',
-        amount: depositAmount // Store amount in notes for server-side verification
+        type: depositId ? 'cash_deposit' : 'wallet_deposit',
+        amount: depositAmount,
+        depositId: depositId || undefined
       }
     });
 
@@ -490,7 +494,7 @@ router.post("/deposit/create-order", authenticateToken, depositOrderLimiter, asy
 // ✅ VERIFY & COMPLETE DEPOSIT (FULLY ATOMIC)
 router.post("/deposit/verify", authenticateToken, depositVerifyLimiter, async (req, res) => {
   try {
-    const { orderId, paymentId, signature } = req.body;
+    const { orderId, paymentId, signature, depositId } = req.body;
 
     // 🔐 ENFORCE: Keys must be configured
     if (!process.env.RAZORPAY_KEY_ID || !process.env.RAZORPAY_KEY_SECRET) {
@@ -573,6 +577,34 @@ router.post("/deposit/verify", authenticateToken, depositVerifyLimiter, async (r
 
     console.log(`✅ Deposit user verified: payment matches authenticated user`);
 
+    const isPendingCashDeposit = Boolean(depositId);
+    let cashDepositRecord = null;
+    if (isPendingCashDeposit) {
+      if (!payment.notes || payment.notes.type !== 'cash_deposit' || String(payment.notes.depositId) !== String(depositId)) {
+        console.error(`🔴 Deposit verification mismatch: expected cash_deposit note for depositId=${depositId}`);
+        return res.status(400).json({ success: false, message: 'Payment does not match the pending cash deposit record.' });
+      }
+
+      cashDepositRecord = await CashDeposit.findById(depositId);
+      if (!cashDepositRecord) {
+        return res.status(404).json({ success: false, message: 'Pending cash deposit record not found' });
+      }
+      if (cashDepositRecord.workerPhone !== req.user.phone) {
+        return res.status(403).json({ success: false, message: 'Not authorized to settle this pending cash deposit' });
+      }
+      if (String(cashDepositRecord.status).toLowerCase() !== 'pending') {
+        return res.status(400).json({ success: false, message: 'This cash deposit is no longer pending' });
+      }
+      if (Math.abs(Number(cashDepositRecord.amount || 0) - depositAmount) > 0.01) {
+        return res.status(400).json({ success: false, message: 'Payment amount must match the pending cash deposit amount' });
+      }
+
+      const job = await Job.findById(cashDepositRecord.jobId);
+      if (!job || job.status !== 'completed' || job.paymentStatus !== 'paid' || String(job.paymentMode || '').trim().toLowerCase() !== 'cash') {
+        return res.status(400).json({ success: false, message: 'Pending cash deposit is not tied to a valid completed cash job' });
+      }
+    }
+
     // 🔐 STEP 3: CRITICAL IDEMPOTENCY CHECK
     // Check if this exact paymentId was already processed
     // This prevents race conditions and double-crediting
@@ -626,18 +658,20 @@ router.post("/deposit/verify", authenticateToken, depositVerifyLimiter, async (r
         $inc: balanceInc, // Atomically increment target bucket
         $push: {
           transactions: appendAuditFields({
-            type: isContractor ? 'pocket_deposit' : 'deposit',
+            type: isPendingCashDeposit ? 'cash_deposit' : isContractor ? 'pocket_deposit' : 'deposit',
             amount: depositAmount,
             openingBalance,
             closingBalance,
             paymentId,
             orderId,
             status: 'completed',
-            description: isContractor
-              ? `Pocket balance deposit via Razorpay (${paymentId})`
-              : isWorker
-                ? `Worker deposit credited to available + pocket (${paymentId})`
-              : `Wallet deposit via Razorpay (${paymentId})`,
+            description: isPendingCashDeposit
+              ? `Pending cash deposit settled via Razorpay (${paymentId})`
+              : isContractor
+                ? `Pocket balance deposit via Razorpay (${paymentId})`
+                : isWorker
+                  ? `Worker deposit credited to available + pocket (${paymentId})`
+                  : `Wallet deposit via Razorpay (${paymentId})`,
             source: 'app',
             provider: 'razorpay',
             providerEventId: paymentId,
@@ -673,6 +707,16 @@ router.post("/deposit/verify", authenticateToken, depositVerifyLimiter, async (r
 
     console.log(`✅ Wallet updated: ${req.user.phone} deposited ₹${depositAmount}`);
 
+    if (isPendingCashDeposit && cashDepositRecord) {
+      cashDepositRecord.status = 'completed';
+      cashDepositRecord.depositedAt = new Date();
+      try {
+        await cashDepositRecord.save();
+      } catch (saveErr) {
+        console.error('Error saving cash deposit record after payment verification:', saveErr);
+      }
+    }
+
     // ✅ EMIT WALLET UPDATE to specific user only (via Socket.IO room)
     const io = req.app.get('io');
     if (io) {
@@ -681,9 +725,9 @@ router.post("/deposit/verify", authenticateToken, depositVerifyLimiter, async (r
         balance: wallet.balance,
         availableBalance: Number(wallet.availableBalance || wallet.balance || 0),
         pocketBalance: Number(wallet.pocketBalance || 0),
-        type: 'deposit',
+        type: isPendingCashDeposit ? 'cash_deposit' : 'deposit',
         amount: depositAmount,
-        message: `Deposit successful: ₹${depositAmount}`
+        message: isPendingCashDeposit ? `Pending cash deposit settled: ₹${depositAmount}` : `Deposit successful: ₹${depositAmount}`
       });
       console.log(`📤 Emitted walletUpdated for deposit to ${req.user.phone}`);
     }

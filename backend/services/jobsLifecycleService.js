@@ -72,25 +72,37 @@ function normalizePaidJobStatus(status) {
 async function rollbackJobPayment(job, oldJobState, target = null, oldTargetState = null) {
   if (!job || !oldJobState) return;
   try {
-    if (target && oldTargetState) {
-      target.paymentStatus = oldTargetState.paymentStatus;
-      target.paymentMode = oldTargetState.paymentMode;
-      target.paymentTime = oldTargetState.paymentTime;
+    const rollbackFields = {
+      paymentStatus: oldJobState.paymentStatus,
+      paymentMode: oldJobState.paymentMode,
+      paymentTime: oldJobState.paymentTime,
+      status: oldJobState.status,
+      updatedAt: new Date(),
+    };
+    if (oldJobState.timeSpentMinutes !== undefined) {
+      rollbackFields.timeSpentMinutes = oldJobState.timeSpentMinutes;
+    }
+    if (oldJobState.hoursWorked !== undefined) {
+      rollbackFields.hoursWorked = oldJobState.hoursWorked;
     }
 
-    // Use a raw collection update to bypass model-level hooks that may reject
-    // the rollback transition, while still restoring the original values.
+    const update = { $set: rollbackFields };
+    const updateOptions = {};
+
+    if (target && oldTargetState && Array.isArray(job.acceptedWorkers)) {
+      const targetPhone = normalizeWorkerPhone(target.phone || target.workerPhone || target);
+      if (targetPhone) {
+        update.$set["acceptedWorkers.$[worker].paymentStatus"] = oldTargetState.paymentStatus;
+        update.$set["acceptedWorkers.$[worker].paymentMode"] = oldTargetState.paymentMode;
+        update.$set["acceptedWorkers.$[worker].paymentTime"] = oldTargetState.paymentTime;
+        updateOptions.arrayFilters = [{ "worker.phone": targetPhone }];
+      }
+    }
+
     await Job.collection.updateOne(
       { _id: job._id },
-      {
-        $set: {
-          paymentStatus: oldJobState.paymentStatus,
-          paymentMode: oldJobState.paymentMode,
-          paymentTime: oldJobState.paymentTime,
-          status: oldJobState.status,
-          updatedAt: new Date(),
-        },
-      }
+      update,
+      updateOptions
     );
   } catch (err) {
     console.error("Error rolling back payment state:", err);
@@ -321,6 +333,14 @@ async function payJob({ jobId, mode, workerPhone, idempotencyKey, userPhone, use
   const { updateContractorStats, emitJobUpdatedToUsers, logJobEvent, io } = deps;
   const job = await Job.findById(jobId);
   if (!job) return finalize({ code: 404, body: { message: "Job not found" } });
+
+  const paymentWorkerPhone = normalizedWorkerPhone || normalizeWorkerPhone(job.acceptedBy || job.acceptedWorker?.phone);
+  if (!job.bulkHiring && !paymentWorkerPhone) {
+    return finalize({ code: 400, body: { success: false, message: "Worker phone not available for payment. Ensure the job is accepted before paying." } });
+  }
+  if (!job.bulkHiring && normalizedWorkerPhone && !areSamePhone(normalizedWorkerPhone, paymentWorkerPhone)) {
+    return finalize({ code: 400, body: { success: false, message: "Worker phone does not match the accepted worker for this job." } });
+  }
 
   if (!areSamePhone(job.contractorPhone, userPhone)) {
     return finalize({ code: 403, body: { success: false, message: "Only the contractor can make payments for this job" } });
@@ -570,7 +590,14 @@ async function payJob({ jobId, mode, workerPhone, idempotencyKey, userPhone, use
     return finalize({ code: 400, body: { success: false, message: "Payment allowed only for PRESENT workers" } });
   }
 
-  const oldState = { status: job.status, paymentStatus: job.paymentStatus, paymentMode: job.paymentMode, paymentTime: job.paymentTime };
+  const oldState = {
+    status: job.status,
+    paymentStatus: job.paymentStatus,
+    paymentMode: job.paymentMode,
+    paymentTime: job.paymentTime,
+    timeSpentMinutes: job.timeSpentMinutes,
+    hoursWorked: job.hoursWorked,
+  };
   job.paymentStatus = "paid";
   job.paymentMode = normalizedPaymentMode;
   job.paymentTime = new Date();
@@ -584,10 +611,11 @@ async function payJob({ jobId, mode, workerPhone, idempotencyKey, userPhone, use
 
   // Record completion for incentive eligibility only after payment is finalized.
   try {
-    if (job.acceptedBy) {
+    const historyWorkerPhone = paymentWorkerPhone || job.acceptedBy;
+    if (historyWorkerPhone) {
       await createGigHistoryEvent({
-        workerPhone: job.acceptedBy,
-        workerName: job.acceptedWorker?.name || job.acceptedBy,
+        workerPhone: historyWorkerPhone,
+        workerName: job.acceptedWorker?.name || historyWorkerPhone,
         jobId: job._id,
         jobTitle: job.title,
         contractorPhone: job.contractorPhone,
@@ -621,9 +649,10 @@ async function payJob({ jobId, mode, workerPhone, idempotencyKey, userPhone, use
   });
 
   try {
-    if (job.acceptedWorker && job.acceptedWorker.phone) {
+    const paymentNotificationPhone = paymentWorkerPhone || job.acceptedWorker?.phone || job.acceptedBy;
+    if (paymentNotificationPhone) {
       await NotificationHistory.create({
-        recipientPhone: job.acceptedWorker.phone,
+        recipientPhone: paymentNotificationPhone,
         senderPhone: userPhone,
         senderName: userName || job.contractorName || "Contractor",
         type: "payment_received",
@@ -660,18 +689,20 @@ async function payJob({ jobId, mode, workerPhone, idempotencyKey, userPhone, use
     if (normalizedMode === "cash") {
       // For cash payments, create a pending cash deposit record instead of crediting wallet
       const depositDeadline = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours from now
+      const depositWorkerPhone = paymentWorkerPhone || job.acceptedBy;
+      const depositWorkerName = job.acceptedWorker?.name || depositWorkerPhone;
 
       // ✅ Use upsert to handle idempotency - if duplicate exists, update it instead of failing
       const existingDeposit = await CashDeposit.findOne({
         jobId: job._id,
-        workerPhone: job.acceptedBy,
+        workerPhone: depositWorkerPhone,
       });
 
       if (!existingDeposit) {
-        console.log(`[jobsLifecycleService] creating CashDeposit jobId=${job._id} workerPhone=${job.acceptedBy} amount=${job.amount} isBulk=false`);
+        console.log(`[jobsLifecycleService] creating CashDeposit jobId=${job._id} workerPhone=${depositWorkerPhone} amount=${job.amount} isBulk=false`);
         const created = await CashDeposit.create({
           jobId: job._id,
-          workerPhone: job.acceptedBy,
+          workerPhone: depositWorkerPhone,
           contractorPhone: job.contractorPhone,
           amount: job.amount,
           status: 'pending',
@@ -679,14 +710,14 @@ async function payJob({ jobId, mode, workerPhone, idempotencyKey, userPhone, use
           depositDeadline,
           jobTitle: job.title,
           contractorName: job.contractorName,
-          workerName: job.acceptedWorker?.name,
+          workerName: depositWorkerName,
           isBulkJob: false,
         });
         console.log(`[jobsLifecycleService] CashDeposit created id=${created?._id}`);
       } else {
         // Update existing deposit if found (idempotency handling)
         await CashDeposit.findOneAndUpdate(
-          { jobId: job._id, workerPhone: job.acceptedBy },
+          { jobId: job._id, workerPhone: depositWorkerPhone },
           {
             $set: {
               status: 'pending',
@@ -703,7 +734,7 @@ async function payJob({ jobId, mode, workerPhone, idempotencyKey, userPhone, use
       // Only send if this is a new deposit
       if (!existingDeposit) {
         await NotificationHistory.create({
-          recipientPhone: job.acceptedBy,
+          recipientPhone: depositWorkerPhone,
           senderPhone: userPhone,
           senderName: userName || job.contractorName || "Contractor",
           type: "cash_deposit_required",
@@ -723,7 +754,7 @@ async function payJob({ jobId, mode, workerPhone, idempotencyKey, userPhone, use
     } else {
       // For non-cash payments, credit wallet immediately
       const updatedWorkerWallet = await Wallet.findOneAndUpdate(
-        { phone: job.acceptedBy },
+        { phone: paymentWorkerPhone },
         {
           $inc: {
             balance: creditAmount,
@@ -760,7 +791,7 @@ async function payJob({ jobId, mode, workerPhone, idempotencyKey, userPhone, use
   try {
     await upsertWorkerEarningForJobPayment({
       job,
-      workerPhone: job.acceptedBy,
+      workerPhone: paymentWorkerPhone,
       amount: job.amount,
       mode,
     });
@@ -771,16 +802,16 @@ async function payJob({ jobId, mode, workerPhone, idempotencyKey, userPhone, use
   // First completed cash-paid job activates mandatory pocket balance rule for worker availability.
   try {
     const normalizedMode = String(mode || "").trim().toLowerCase();
-    if (normalizedMode === "cash" && job.acceptedBy) {
+    if (normalizedMode === "cash" && paymentWorkerPhone) {
       const totalPaidCompletedJobs = await Job.countDocuments({
-        $or: [{ acceptedBy: job.acceptedBy }, { "acceptedWorkers.phone": job.acceptedBy }],
+        $or: [{ acceptedBy: paymentWorkerPhone }, { "acceptedWorkers.phone": paymentWorkerPhone }],
         paymentStatus: "paid",
         status: "completed",
       });
 
       if (totalPaidCompletedJobs === 1) {
         await WorkerModel.findOneAndUpdate(
-          { phone: job.acceptedBy },
+          { phone: paymentWorkerPhone },
           {
             $set: {
               "compliance.requiresPocketMinimumForOnline": true,
@@ -797,14 +828,14 @@ async function payJob({ jobId, mode, workerPhone, idempotencyKey, userPhone, use
     console.error("Error applying first-cash pocket-balance compliance rule:", complianceErr);
   }
 
-  if (normalizedWorkerPhone || job.acceptedBy) {
-    await setWorkerOfflineByPhone(normalizedWorkerPhone || job.acceptedBy);
+  if (paymentWorkerPhone) {
+    await setWorkerOfflineByPhone(paymentWorkerPhone);
   }
 
   await updateContractorStats(userPhone);
 
   try {
-    const targetPhone = normalizedWorkerPhone || job.acceptedBy;
+    const targetPhone = paymentWorkerPhone;
     if (io && targetPhone) {
       try {
         io.to(targetPhone).emit("workerStatusUpdate", {
@@ -859,7 +890,7 @@ async function payJob({ jobId, mode, workerPhone, idempotencyKey, userPhone, use
 
   // ✅ CRITICAL: Emit job update to both contractor and worker so UI updates in real-time
   try {
-    await emitJobUpdatedToUsers(job, [job.contractorPhone, normalizedWorkerPhone || job.acceptedBy || job.contractorPhone]);
+    await emitJobUpdatedToUsers(job, [job.contractorPhone, paymentWorkerPhone || job.contractorPhone]);
   } catch (emitErr) {
     console.error("Error emitting job update after payment:", emitErr);
     // Don't fail the payment for emit errors
@@ -873,7 +904,7 @@ async function payJob({ jobId, mode, workerPhone, idempotencyKey, userPhone, use
         // For cash payments, emit a specific cash payment notification
         io.to(job.contractorPhone).emit("cashPaymentCreated", {
           jobId: job._id,
-          workerId: normalizedWorkerPhone || job.acceptedBy,
+          workerId: paymentWorkerPhone,
           amount: job.amount,
           jobTitle: job.title,
           timestamp: new Date(),
@@ -2046,6 +2077,7 @@ module.exports = {
   depositCash,
   depositCashById,
   getCashDeposits,
+  getPendingCashDepositsForWorker,
   rateJob,
   rateContractor,
   cancelJob,
