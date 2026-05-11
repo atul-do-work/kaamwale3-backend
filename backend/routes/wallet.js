@@ -3,6 +3,7 @@ const express = require("express");
 const router = express.Router();
 const crypto = require("crypto");
 const rateLimit = require("express-rate-limit");
+const mongoose = require("mongoose");
 const { authenticateToken } = require("../utils/auth");
 const Wallet = require("../models/Wallet");
 const User = require("../models/User");
@@ -1480,11 +1481,15 @@ router.post("/deposit/webhook", async (req, res) => {
     const orderId = payment?.order_id;
     const amount = Number(payment?.amount || 0) / 100;
     const phone = payment?.notes?.phone;
-    const type = payment?.notes?.type;
+    const type = String(payment?.notes?.type || "").toLowerCase();
+    const depositId = String(payment?.notes?.depositId || "").trim();
+    const isCashDeposit = type === "cash_deposit";
+    const isWalletDeposit = type === "wallet_deposit";
+    let cashDepositRecord = null;
 
-    // This endpoint is only for wallet deposit events.
+    // This endpoint is only for wallet-related deposits.
     // If a job payment webhook reaches here, ACK as ignored to prevent noisy 400 retries.
-    if (type !== "wallet_deposit") {
+    if (!isWalletDeposit && !isCashDeposit) {
       await session.commitTransaction();
       return res.status(200).json({ success: true, ignored: true, reason: "non_wallet_deposit_event" });
     }
@@ -1492,6 +1497,26 @@ router.post("/deposit/webhook", async (req, res) => {
     if (!paymentId || !phone || amount <= 0 || amount < 100) {
       await session.abortTransaction();
       return res.status(400).json({ success: false, message: "Invalid wallet deposit webhook payload" });
+    }
+
+    if (isCashDeposit) {
+      if (!depositId) {
+        await session.abortTransaction();
+        return res.status(400).json({ success: false, message: "Missing depositId for pending cash deposit webhook" });
+      }
+      cashDepositRecord = await CashDeposit.findById(depositId).session(session);
+      if (!cashDepositRecord || String(cashDepositRecord.workerPhone) !== String(phone)) {
+        await session.abortTransaction();
+        return res.status(400).json({ success: false, message: "Cash deposit webhook record mismatch" });
+      }
+      if (String(cashDepositRecord.status || "").toLowerCase() !== "pending") {
+        await session.abortTransaction();
+        return res.status(400).json({ success: false, message: "Cash deposit is not pending" });
+      }
+      if (Math.abs(Number(cashDepositRecord.amount || 0) - amount) > 0.01) {
+        await session.abortTransaction();
+        return res.status(400).json({ success: false, message: "Cash deposit amount mismatch" });
+      }
     }
 
     // 🔐 EDGE CASE: Deposit flow - success vs verification failure
@@ -1540,18 +1565,20 @@ router.post("/deposit/webhook", async (req, res) => {
             : { availableBalance: amount, balance: amount },
         $push: {
           transactions: appendAuditFields({
-            type: isContractor ? "pocket_deposit" : "deposit",
+            type: isCashDeposit ? "cash_deposit" : isContractor ? "pocket_deposit" : "deposit",
             amount,
             openingBalance: Number(walletDoc?.[targetBalanceField] || 0),
             closingBalance: (Number(walletDoc?.[targetBalanceField] || 0) + amount),
             orderId,
             paymentId,
             status: "completed",
-            description: isContractor
-              ? `Pocket balance deposit via webhook (${paymentId})`
-              : isWorker
-                ? `Worker deposit credited to available + pocket via webhook (${paymentId})`
-              : `Wallet deposit via webhook (${paymentId})`,
+            description: isCashDeposit
+              ? `Pending cash deposit settled via webhook (${paymentId})`
+              : isContractor
+                ? `Pocket balance deposit via webhook (${paymentId})`
+                : isWorker
+                  ? `Worker deposit credited to available + pocket via webhook (${paymentId})`
+                  : `Wallet deposit via webhook (${paymentId})`,
             source: "webhook",
             provider: "razorpay",
             providerEventId: paymentId,
@@ -1572,6 +1599,16 @@ router.post("/deposit/webhook", async (req, res) => {
       await session.commitTransaction();
       console.log(`✅ DEPOSIT WEBHOOK IDEMPOTENCY: Payment ${paymentId} already processed (null result)`);
       return res.status(200).json({ success: true, duplicate: true, message: "Payment already processed" });
+    }
+
+    if (isCashDeposit && cashDepositRecord) {
+      cashDepositRecord.status = 'completed';
+      cashDepositRecord.depositedAt = new Date();
+      try {
+        await cashDepositRecord.save({ session });
+      } catch (saveErr) {
+        console.error('Error updating cash deposit record from webhook:', saveErr);
+      }
     }
 
     await session.commitTransaction();

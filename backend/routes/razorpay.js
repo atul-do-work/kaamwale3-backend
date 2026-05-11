@@ -635,10 +635,11 @@ router.post('/webhook', async (req, res) => {
     const actualAmount = amount / 100; // Convert from paise
 
     // Wallet deposits are handled by /wallet/deposit/webhook route.
-    if (String(notes?.type || "").toLowerCase() === "wallet_deposit") {
-      info('ℹ️ Ignoring wallet deposit event on payment webhook', buildLogContext(req, { paymentId, orderId, idempotencyKey: paymentId }));
+    const paymentType = String(notes?.type || "").toLowerCase();
+    if (paymentType === "wallet_deposit" || paymentType === "cash_deposit") {
+      info('ℹ️ Ignoring wallet deposit event on payment webhook', buildLogContext(req, { paymentId, orderId, idempotencyKey: paymentId, paymentType }));
       await session.commitTransaction();
-      return res.status(200).json({ received: true, ignored: "wallet_deposit" });
+      return res.status(200).json({ received: true, ignored: paymentType });
     }
 
     if (!workerPhone || !jobId) {

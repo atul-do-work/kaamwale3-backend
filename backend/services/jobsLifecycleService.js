@@ -751,6 +751,13 @@ async function payJob({ jobId, mode, workerPhone, idempotencyKey, userPhone, use
           pushNotificationSent: false,
         });
       }
+
+      // ✅ CRITICAL: Mark job as paid and completed for cash payments
+      job.paymentStatus = "paid";
+      job.paymentMode = normalizedPaymentMode;
+      job.paymentTime = new Date();
+      job.status = normalizePaidJobStatus(job.status);
+      await job.save();
     } else {
       // For non-cash payments, credit wallet immediately
       const updatedWorkerWallet = await Wallet.findOneAndUpdate(
