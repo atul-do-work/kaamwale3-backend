@@ -281,7 +281,7 @@ export default function ContractorWalletAttendance() {
   // ✅ Memoize fetchJobs to prevent re-creation on every render
   const fetchJobs = React.useCallback(async () => {
     if (!accessToken) return;
-    if (activeTab !== "Attendance") return;
+    // Allow fetching jobs for real-time updates even when not on Attendance tab
     if (!isFocused) return;
 
     setLoading(true);
@@ -393,13 +393,7 @@ export default function ContractorWalletAttendance() {
 
   // SOCKET LISTENER FOR REALTIME UPDATES
   useEffect(() => {
-    if (activeTab !== "Attendance") {
-      return;
-    }
-
-    if (isFocused) {
-      fetchJobs();
-    }
+    if (!isFocused) return;
 
     // ✅ Use named handlers for safe cleanup
     const handleJobUpdated = () => {
@@ -442,7 +436,7 @@ export default function ContractorWalletAttendance() {
       socket.off("cashPaymentCreated", handleCashPaymentCreated);
       socket.off("cashDepositCreated", handleCashDepositCreated);
     };
-  }, [activeTab, fetchJobs, isFocused]);
+  }, [fetchJobs, isFocused]);
 
   // Refresh attendance list whenever user opens the Attendance tab.
   useEffect(() => {
@@ -454,11 +448,12 @@ export default function ContractorWalletAttendance() {
   // Refresh on screen focus as fallback when socket event is missed.
   useFocusEffect(
     React.useCallback(() => {
-      if (activeTab === "Attendance") {
+      // Always fetch jobs when screen becomes focused for real-time updates
+      if (isFocused) {
         fetchJobs();
       }
       return () => {};
-    }, [activeTab, fetchJobs])
+    }, [fetchJobs, isFocused])
   );
 
   // Mark attendance
@@ -509,11 +504,15 @@ export default function ContractorWalletAttendance() {
       } else {
         console.error("Payment error response:", data.message);
         showAppModal("error", t('error'), data.message || t('paymentFailed'));
+        // Even on error, refresh jobs in case payment actually succeeded but response failed
+        await fetchJobs();
       }
     } catch (err: any) {
       console.error("Payment failed:", err?.response?.data || err?.message || err);
       const errorMsg = err?.response?.data?.message || err?.message || t('paymentFailed');
       showAppModal("error", t('error'), errorMsg);
+      // Even on network error, refresh jobs in case payment actually succeeded
+      await fetchJobs();
     }
   };
 
@@ -741,8 +740,12 @@ export default function ContractorWalletAttendance() {
         // Backend fetches from DB and broadcasts authoritative job state
       } else {
         showAppModal("error", t('error'), data.message || t('failedSubmitRating'));
+        // Even on error, refresh jobs in case rating actually succeeded but response failed
+        await fetchJobs();
       }
     } catch (error) {
+      // Even on network error, refresh jobs in case rating actually succeeded
+      await fetchJobs();
       showAppModal("error", t('error'), t('failedSubmitRating'));
       console.error(error);
     } finally {

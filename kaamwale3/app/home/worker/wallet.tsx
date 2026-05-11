@@ -78,6 +78,7 @@ export default function Wallet(): React.ReactElement {
   const [depositModalHtml, setDepositModalHtml] = useState('');
   const [currentDepositAmount, setCurrentDepositAmount] = useState(0);
   const [currentDepositOrderId, setCurrentDepositOrderId] = useState('');
+  const [pendingDepositId, setPendingDepositId] = useState<string | null>(null);
   const [depositLoading, setDepositLoading] = useState(false);
 
   // ✅ Bank account states
@@ -255,6 +256,12 @@ export default function Wallet(): React.ReactElement {
               return prev;
             });
             console.log(`✅ Wallet updated: available ₹${nextAvailable}, pocket ₹${nextPocket}`);
+            
+            // ✅ Refresh cash deposits when a cash deposit is settled
+            if (data.type === 'cash_deposit') {
+              console.log('💵 Cash deposit settled, refreshing cash deposits list');
+              fetchCashDeposits().catch(e => console.warn('Failed to refresh cash deposits after settlement', e));
+            }
           } else {
             console.warn(`⚠️ Invalid wallet update data:`, data);
           }
@@ -379,6 +386,7 @@ export default function Wallet(): React.ReactElement {
       return;
     }
 
+    setPendingDepositId(null);
     setDepositLoading(true);
     try {
       // Step 1: Create deposit order
@@ -459,23 +467,108 @@ export default function Wallet(): React.ReactElement {
     }
   };
 
+  const handlePendingCashDeposit = async (depositId: string, amount: number) => {
+    if (depositLoading) return;
+
+    setPendingDepositId(depositId);
+    setDepositLoading(true);
+    setShowDeposit(false);
+    setShowWithdraw(false);
+
+    try {
+      const orderRes = await api.post('/wallet/deposit/create-order', {
+        amount: Number(amount),
+        depositId,
+      });
+
+      if (!orderRes.data.success) {
+        throw new Error(orderRes.data.message || t('failedCreateOrder'));
+      }
+
+      const { orderId, key_id, amount: orderAmount } = orderRes.data;
+      const razorpayHtml = `
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
+          <style>
+            body { margin: 0; padding: 0; background: #f5f5f5; }
+            #checkout-container { display: flex; justify-content: center; align-items: center; height: 100vh; }
+          </style>
+        </head>
+        <body>
+          <div id="checkout-container">
+            <p>Opening Razorpay Checkout...</p>
+          </div>
+          <script>
+            var options = {
+              "key": "${key_id}",
+              "amount": ${orderAmount},
+              "currency": "INR",
+              "name": "Kaamwale Wallet",
+              "description": "Pending cash deposit payment",
+              "order_id": "${orderId}",
+              "handler": function (response){
+                window.ReactNativeWebView.postMessage(JSON.stringify({
+                  type: 'deposit_success',
+                  paymentId: response.razorpay_payment_id,
+                  orderId: response.razorpay_order_id,
+                  signature: response.razorpay_signature
+                }));
+              },
+              "prefill": {
+                "name": "${authUser?.name || ''}",
+                "email": "${authUser?.email || ''}",
+                "contact": "${authUser?.phone || ''}"
+              },
+              "theme": {
+                "color": "#1a2f4d"
+              }
+            };
+            var rzp1 = new Razorpay(options);
+            rzp1.open();
+            rzp1.on('payment.failed', function (response){
+              window.ReactNativeWebView.postMessage(JSON.stringify({
+                type: 'deposit_failed',
+                error: response.error.description
+              }));
+            });
+          </script>
+        </body>
+        </html>
+      `;
+
+      setDepositModalHtml(razorpayHtml);
+      setDepositModalVisible(true);
+      setCurrentDepositAmount(Number(amount));
+      setCurrentDepositOrderId(orderId);
+    } catch (err: any) {
+      setPendingDepositId(null);
+      Alert.alert(t('error'), err.response?.data?.message || t('failedInitiateDeposit'));
+    } finally {
+      setDepositLoading(false);
+    }
+  };
+
   // Handle Razorpay deposit response
   const handleDepositMessage = async (event: any) => {
     try {
       const data = JSON.parse(event.nativeEvent.data);
 
       if (data.type === 'deposit_success') {
-        // ✅ Close modal FIRST before verifying deposit (prevents race condition)
-        // This ensures state updates happen after UI transitions complete
         setDepositModalVisible(false);
         setDepositModalHtml('');
-        
-        // Small delay to allow modal to close gracefully before state updates
+
         setTimeout(() => {
-          verifyDeposit(data);
+          if (pendingDepositId) {
+            verifyPendingCashDeposit(data);
+          } else {
+            verifyDeposit(data);
+          }
         }, 300);
       } else if (data.type === 'deposit_failed') {
         setDepositModalVisible(false);
+        setPendingDepositId(null);
         // ✅ Clear WebView HTML from memory
         setDepositModalHtml('');
         // ✅ Offer retry instead of just closing
@@ -492,6 +585,70 @@ export default function Wallet(): React.ReactElement {
       }
     } catch (error) {
       console.error('Error handling deposit response:', error);
+    }
+  };
+
+  const verifyPendingCashDeposit = async (data: any) => {
+    if (isDepositVerifyProcessing) {
+      console.warn('⚠️ Pending deposit verify already processing, ignoring duplicate request');
+      return;
+    }
+    if (!pendingDepositId) {
+      console.warn('⚠️ Missing pendingDepositId while verifying pending cash deposit');
+      return;
+    }
+
+    setIsDepositVerifyProcessing(true);
+    const idempotencyKey = generateIdempotencyKey();
+    lastDepositVerifyIdempotencyKeyRef.current = idempotencyKey;
+
+    try {
+      const res = await api.post(
+        '/wallet/deposit/verify',
+        {
+          orderId: data.orderId,
+          paymentId: data.paymentId,
+          signature: data.signature,
+          depositId: pendingDepositId,
+        },
+        {
+          headers: {
+            'x-idempotency-key': idempotencyKey,
+          },
+        }
+      );
+
+      if (res.data.success) {
+        const message = res.data.isDuplicate
+          ? tx('depositAlreadyProcessed', 'Deposit already processed successfully.')
+          : `Cash deposit of ₹${currentDepositAmount} has been settled and your wallet is credited.`;
+
+        Alert.alert(t('success'), message);
+        setPendingDepositId(null);
+        await fetchCashDeposits();
+        await fetchWallet();
+      } else {
+        Alert.alert(
+          t('error'),
+          res.data.message || t('depositVerificationFailed'),
+          [
+            { text: t('close'), onPress: () => {} },
+            { text: t('tryAgain'), onPress: () => verifyPendingCashDeposit(data), style: 'default' }
+          ]
+        );
+      }
+    } catch (err: any) {
+      const errorMsg = err.response?.data?.message || t('depositVerificationFailed');
+      Alert.alert(
+        t('error'),
+        errorMsg,
+        [
+          { text: t('close'), onPress: () => {} },
+          { text: t('tryAgain'), onPress: () => verifyPendingCashDeposit(data), style: 'default' }
+        ]
+      );
+    } finally {
+      setIsDepositVerifyProcessing(false);
     }
   };
 
@@ -726,6 +883,8 @@ export default function Wallet(): React.ReactElement {
       const res = await api.post(`/jobs/cash-deposits/${depositId}/deposit`);
       if (res.data.success) {
         Alert.alert(t('success'), 'Cash deposited successfully');
+        // Immediately clear the local pending deposit so the warning disappears before refresh.
+        setCashDeposits((prev) => prev.filter((d) => d.id !== depositId));
         await fetchCashDeposits();
         await fetchWallet();
       }
@@ -811,37 +970,48 @@ export default function Wallet(): React.ReactElement {
       {/* Cash Deposits Section */}
       {cashDeposits.length > 0 && (
         <View style={styles.cashDepositsCard}>
-          <Text style={styles.cashDepositsTitle}>{'Pending Cash Deposits'}</Text>
-          {cashDeposits.map((deposit) => (
-            <View key={deposit.id} style={styles.cashDepositItem}>
-              <View style={styles.cashDepositInfo}>
-                <Text style={styles.cashDepositAmount}>₹{deposit.amount}</Text>
-                <Text style={styles.cashDepositJobId}>Job: {deposit.jobTitle}</Text>
-                <Text style={styles.cashDepositDeadline}>
-                  Deadline: {new Date(deposit.depositDeadline).toLocaleDateString()}
-                </Text>
+          <Text style={styles.cashDepositsTitle}>{'Cash Deposits'}</Text>
+          {cashDeposits.map((deposit) => {
+            const status = String(deposit.status || '').toLowerCase();
+            const isCompleted = status === 'completed';
+            const isPending = status === 'pending';
+            const isDepositable = deposit.depositable !== false;
+            const canDeposit = isPending && isDepositable && !isDepositingCash;
+            
+            return (
+              <View key={deposit.id} style={styles.cashDepositItem}>
+                <View style={styles.cashDepositInfo}>
+                  <Text style={styles.cashDepositAmount}>₹{deposit.amount}</Text>
+                  <Text style={styles.cashDepositJobId}>Job: {deposit.jobTitle}</Text>
+                  <Text style={styles.cashDepositDeadline}>
+                    {isCompleted ? 'Completed' : `Deadline: ${new Date(deposit.depositDeadline).toLocaleDateString()}`}
+                  </Text>
+                </View>
+                <TouchableOpacity
+                  style={[
+                    styles.cashDepositButton,
+                    {
+                      opacity: !canDeposit ? 0.5 : isDepositingCash && depositingJobId === deposit.id ? 0.6 : 1,
+                      backgroundColor: isCompleted ? '#27ae60' : '#1a2f4d'
+                    }
+                  ]}
+                  onPress={() => canDeposit && handlePendingCashDeposit(deposit.id, Number(deposit.amount))}
+                  disabled={!canDeposit}
+                >
+                  <Text style={styles.cashDepositButtonText}>
+                    {isDepositingCash && depositingJobId === deposit.id
+                      ? 'Depositing...'
+                      : isCompleted
+                      ? 'Completed'
+                      : !isDepositable
+                      ? 'Legacy record'
+                      : 'Deposit Cash'
+                    }
+                  </Text>
+                </TouchableOpacity>
               </View>
-              <TouchableOpacity
-                style={[
-                  styles.cashDepositButton,
-                  {
-                    opacity: isDepositingCash && depositingJobId === deposit.id ? 0.6 : deposit.depositable === false ? 0.5 : 1
-                  }
-                ]}
-                onPress={() => handleCashDeposit(deposit.id)}
-                disabled={isDepositingCash || deposit.depositable === false}
-              >
-                <Text style={styles.cashDepositButtonText}>
-                  {isDepositingCash && depositingJobId === deposit.id
-                    ? 'Depositing...'
-                    : deposit.depositable === false
-                    ? 'Legacy record'
-                    : 'Deposit Cash'
-                  }
-                </Text>
-              </TouchableOpacity>
-            </View>
-          ))}
+            );
+          })}
         </View>
       )}
 

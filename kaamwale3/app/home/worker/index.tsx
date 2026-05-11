@@ -1174,7 +1174,11 @@ function WorkerHome() {
         // Refresh pending deposits list when server notifies
         fetchPendingCashDeposits().catch((e) => console.warn('Failed to refresh cash deposits on socket event', e));
         // Optionally show an alert when a new deposit is required
-        if (data.phone === currentUserPhone || data.workerPhone === currentUserPhone) {
+        if (
+          data.phone === currentUserPhone ||
+          data.workerPhone === currentUserPhone ||
+          data.depositId
+        ) {
           Alert.alert(
             'Cash Deposit Required',
             `You have a pending cash deposit of ₹${data.amount} for ${data.jobTitle || 'a job'}. Please deposit to your wallet to remain online.`,
@@ -1190,6 +1194,12 @@ function WorkerHome() {
       try {
         if (!data || data.phone !== currentUserPhone) return;
         calculateMetrics();
+        
+        // ✅ Refresh pending cash deposits when a cash deposit is settled
+        if (data.type === 'cash_deposit') {
+          console.log('💵 Cash deposit settled, refreshing pending cash deposits in WorkerHome');
+          fetchPendingCashDeposits().catch((e) => console.warn('Failed to refresh pending cash deposits after settlement', e));
+        }
       } catch (err) {
         console.error("Error handling walletUpdated stats refresh:", err);
       }
