@@ -925,7 +925,7 @@ export default function Wallet(): React.ReactElement {
   return (
     <ScrollView
       style={styles.container}
-      contentContainerStyle={{ paddingBottom: Math.max(insets.bottom + 24, 32) }}
+      contentContainerStyle={{ paddingBottom: Math.max(insets.bottom, 16) }}
     >
       {/* Earnings Header */}
       <LinearGradient
@@ -934,11 +934,16 @@ export default function Wallet(): React.ReactElement {
         end={{ x: 1, y: 0 }}
         style={styles.headerContainer}
       >
-        <Text style={styles.headerText}>{t('earnings')}</Text>
-        <Text style={styles.amountText}>₹{weeklyEarningsAmount}</Text>
-        {!!weekRangeText && (
-          <Text style={{ color: '#d7e3f5', marginTop: 4, fontSize: 12 }}>{weekRangeText}</Text>
-        )}
+        <View style={styles.earningsHeaderRow}>
+          <View style={styles.earningsHeaderTextGroup}>
+            <Text style={styles.headerText}>{t('earnings')}</Text>
+            <Text style={styles.amountText}>₹{weeklyEarningsAmount}</Text>
+            {!!weekRangeText && (
+              <Text style={styles.weekRangeText}>{weekRangeText}</Text>
+            )}
+          </View>
+          <MaterialIcons name="arrow-forward" size={26} color="#fff" />
+        </View>
       </LinearGradient>
 
       {/* Balance summary */}

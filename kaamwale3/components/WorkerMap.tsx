@@ -81,7 +81,7 @@ export default function WorkerMap({ style }: Props) {
         >
           <Camera
             centerCoordinate={[location.longitude, location.latitude]}
-            zoomLevel={15}
+            zoomLevel={14}
             animationDuration={500}
           />
 

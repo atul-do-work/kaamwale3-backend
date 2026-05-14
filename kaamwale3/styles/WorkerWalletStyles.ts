@@ -18,6 +18,15 @@ export default StyleSheet.create({
     paddingVertical: 22,
     marginTop: 14,
   },
+  earningsHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    width: '100%',
+  },
+  earningsHeaderTextGroup: {
+    flex: 1,
+  },
   headerText: {
     color: 'rgba(255,255,255,0.78)',
     fontSize: 13,
@@ -28,6 +37,11 @@ export default StyleSheet.create({
     color: '#fff',
     fontSize: 32,
     fontWeight: '700',
+  },
+  weekRangeText: {
+    color: '#d7e3f5',
+    marginTop: 4,
+    fontSize: 12,
   },
   balanceContainer: {
     width: width - 32,

@@ -18,6 +18,7 @@ import { useRouter, useFocusEffect } from "expo-router";
 import axios from "axios";
 import { API_BASE } from "../../../utils/config";
 import { clearAllUserData } from "../../../utils/socket";
+import { socket } from "../../../utils/socket";
 import { getAuthAccessToken } from "../../../utils/secureStore";
 import ReferralModal from "../../../components/ReferralModal";
 import { useLanguage } from "../../../context/LanguageContext";
@@ -155,6 +156,21 @@ const styles = StyleSheet.create({
     color: "rgba(255,255,255,0.84)",
     fontWeight: "600",
     letterSpacing: 0.4,
+  },
+  verificationBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#10B981",
+    borderRadius: 16,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    marginTop: 6,
+  },
+  verificationBadgeText: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: "#FFFFFF",
+    marginLeft: 4,
   },
   headerMetaRow: {
     flexDirection: "row",
@@ -387,95 +403,7 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: "700",
   },
-  earningsModalCard: {
-    width: "100%",
-    maxWidth: 380,
-    backgroundColor: "#FFFFFF",
-    borderRadius: 24,
-    overflow: "hidden",
-    maxHeight: "80%",
-  },
-  earningsHeader: {
-    paddingHorizontal: 18,
-    paddingVertical: 16,
-    borderBottomWidth: 1,
-    borderBottomColor: "#F3F4F6",
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-  },
-  earningsTitle: {
-    fontSize: 17,
-    fontWeight: "700",
-    color: "#111827",
-  },
-  earningsContent: {
-    padding: 18,
-  },
-  totalEarningsCard: {
-    borderRadius: 22,
-    padding: 18,
-    marginBottom: 14,
-  },
-  totalEarningsLabel: {
-    fontSize: 13,
-    color: "rgba(255,255,255,0.78)",
-  },
-  totalEarningsValue: {
-    marginTop: 6,
-    fontSize: 30,
-    fontWeight: "700",
-    color: "#FFFFFF",
-  },
-  totalEarningsSubtext: {
-    marginTop: 4,
-    fontSize: 12,
-    color: "rgba(255,255,255,0.76)",
-  },
-  earningsItem: {
-    flexDirection: "row",
-    alignItems: "center",
-    backgroundColor: "#F9FAFB",
-    borderRadius: 18,
-    padding: 14,
-    marginBottom: 10,
-  },
-  earningsIconBox: {
-    width: 42,
-    height: 42,
-    borderRadius: 21,
-    alignItems: "center",
-    justifyContent: "center",
-    marginRight: 12,
-  },
-  earningsItemContent: {
-    flex: 1,
-  },
-  earningsItemLabel: {
-    fontSize: 13,
-    color: "#6B7280",
-  },
-  earningsItemValue: {
-    marginTop: 2,
-    fontSize: 16,
-    fontWeight: "700",
-    color: "#111827",
-  },
-  withdrawButton: {
-    marginTop: 8,
-    backgroundColor: "#17263A",
-    borderRadius: 16,
-    paddingVertical: 14,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  withdrawButtonText: {
-    color: "#FFFFFF",
-    fontSize: 14,
-    fontWeight: "700",
-    marginLeft: 8,
-  },
+
 });
 
 export default function Profile(): React.ReactElement {
@@ -490,14 +418,8 @@ export default function Profile(): React.ReactElement {
   const [profilePhoto, setProfilePhoto] = useState<string | null>(null);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [referralModalVisible, setReferralModalVisible] = useState(false);
-  const [earningsModalVisible, setEarningsModalVisible] = useState(false);
   const [workerName, setWorkerName] = useState<string>("");
   const [workerPhone, setWorkerPhone] = useState<string>("");
-  const [totalEarnings, setTotalEarnings] = useState(0);
-  const [gigEarnings, setGigEarnings] = useState(0);
-  const [jobsEarnings, setJobsEarnings] = useState(0);
-  const [totalDeductions, setTotalDeductions] = useState(0);
-  const [referralBonus, setReferralBonus] = useState(0);
   const [userToken, setUserToken] = useState<string>("");
   const [workerRating, setWorkerRating] = useState<number>(0);
   const [totalReviews, setTotalReviews] = useState<number>(0);
@@ -506,6 +428,7 @@ export default function Profile(): React.ReactElement {
   const [selectedSkill, setSelectedSkill] = useState<string>("");
   const [selectedWage, setSelectedWage] = useState<string>("");
   const [menuModalVisible, setMenuModalVisible] = useState(false);
+  const [verificationStatus, setVerificationStatus] = useState<{ aadhar: string; policy: string }>({ aadhar: 'pending', policy: 'pending' });
 
   const router = useRouter();
   const wageLabelMap = Object.keys(WAGE_RANGE_KEYS).reduce<Record<string, string>>((acc, value) => {
@@ -548,9 +471,26 @@ export default function Profile(): React.ReactElement {
         const profileStr = await AsyncStorage.getItem("profilePhoto");
         if (profileStr) setProfilePhoto(profileStr);
         await fetchWorkerRating();
+        await fetchVerificationStatus();
       })();
     }, [])
   );
+
+  // Socket listener for verification updates
+  useEffect(() => {
+    const handleVerificationUpdate = (data: any) => {
+      console.log('Verification updated via socket:', data);
+      if (data.overallVerificationStatus) {
+        fetchVerificationStatus(); // Refetch to get updated status
+      }
+    };
+
+    socket.on('verificationUpdated', handleVerificationUpdate);
+
+    return () => {
+      socket.off('verificationUpdated', handleVerificationUpdate);
+    };
+  }, []);
 
   const fetchWorkerRating = async () => {
     try {
@@ -573,28 +513,26 @@ export default function Profile(): React.ReactElement {
     }
   };
 
-  const fetchEarningsData = async () => {
+
+
+  const fetchVerificationStatus = async () => {
     try {
       const token = await getAuthAccessToken();
       if (!token) return;
 
-      const response = await fetch(`${API_BASE}/worker/earnings`, {
+      const response = await fetch(`${API_BASE}/verification/status`, {
         headers: { Authorization: `Bearer ${token}` },
       });
 
-      if (!response.ok) throw new Error("Failed to fetch earnings");
-
-      const data = await response.json();
-      if (data.success && data.earnings) {
-        const earned = data.earnings.byStatus?.earned?.amount || 0;
-        const pending = data.earnings.byStatus?.pending?.amount || 0;
-
-        setGigEarnings(earned);
-        setJobsEarnings(pending);
-        setTotalEarnings(data.earnings.totalEarned || 0);
+      if (response.ok) {
+        const data = await response.json();
+        const docs = data.documents || [];
+        const aadhar = docs.find((d: any) => d.documentType === 'aadhar')?.status || 'pending';
+        const policy = docs.find((d: any) => d.documentType === 'policy')?.status || 'pending';
+        setVerificationStatus({ aadhar, policy });
       }
     } catch (err) {
-      console.error("Error fetching earnings:", err);
+      console.error("Error fetching verification status:", err);
     }
   };
 
@@ -690,6 +628,11 @@ export default function Profile(): React.ReactElement {
   const navigateTo = (path: string | null) => {
     if (path) router.push(path as any);
   };
+
+  const overviewCards: Array<{ title: string; icon: string; route: "/GigHistory" | "/Settings" }> = [
+    { title: t("gigHistory"), icon: "history", route: "/GigHistory" },
+    { title: t("settings"), icon: "settings", route: "/Settings" },
+  ];
 
   const handleSaveProfile = async () => {
     if (!selectedSkill || !selectedWage) {
@@ -795,6 +738,12 @@ export default function Profile(): React.ReactElement {
 
           <Text style={styles.nameText}>{userName}</Text>
           <Text style={styles.workerId}>{tx("workerIdLabel", "Worker ID")}: {workerId}</Text>
+          {(verificationStatus.aadhar === 'verified' || verificationStatus.policy === 'verified') && (
+            <View style={styles.verificationBadge}>
+              <MaterialIcons name="verified" size={16} color="#fff" />
+              <Text style={styles.verificationBadgeText}>{tx("verified", "Verified")}</Text>
+            </View>
+          )}
           <View style={styles.identityChip}>
             <Text style={styles.identityChipText}>Worker Profile</Text>
           </View>
@@ -818,28 +767,11 @@ export default function Profile(): React.ReactElement {
         <View style={styles.contentWrap}>
           <Text style={styles.sectionTitle}>Overview</Text>
           <View style={styles.actionRow}>
-            {[
-              { title: t("gigHistory"), icon: "history", route: "/GigHistory" },
-              {
-                title: t("earnings"),
-                icon: "payments",
-                action: () => {
-                  fetchEarningsData();
-                  setEarningsModalVisible(true);
-                },
-              },
-              { title: t("settings"), icon: "settings", route: "/Settings" },
-            ].map((card, index) => (
+            {overviewCards.map((card, index) => (
               <TouchableOpacity
                 key={index}
                 style={styles.actionCard}
-                onPress={() => {
-                  if ("route" in card) {
-                    router.push(card.route as any);
-                  } else if ("action" in card) {
-                    (card.action as () => void)();
-                  }
-                }}
+                onPress={() => router.push(card.route)}
               >
                 <View style={styles.actionIconWrap}>
                   <MaterialIcons name={card.icon as any} size={20} color="#17263A" />
@@ -893,73 +825,7 @@ export default function Profile(): React.ReactElement {
           workerPhone={workerPhone}
         />
 
-        <Modal visible={earningsModalVisible} transparent animationType="fade" onRequestClose={() => setEarningsModalVisible(false)}>
-          <TouchableOpacity style={styles.modalBackdrop} activeOpacity={1} onPress={() => setEarningsModalVisible(false)}>
-            <TouchableOpacity activeOpacity={1} onPress={(e) => e.stopPropagation()} style={styles.earningsModalCard}>
-              <View style={styles.earningsHeader}>
-                <Text style={styles.earningsTitle}>{t("earningBreakdown")}</Text>
-                <TouchableOpacity onPress={() => setEarningsModalVisible(false)}>
-                  <MaterialIcons name="close" size={24} color="#111827" />
-                </TouchableOpacity>
-              </View>
 
-              <ScrollView style={styles.earningsContent} showsVerticalScrollIndicator={false}>
-                <LinearGradient colors={["#27AE60", "#1E8449"]} style={styles.totalEarningsCard}>
-                  <Text style={styles.totalEarningsLabel}>{t("totalEarnings")}</Text>
-                  <Text style={styles.totalEarningsValue}>₹{totalEarnings}</Text>
-                  <Text style={styles.totalEarningsSubtext}>
-                    {totalEarnings > 0 ? tx("fromCompletedGigs", "From completed gigs") : tx("fromNoGigsYet", "From no gigs yet")}
-                  </Text>
-                </LinearGradient>
-
-                <View style={styles.earningsItem}>
-                  <View style={[styles.earningsIconBox, { backgroundColor: "#E8F5E9" }]}>
-                    <MaterialIcons name="trending-up" size={22} color="#27AE60" />
-                  </View>
-                  <View style={styles.earningsItemContent}>
-                    <Text style={styles.earningsItemLabel}>{t("gigEarnings")}</Text>
-                    <Text style={styles.earningsItemValue}>₹{gigEarnings}</Text>
-                  </View>
-                </View>
-
-                <View style={styles.earningsItem}>
-                  <View style={[styles.earningsIconBox, { backgroundColor: "#FFF3E0" }]}>
-                    <MaterialIcons name="assessment" size={22} color="#F39C12" />
-                  </View>
-                  <View style={styles.earningsItemContent}>
-                    <Text style={styles.earningsItemLabel}>{tx("jobsEarned", "Jobs Earned")}</Text>
-                    <Text style={styles.earningsItemValue}>₹{jobsEarnings}</Text>
-                  </View>
-                </View>
-
-                <View style={styles.earningsItem}>
-                  <View style={[styles.earningsIconBox, { backgroundColor: "#FCE4EC" }]}>
-                    <MaterialIcons name="card-giftcard" size={22} color="#E91E63" />
-                  </View>
-                  <View style={styles.earningsItemContent}>
-                    <Text style={styles.earningsItemLabel}>{t("referralBonus")}</Text>
-                    <Text style={styles.earningsItemValue}>₹{referralBonus}</Text>
-                  </View>
-                </View>
-
-                <View style={styles.earningsItem}>
-                  <View style={[styles.earningsIconBox, { backgroundColor: "#FFEBEE" }]}>
-                    <MaterialIcons name="trending-down" size={22} color="#E74C3C" />
-                  </View>
-                  <View style={styles.earningsItemContent}>
-                    <Text style={styles.earningsItemLabel}>{t("deductions")}</Text>
-                    <Text style={[styles.earningsItemValue, { color: "#E74C3C" }]}>-₹{totalDeductions}</Text>
-                  </View>
-                </View>
-
-                <TouchableOpacity style={styles.withdrawButton}>
-                  <MaterialIcons name="wallet" size={18} color="#fff" />
-                  <Text style={styles.withdrawButtonText}>{tx("viewWithdrawalOptions", "View Withdrawal Options")}</Text>
-                </TouchableOpacity>
-              </ScrollView>
-            </TouchableOpacity>
-          </TouchableOpacity>
-        </Modal>
 
         <Modal visible={menuModalVisible} transparent animationType="fade" onRequestClose={() => setMenuModalVisible(false)}>
           <TouchableOpacity style={styles.modalBackdrop} activeOpacity={1} onPress={() => setMenuModalVisible(false)}>

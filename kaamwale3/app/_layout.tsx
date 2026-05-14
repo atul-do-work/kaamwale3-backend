@@ -1,6 +1,6 @@
 import { Stack } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, Suspense } from 'react';
 import * as Notifications from 'expo-notifications';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Alert, AppState, Modal, Text, TouchableOpacity, View, type AlertButton, type AlertOptions } from 'react-native';
@@ -10,6 +10,7 @@ import { AuthProvider } from '../context/AuthContext';
 import { API_BASE } from '../utils/config';
 import { getAuthAccessToken } from '../utils/secureStore';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
 // ******************** 1st step 
 // Prevent splash screen from auto-hiding
@@ -24,6 +25,9 @@ Notifications.setNotificationHandler({
     shouldShowList: true,
   }),
 });
+
+// Create a client
+const queryClient = new QueryClient();
 
 export default function RootLayout() {
   const [modalVisible, setModalVisible] = useState(false);
@@ -156,37 +160,41 @@ export default function RootLayout() {
 
   return (
     <SafeAreaProvider>
-      <AuthProvider>
-        <LanguageProvider>
-          <View style={{ flex: 1 }}>
-            <Stack screenOptions={{ headerShown: false }}>
-              {/* Login/Auth screen is the entry point */}
-              <Stack.Screen name="index" />
-              
-              {/* Forgot Password screens */}
-              <Stack.Screen name="forgot-password" />
-              <Stack.Screen name="forgot-password-otp" />
-              <Stack.Screen name="forgot-password-reset" />
-              
-              {/* Home with role-based routing */}
-              <Stack.Screen name="home" />
-              
-              {/* Other screens */}
-              <Stack.Screen name="register" />
-              <Stack.Screen name="waiting" />
-              <Stack.Screen name="verify-otp" />
-              <Stack.Screen name="dashboard/index" />
-              <Stack.Screen name="ActivityHistory" />
-              <Stack.Screen name="DocumentsAndPolicies" />
-              <Stack.Screen name="GigHistory" />
-              <Stack.Screen name="HelpCentre" />
-              <Stack.Screen name="NotificationHistory" />
-              <Stack.Screen name="PaymentHistory" />
-              <Stack.Screen name="Settings" />
-              <Stack.Screen name="SupportTickets" />
-              <Stack.Screen name="Verification" />
-              <Stack.Screen name="VideosAndTutorials" />
-            </Stack>
+      <QueryClientProvider client={queryClient}>
+        <AuthProvider>
+          <LanguageProvider>
+            <View style={{ flex: 1 }}>
+              <Suspense fallback={<View style={{ flex: 1, backgroundColor: '#fff' }} />}>
+                <Stack screenOptions={{ headerShown: false }}>
+                  {/* Login/Auth screen is the entry point */}
+                  <Stack.Screen name="index" />
+                  
+                  {/* Forgot Password screens */}
+                  <Stack.Screen name="forgot-password" />
+                  <Stack.Screen name="forgot-password-otp" />
+                  <Stack.Screen name="forgot-password-reset" />
+                  
+                  {/* Home with role-based routing */}
+                  <Stack.Screen name="home" />
+                  
+                  {/* Other screens */}
+                  <Stack.Screen name="register" />
+                  <Stack.Screen name="waiting" />
+                  <Stack.Screen name="verify-otp" />
+                  <Stack.Screen name="dashboard/index" />
+                  <Stack.Screen name="ActivityHistory" />
+                  <Stack.Screen name="DocumentsAndPolicies" />
+                  <Stack.Screen name="GigHistory" />
+                  <Stack.Screen name="HelpCentre" />
+                  <Stack.Screen name="NotificationHistory" />
+                  <Stack.Screen name="PaymentHistory" />
+                  <Stack.Screen name="Settings" />
+                  <Stack.Screen name="SupportTickets" />
+                  <Stack.Screen name="Verification" />
+                  <Stack.Screen name="VideosAndTutorials" />
+                  <Stack.Screen name="BrowseJobs" />
+                </Stack>
+              </Suspense>
 
             <Modal
               visible={modalVisible}
@@ -262,6 +270,7 @@ export default function RootLayout() {
           </View>
         </LanguageProvider>
       </AuthProvider>
+      </QueryClientProvider>
     </SafeAreaProvider>
   );
 }

@@ -1,4 +1,4 @@
-import React, { useEffect, useState, memo, useRef, ErrorInfo, useCallback } from "react";
+import React, { useEffect, useState, memo, useRef, ErrorInfo, useCallback, Suspense } from "react";
 import {
   View,
   ScrollView,
@@ -919,7 +919,14 @@ function WorkerHome() {
       try {
         console.log("📩 SOCKET: New job received", data);
         
-        // 🔐 CRITICAL FIX #1: Verify this job is meant for THIS worker
+        // � CRITICAL SAFETY CHECK: Verify worker is actually online
+        if (isOnline === false) {
+          console.error(`🚨 [SAFETY ERROR] Received job offer while showing OFFLINE in UI! Worker: ${currentUserPhone}, Job: ${data._id}`);
+          console.error(`🚨 [SAFETY ERROR] This indicates a backend/frontend sync issue or race condition. Job offer will be REJECTED.`);
+          return; // Reject job if worker is offline in UI
+        }
+        
+        // �🔐 CRITICAL FIX #1: Verify this job is meant for THIS worker
         // Backend sends jobs to multiple workers, we must verify it's for us
         if (data._targetedUpdate && Array.isArray(data.targetedFor)) {
           const targets = data.targetedFor.map((t: any) => t && t.toString());
@@ -1206,23 +1213,35 @@ function WorkerHome() {
     };
 
     // ✅ BUG #4: Real-time availability updates
-    const handleWorkerStatusUpdate = (data: any) => {
-      console.log("📡 workerStatusUpdate event received:", data);
-      availabilityCacheManager.invalidate();
-      const status = data?.isAvailable ?? data?.worker?.isAvailable ?? data?.isOnline ?? data?.status === 'online';
-      if (status !== undefined) {
-        setIsOnline(Boolean(status));
+    const handleWorkerStatusUpdate = async (data: any) => {
+      try {
+        console.log("📡 workerStatusUpdate event received:", data);
+        availabilityCacheManager.invalidate();
+        const status = data?.isAvailable ?? data?.worker?.isAvailable ?? data?.isOnline ?? data?.status === 'online';
+        if (status !== undefined) {
+          const newStatus = Boolean(status);
+          setIsOnline(newStatus);
+
+          // Persist backend availability in local storage so UI matches database state.
+          try {
+            const userStr = await AsyncStorage.getItem('user');
+            if (userStr) {
+              const user = JSON.parse(userStr);
+              user.isAvailable = newStatus;
+              await AsyncStorage.setItem('user', JSON.stringify(user));
+              console.log(`📦 Synced local user cache isAvailable=${newStatus}`);
+            }
+          } catch (storageErr) {
+            console.warn('⚠️ Could not persist worker availability from socket event:', storageErr);
+          }
+        }
+      } catch (err) {
+        console.error('❌ Error handling workerStatusUpdate event:', err);
       }
     };
 
-    // 🔐 CRITICAL FIX #3: Only register socket listeners AFTER location loads
-    // This prevents job events from arriving before location is ready
-    // If location hasn't loaded yet, don't register listeners
-    if (!currentLocation) {
-      console.log('⏳ Waiting for location before registering socket listeners...');
-      return () => {}; // Early return - no listeners to clean up yet
-    }
-
+    // Register socket listeners immediately so availability and offline/online status changes
+    // are received in real time, even before worker location is fully loaded.
     socket.on("newJob", handleNewJob);
     socket.on("jobUpdated", handleJobUpdated);
     socket.on("jobAccepted", handleJobAccepted);
@@ -1794,11 +1813,25 @@ function WorkerHome() {
         const backendMessage = data?.message || "Failed to update availability";
         throw new Error(backendMessage);
       }
-      console.log(`✅ Availability updated to: ${newStatus}`);
-      availabilityCacheManager.invalidate(); // ✅ BUG #4: Invalidate cache on toggle
       
-      // STEP 4: UPDATE LOCAL STATE & STORAGE
+      // ✅ VALIDATION: Ensure response has expected data
+      if (!data?.success && !data?.user) {
+        console.warn('⚠️ Backend response missing expected fields:', { success: data?.success, hasUser: !!data?.user });
+      }
+      
+      console.log(`✅ Availability update confirmed from backend:`, {
+        requestedStatus: newStatus,
+        responseStatus: data?.user?.isAvailable,
+        serverTimestamp: new Date().toISOString()
+      });
+      
+      // STEP 4: UPDATE LOCAL STATE & STORAGE ONLY AFTER CONFIRMED BY BACKEND
+      if (data?.user?.isAvailable !== newStatus) {
+        console.warn(`⚠️ Backend returned different status than requested! Requested: ${newStatus}, Got: ${data?.user?.isAvailable}`);
+      }
+      
       setIsOnline(newStatus);
+      availabilityCacheManager.invalidate(); // ✅ Invalidate cache on toggle
 
       // ✅ Update location in local storage if returned from backend
       if (newStatus && data.user && data.user.latitude && data.user.longitude) {
@@ -2352,7 +2385,9 @@ function WorkerHome() {
             </TouchableOpacity>
           </View>
         )}
-        <WorkerMap style={styles.map} />
+        <Suspense fallback={<View style={[styles.map, { justifyContent: 'center', alignItems: 'center' }]}><Text>Loading Map...</Text></View>}>
+          <WorkerMap style={styles.map} />
+        </Suspense>
         <TouchableOpacity style={styles.mapHelpIcon} onPress={openSupportCallOptions}>
           <MaterialIcons name="notification-important" size={22} color="#fff" />
         </TouchableOpacity>
@@ -2876,32 +2911,32 @@ export default function WorkerHomeWithErrorBoundary() {
 
 // ---------------- STYLES ----------------
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: "#f5f5f5" },
+  container: { flex: 1, backgroundColor: "#fff" },
   headerContainer: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
-    paddingHorizontal: 20,
-    paddingVertical: 10,
+    paddingHorizontal: 18,
+    paddingVertical: 2,
     backgroundColor: "#fff",
     borderBottomWidth: 0,
-    minHeight: 60,
+    minHeight: 48,
   },
   // ✅ Profile Photo Styles
   headerProfileContainer: {
-    width: 50,
-    height: 50,
+    width: 45,
+    height: 45,
     borderRadius: 25,
     overflow: "hidden",
   },
   headerProfilePhoto: {
-    width: 50,
-    height: 50,
+    width: 45,
+    height: 45,
     borderRadius: 25,
   },
   headerProfilePlaceholder: {
-    width: 50,
-    height: 50,
+    width: 45,
+    height: 45,
     borderRadius: 25,
     backgroundColor: "rgba(0, 0, 0, 0.2)",
     justifyContent: "center",
@@ -2946,8 +2981,8 @@ const styles = StyleSheet.create({
     right: 0,
     backgroundColor: "#FF6B6B",
     borderRadius: 12,
-    width: 24,
-    height: 24,
+    width: 20,
+    height: 20,
     justifyContent: "center",
     alignItems: "center",
   },
@@ -2995,7 +3030,7 @@ const styles = StyleSheet.create({
     fontWeight: "700",
     fontSize: 12,
   },
-  topSection: { zIndex: 0, marginBottom: -1, overflow: "hidden", backgroundColor: "#f5f5f5" },
+  topSection: { zIndex: 0, marginBottom: 0, overflow: "hidden", backgroundColor: "#f5f5f5", paddingHorizontal: 0 },
   mapHelpIcon: {
     position: "absolute",
     right: 14,
@@ -3012,7 +3047,7 @@ const styles = StyleSheet.create({
     shadowRadius: 4,
     elevation: 5,
   },
-  map: { width: "100%", height: 350 },
+  map: { width: "100%", height: 280 },
   horizontalScrollContainer: { marginTop: -2, paddingLeft: 12, paddingBottom: 8 },
   jobCard: {
     backgroundColor: "#fff",

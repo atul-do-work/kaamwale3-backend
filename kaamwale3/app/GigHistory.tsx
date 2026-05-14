@@ -482,10 +482,12 @@ export default function GigHistory() {
     socket.off('jobUpdated', stableHandler);
     socket.off('walletUpdated', stableHandler);
     socket.off('workerStatusUpdate', stableHandler);
+    socket.off('incentiveUpdated', stableHandler);
 
     socket.on('jobUpdated', stableHandler);
     socket.on('walletUpdated', stableHandler);
     socket.on('workerStatusUpdate', stableHandler);
+    socket.on('incentiveUpdated', stableHandler);
 
     return () => {
       socket.off('jobUpdated', stableHandler);

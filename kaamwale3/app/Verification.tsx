@@ -18,6 +18,7 @@ import { SERVER_URL } from "../utils/config";
 import api from "../utils/api";
 import { uploadToCloudinaryDirect } from "../utils/cloudinaryDirectUpload";
 import { SafeAreaView } from "react-native-safe-area-context";
+import { socket } from "../utils/socket";
 
 interface VerificationDocument {
   type: string;
@@ -117,6 +118,20 @@ export default function VerificationScreen(): React.ReactElement {
   useEffect(() => {
     setLoading(true);
     fetchVerificationStatus();
+  }, []);
+
+  // Socket listener for real-time updates
+  useEffect(() => {
+    const handleVerificationUpdate = (data: any) => {
+      console.log('Verification updated via socket:', data);
+      setVerificationStatus(prev => prev ? { ...prev, ...data } : data);
+    };
+
+    socket.on('verificationUpdated', handleVerificationUpdate);
+
+    return () => {
+      socket.off('verificationUpdated', handleVerificationUpdate);
+    };
   }, []);
 
   // Reload on focus

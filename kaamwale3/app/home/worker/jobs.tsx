@@ -442,9 +442,7 @@ export default function Jobs(): React.ReactElement {
         return prev;
       });
 
-      // ✅ FIXED: Only show payment modal if NOT already in rating modal
-      // This prevents payment modal from showing when user is rating contractor
-      if (!isPaidStatus(previousPaymentState.current[job._id]) && isPaid(job, currentUserPhone) && !contractorRatingModalVisible) {
+      if (!isPaidStatus(previousPaymentState.current[job._id]) && isPaid(job, currentUserPhone)) {
         if (!paymentNotifiedJobs.current.has(job._id)) {
           paymentNotifiedJobs.current.add(job._id);
           setPaymentJobData({
@@ -458,34 +456,17 @@ export default function Jobs(): React.ReactElement {
       previousPaymentState.current[job._id] = isPaid(job, currentUserPhone) ? 'paid' : null;
     };
 
-    // ✅ Handle real-time cash deposit notification from contractor
-    const handleCashDepositCreated = (data: any) => {
-      console.log("💵 Cash deposit created event received:", data);
-      if (data?.jobId) {
-        // Show payment modal immediately for cash payment
-        setPaymentJobData({
-          title: data?.jobTitle || "Job Payment",
-          amount: String(data?.amount || "0"),
-          contractor: "Contractor",
-        });
-        setPaymentModalVisible(true);
-        paymentNotifiedJobs.current.add(data.jobId);
-      }
-    };
-
     // Subscribe to socket events
     socket.on("jobUpdated", handleJobUpdated);
-    socket.on("cashDepositCreated", handleCashDepositCreated);
     // ❌ REMOVED: socket.on("jobUpdated", handleNewJob) - Causes duplicate renders and flickering
     // handleJobUpdated already updates the local state, no need to refetch everything
 
     // Cleanup on unmount
     return () => {
       socket.off("jobUpdated", handleJobUpdated);
-      socket.off("cashDepositCreated", handleCashDepositCreated);
       // ❌ REMOVED: socket.off("jobUpdated", handleNewJob)
     };
-  }, [workerName, token, currentUserPhone, contractorRatingModalVisible]); // ✅ Added currentUserPhone to deps
+  }, [workerName, token, currentUserPhone]); // ✅ Added currentUserPhone to deps
 
   // ✅ Render individual job card (optimized for FlatList virtualization)
   const workerCancelOptions = [
@@ -551,8 +532,6 @@ export default function Jobs(): React.ReactElement {
   };
 
   const openRateContractorModal = (job: Job) => {
-    // ✅ FIXED: Close payment modal to prevent interference with rating flow
-    setPaymentModalVisible(false);
     setSelectedJobForContractorRating(job);
     setContractorRatingStars(5);
     setContractorRatingFeedback("");
@@ -1050,12 +1029,14 @@ export default function Jobs(): React.ReactElement {
     <SafeAreaView edges={['top', 'left', 'right', 'bottom']} style={{ flex: 1 }}>
       <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 12 }}>
         <Text style={{ fontSize: 20, fontWeight: '800', color: '#111827' }}>{t('acceptedJobs') || 'Accepted Jobs'}</Text>
-        <TouchableOpacity
-          style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}
-          onPress={openPastJobsModal}
-        >
-          <MaterialIcons name="history" size={22} color="#1d4ed8" />
-        </TouchableOpacity>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+          <TouchableOpacity onPress={openPastJobsModal}>
+            <MaterialIcons name="history" size={22} color="#1d4ed8" />
+          </TouchableOpacity>
+          <TouchableOpacity onPress={() => router.push('/BrowseJobs' as any)}>
+            <MaterialIcons name="search" size={22} color="#1d4ed8" />
+          </TouchableOpacity>
+        </View>
       </View>
       <FlatList
         data={previewJobs}

@@ -3,10 +3,12 @@ import { StyleSheet } from 'react-native';
 export default StyleSheet.create({
   mapContainer: {
     width: '100%',
-    height: 350, // Adjust depending on your layout
+    height: 300,
     position: 'relative',
     backgroundColor: '#f5f5f5',
     overflow: 'hidden',
+    marginHorizontal: 12,
+    borderRadius: 12,
   },
   map: {
     width: '100%',

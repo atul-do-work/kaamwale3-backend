@@ -16,8 +16,8 @@ export default StyleSheet.create({
     marginBottom: 2,
   },
   welcomeText: {
-    fontSize: 21,
-    fontWeight: '800',
+    fontSize: 18,
+    fontWeight: '700',
     color: '#1a202c',
     marginBottom: 4,
   },
