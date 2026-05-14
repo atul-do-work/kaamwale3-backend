@@ -40,9 +40,10 @@ router.get('/worker/earnings', authenticateToken, async (req, res) => {
       { $group: { _id: '$status', totalAmount: { $sum: '$amount' }, count: { $sum: 1 } } },
     ]);
 
-    const totalEarnings = await WorkerEarnings.aggregate([
-      { $match: { workerPhone } },
-      { $group: { _id: null, total: { $sum: '$amount' } } },
+    const totalDeductionsResult = await WorkerEarnings.aggregate([
+      { $match: { workerPhone, deductions: { $exists: true, $ne: [] } } },
+      { $unwind: '$deductions' },
+      { $group: { _id: null, totalDeductions: { $sum: '$deductions.amount' } } },
     ]);
 
     const now = new Date();
@@ -53,14 +54,30 @@ router.get('/worker/earnings', authenticateToken, async (req, res) => {
       'payoutWeek.week': weekNum,
     });
 
+    const statusMap = earnings.reduce((acc, e) => {
+      acc[e._id] = { amount: e.totalAmount, count: e.count };
+      return acc;
+    }, {});
+
+    const totalEarned =
+      (statusMap.earned?.amount || 0) +
+      (statusMap.payout_requested?.amount || 0) +
+      (statusMap.payout_completed?.amount || 0);
+
     return res.json({
       success: true,
       earnings: {
-        byStatus: earnings.reduce((acc, e) => {
-          acc[e._id] = { amount: e.totalAmount, count: e.count };
-          return acc;
-        }, {}),
-        totalEarned: totalEarnings[0]?.total || 0,
+        byStatus: statusMap,
+        totalEarned,
+        gigEarnings: statusMap.earned?.amount || 0,
+        jobEarnings: statusMap.pending?.amount || 0,
+        earnedAmount: statusMap.earned?.amount || 0,
+        pendingAmount: statusMap.pending?.amount || 0,
+        payoutRequestedAmount: statusMap.payout_requested?.amount || 0,
+        payoutCompletedAmount: statusMap.payout_completed?.amount || 0,
+        cancelledAmount: statusMap.cancelled?.amount || 0,
+        totalDeductions: totalDeductionsResult[0]?.totalDeductions || 0,
+        referralBonus: 0,
         currentWeekAmount: currentWeekEarnings.reduce((sum, e) => sum + e.amount, 0),
         currentWeekCount: currentWeekEarnings.length,
       },

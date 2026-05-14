@@ -2509,6 +2509,19 @@ router.post('/verify-document', authenticateToken, checkAdmin, async (req, res) 
             timestamp: new Date()
         });
 
+        // Emit real-time update to worker
+        const io = req.app.get('io');
+        if (io) {
+            io.to(verification.phone).emit('verificationUpdated', {
+                overallVerificationStatus: verification.overallVerificationStatus,
+                documents: verification.documents.map(doc => ({
+                    type: doc.type,
+                    verificationStatus: doc.verificationStatus,
+                    verifiedAt: doc.verifiedAt
+                }))
+            });
+        }
+
         res.json({ 
             success: true, 
             message: `Document ${status}`,

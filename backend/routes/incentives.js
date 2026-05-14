@@ -7,7 +7,13 @@ const IncentiveLedger = require('../models/IncentiveLedger');
 const Wallet = require('../models/Wallet');
 const GigHistory = require('../models/GigHistory');
 const Job = require('../models/Jobs');
-const { calculateEligibility } = require('../services/incentiveEligibilityService');
+const {
+  calculateEligibility,
+  MILESTONE_REWARDS,
+  MILESTONE_IDS,
+  buildClaimStatusByMilestone,
+  emitIncentiveUpdatedEvent,
+} = require('../services/incentiveEligibilityService');
 
 const normalizePhoneDigits = (value) => String(value || '').replace(/\D/g, '').slice(-10);
 const setNoStore = (req, res) => {
@@ -151,17 +157,16 @@ router.get('/progress', authenticateToken, async (req, res) => {
     const eligibilityData = calculateEligibility(hydratedEvents);
     await persistEligibilityAuditSnapshot(worker, eligibilityData);
 
-    const claimedMilestones = await IncentiveLedger.find({
+    const ledgerRecords = await IncentiveLedger.find({
       phone,
-      'walletCredit.status': 'credited'
-    }).select('milestoneId').lean();
+      milestoneId: { $in: MILESTONE_IDS },
+    }).lean();
 
-    const claimedIds = claimedMilestones.map((m) => m.milestoneId);
-
-    const availableMilestones = [];
-    if (eligibilityData.eligibleFor5Days && !claimedIds.includes('5days')) availableMilestones.push('5days');
-    if (eligibilityData.eligibleFor10Days && !claimedIds.includes('10days')) availableMilestones.push('10days');
-    if (eligibilityData.eligibleFor20Days && !claimedIds.includes('20days')) availableMilestones.push('20days');
+    const claimStatusByMilestone = buildClaimStatusByMilestone(eligibilityData, ledgerRecords);
+    const claimedIds = MILESTONE_IDS.filter((id) => claimStatusByMilestone[id] === 'claimed');
+    const availableMilestones = MILESTONE_IDS.filter((id) => claimStatusByMilestone[id] === 'available');
+    const pendingMilestones = MILESTONE_IDS.filter((id) => claimStatusByMilestone[id] === 'processing');
+    const failedMilestones = MILESTONE_IDS.filter((id) => claimStatusByMilestone[id] === 'failed');
 
     return res.json({
       success: true,
@@ -182,6 +187,9 @@ router.get('/progress', authenticateToken, async (req, res) => {
       ].filter(Boolean),
       claimedMilestones: claimedIds,
       availableMilestones,
+      pendingMilestones,
+      failedMilestones,
+      claimStatusByMilestone,
       lastWorkDate: eligibilityData.lastWorkDate || null,
       calculatedAt: new Date(),
     });
@@ -220,12 +228,16 @@ router.post('/claim/:milestoneId', authenticateToken, async (req, res) => {
     const eligibilityData = calculateEligibility(hydratedEvents);
     await persistEligibilityAuditSnapshot(worker, eligibilityData);
 
-    let rewardAmount = 0;
-    if (milestoneId === '5days' && eligibilityData.eligibleFor5Days) rewardAmount = 50;
-    if (milestoneId === '10days' && eligibilityData.eligibleFor10Days) rewardAmount = 150;
-    if (milestoneId === '20days' && eligibilityData.eligibleFor20Days) rewardAmount = 300;
+    const rewardAmount = MILESTONE_REWARDS[milestoneId] || 0;
+    const eligibleFlag = milestoneId === '5days'
+      ? eligibilityData.eligibleFor5Days
+      : milestoneId === '10days'
+      ? eligibilityData.eligibleFor10Days
+      : milestoneId === '20days'
+      ? eligibilityData.eligibleFor20Days
+      : false;
 
-    if (!rewardAmount) {
+    if (!rewardAmount || !eligibleFlag) {
       return res.status(403).json({
         success: false,
         message: `Not eligible for ${milestoneId} milestone`,
@@ -370,6 +382,13 @@ router.post('/claim/:milestoneId', authenticateToken, async (req, res) => {
         timestamp: new Date(),
       });
     }
+
+    emitIncentiveUpdatedEvent(phone, {
+      type: 'claim_completed',
+      milestoneId,
+      rewardAmount,
+      status: 'claimed',
+    });
 
     console.log(`Incentive reward credited: ${phone} (${milestoneId}) Rs ${rewardAmount}`);
     return res.json(responsePayload);

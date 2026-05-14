@@ -191,20 +191,37 @@ async function offerJobToNextWorker(job) {
       pendingJobTimeouts.delete(job._id.toString());
     }
     
-    // ✅ DYNAMIC: Find nearby workers with SKILL and WAGE MATCHING
-    const currentNearbyWorkers = findNearbyWorkers(
-      { 
-        lat: job.lat, 
-        lon: job.lon, 
-        mainSkill: job.workerType || job.description,
-        amount: job.amount, // Job wage
-        workerType: job.workerType,
-      },
-      connectedWorkers
-    );
-    
+    // ✅ PROGRESSIVE RADIUS EXPANSION: Try 10km, then 20km, then 50km if no candidates found
+    const radiiToTry = [10, 20, 50]; // km
+    let currentNearbyWorkers = [];
+    let usedRadius = 10;
+
+    for (const radius of radiiToTry) {
+      console.log(`🔍 [DISPATCH] Searching for workers within ${radius}km radius...`);
+      currentNearbyWorkers = findNearbyWorkers(
+        { 
+          lat: job.lat, 
+          lon: job.lon, 
+          mainSkill: job.workerType || job.description,
+          amount: job.amount, // Job wage
+          workerType: job.workerType,
+        },
+        connectedWorkers,
+        radius, // Pass radius parameter
+        30 // Max location age: 30 minutes
+      );
+
+      console.log(`🔍 [DISPATCH] Found ${currentNearbyWorkers.length} workers within ${radius}km`);
+      usedRadius = radius;
+
+      // If we found candidates, break out of the loop
+      if (currentNearbyWorkers.length > 0) {
+        break;
+      }
+    }
+
     console.log(`🔍 Job Details - Title: ${job.title}, Skill: ${job.description}, Amount: ${job.amount}, Location: (${job.lat}, ${job.lon})`);
-    console.log(`🔍 Smart matching: Found ${currentNearbyWorkers.length} nearby workers with matching skill & wage (${declinedWorkerIds.length} declined)`);
+    console.log(`🔍 Smart matching: Found ${currentNearbyWorkers.length} nearby workers with matching skill & wage within ${usedRadius}km (${declinedWorkerIds.length} declined)`);
     
     // Build list of candidate workers who haven't declined, are online and don't have unpaid jobs
     // ✅ For bulk hiring, also skip workers already in acceptedWorkers
@@ -253,6 +270,13 @@ async function offerJobToNextWorker(job) {
     const availablePhones = new Set(userRecords.map(u => u.phone));
     const userMap = new Map(userRecords.map(u => [u.phone, u]));
     
+    console.log(`🔍 [DISPATCH] Candidate phones after skill/wage filter: ${candidatePhones.length}`);
+    console.log(`🔍 [DISPATCH] Available phones (isAvailable=true in DB): ${availablePhones.size}`);
+    if (candidatePhones.length !== availablePhones.size) {
+      const offlinePhones = candidatePhones.filter(p => !availablePhones.has(p));
+      console.log(`⚠️ [DISPATCH] Filtering out OFFLINE workers: ${offlinePhones.join(', ')}`);
+    }
+    
     // Bulk check for unpaid jobs
     const unpaidJobs = await Job.find({
       $and: [
@@ -291,15 +315,16 @@ async function offerJobToNextWorker(job) {
     // Filter candidates based on availability and unpaid jobs
     for (const worker of currentNearbyWorkers) {
       if (!availablePhones.has(worker.phone)) {
-        console.log(`🔴 Worker ${worker.name} (${worker.phone}) is OFFLINE in User model, skipping...`);
+        console.log(`🔴 [DISPATCH] Worker ${worker.name} (${worker.phone}) is OFFLINE in User model ← BLOCKED from receiving job`);
         continue;
       }
       
       if (phonesWithUnpaidJobs.has(worker.phone)) {
-        console.log(`⏭️ Worker ${worker.name} (${worker.phone}) has unpaid job, skipping...`);
+        console.log(`⏭️ [DISPATCH] Worker ${worker.name} (${worker.phone}) has unpaid job ← BLOCKED from receiving job`);
         continue;
       }
       
+      console.log(`✅ [DISPATCH] Worker ${worker.name} (${worker.phone}) is AVAILABLE and eligible ← CAN receive job`);
       candidates.push(worker);
     }
     
@@ -438,12 +463,25 @@ async function offerJobToNextWorker(job) {
       console.log(`⚠️ No single candidate found after filtering for job ${job._id}`);
       return;
     }
+    
+    // ✅ CRITICAL: Verify worker is still online in database before sending offer
+    try {
+      const workerCheckBeforeOffer = await User.findOne({ phone: nextWorker.phone }).select('isAvailable').lean();
+      if (!workerCheckBeforeOffer?.isAvailable) {
+        console.log(`🚨 [SAFETY CHECK] Worker ${nextWorker.name} (${nextWorker.phone}) is OFFLINE in database! Cannot offer job ${job._id}`);
+        console.log(`⚠️ [SAFETY CHECK] This worker was in candidates but is now offline - possible race condition or socket lag`);
+        return; // Do not offer to offline worker
+      }
+    } catch (checkErr) {
+      console.error(`❌ [SAFETY CHECK] Could not verify worker status before offer:`, checkErr);
+    }
+    
     const singleDedupeKey = `${jobId}:${nextWorker.phone}`;
     if (recentOfferTargets.has(singleDedupeKey)) {
       return;
     }
 
-    console.log(`📤 Offering job ${job._id} to worker: ${nextWorker.name} (Skill: ${nextWorker.mainSkill}, Wage: ${nextWorker.expectedWage}, Distance: ${nextWorker.distance}km)`);
+    console.log(`📤 [JOB OFFER] Offering job ${job._id} (₹${job.amount}) to worker: ${nextWorker.name} (${nextWorker.phone}) - Skill: ${nextWorker.mainSkill}, Distance: ${nextWorker.distance}km`);
 
     const workerSocket = io.sockets.sockets.get(nextWorker.socketId);
     if (workerSocket) {

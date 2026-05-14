@@ -206,6 +206,59 @@ function calculateEligibility(events) {
   }
 }
 
+const MILESTONE_REWARDS = {
+  '5days': 50,
+  '10days': 150,
+  '20days': 300,
+};
+const MILESTONE_IDS = Object.keys(MILESTONE_REWARDS);
+
+const getClaimStatus = (record) => {
+  if (!record) return 'locked';
+  const status = String(record.walletCredit?.status || 'pending').toLowerCase();
+  if (status === 'credited') return 'claimed';
+  if (status === 'failed') return 'failed';
+  return 'processing';
+};
+
+const buildClaimStatusByMilestone = (eligibilityData, ledgerRecords = []) => {
+  const recordsByMilestone = ledgerRecords.reduce((acc, record) => {
+    if (record?.milestoneId) acc[record.milestoneId] = record;
+    return acc;
+  }, {});
+
+  return MILESTONE_IDS.reduce((acc, milestoneId) => {
+    const record = recordsByMilestone[milestoneId];
+    const isEligible = milestoneId === '5days'
+      ? eligibilityData.eligibleFor5Days
+      : milestoneId === '10days'
+      ? eligibilityData.eligibleFor10Days
+      : milestoneId === '20days'
+      ? eligibilityData.eligibleFor20Days
+      : false;
+    acc[milestoneId] = record ? getClaimStatus(record) : isEligible ? 'available' : 'locked';
+    return acc;
+  }, {});
+};
+
+const emitIncentiveUpdatedEvent = (phone, payload = {}) => {
+  try {
+    if (global?.io) {
+      const message = {
+        phone,
+        ...payload,
+        timestamp: new Date(),
+      };
+      global.io.emit('incentiveUpdated', message);
+      if (typeof global.io.to === 'function' && phone) {
+        global.io.to(phone).emit('incentiveUpdated', message);
+      }
+    }
+  } catch (err) {
+    console.error('Failed to emit incentiveUpdated event:', err);
+  }
+};
+
 /**
  * 🔧 FIX BUG #3: Recalculate incentive eligibility after gig updates
  * Called after:
@@ -237,24 +290,31 @@ async function updateIncentiveEligibility(workerPhone) {
     const eligibilityData = calculateEligibility(events);
 
     // Update worker with calculated eligibility
+    const updateFields = {
+      'gigsData.eligibilitySnapshot': {
+        consecutiveDays: eligibilityData.consecutiveDays,
+        totalHours: eligibilityData.totalHours,
+        cancellationsInWindow: eligibilityData.cancellationsInWindow,
+        eligibleFor5Days: eligibilityData.eligibleFor5Days,
+        eligibleFor10Days: eligibilityData.eligibleFor10Days,
+        eligibleFor20Days: eligibilityData.eligibleFor20Days,
+        lastWorkDate: eligibilityData.lastWorkDate,
+        calculatedAt: new Date(),
+        dailyQualificationTrail: eligibilityData.dailyQualificationTrail,
+        fiveDayWindow: eligibilityData.fiveDayWindow,
+      },
+      'gigsData.consecutiveDays': eligibilityData.consecutiveDays,
+      'gigsData.totalHours': eligibilityData.totalHours,
+      'gigsData.lastWorkDate': eligibilityData.lastWorkDate ? new Date(`${eligibilityData.lastWorkDate}T00:00:00.000Z`) : null,
+      'gigsData.eligibleFor5Days': eligibilityData.eligibleFor5Days,
+      'gigsData.eligibleFor10Days': eligibilityData.eligibleFor10Days,
+      'gigsData.eligibleFor20Days': eligibilityData.eligibleFor20Days,
+      'gigsData.lastUpdated': new Date(),
+    };
+
     const updateResult = await Worker.findOneAndUpdate(
       { phone: workerPhone },
-      {
-        $set: {
-          'gigsData.eligibilitySnapshot': {
-            consecutiveDays: eligibilityData.consecutiveDays,
-            totalHours: eligibilityData.totalHours,
-            cancellationsInWindow: eligibilityData.cancellationsInWindow,
-            eligibleFor5Days: eligibilityData.eligibleFor5Days,
-            eligibleFor10Days: eligibilityData.eligibleFor10Days,
-            eligibleFor20Days: eligibilityData.eligibleFor20Days,
-            lastWorkDate: eligibilityData.lastWorkDate,
-            calculatedAt: new Date(),
-            dailyQualificationTrail: eligibilityData.dailyQualificationTrail,
-            fiveDayWindow: eligibilityData.fiveDayWindow,
-          },
-        }
-      },
+      { $set: updateFields },
       { new: true }
     );
 
@@ -262,6 +322,13 @@ async function updateIncentiveEligibility(workerPhone) {
       console.warn(`Worker not found for incentive update: ${workerPhone}`);
       return null;
     }
+
+    emitIncentiveUpdatedEvent(workerPhone, {
+      type: 'eligibility_recalculated',
+      eligibleFor5Days: eligibilityData.eligibleFor5Days,
+      eligibleFor10Days: eligibilityData.eligibleFor10Days,
+      eligibleFor20Days: eligibilityData.eligibleFor20Days,
+    });
 
     return updateResult;
   } catch (err) {
@@ -275,4 +342,8 @@ module.exports = {
   calculateEligibility,
   emptyEligibility,
   updateIncentiveEligibility, // 🔧 FIX: Export function for post-gig recalculation
+  MILESTONE_REWARDS,
+  MILESTONE_IDS,
+  buildClaimStatusByMilestone,
+  emitIncentiveUpdatedEvent,
 };

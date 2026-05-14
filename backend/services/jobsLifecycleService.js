@@ -12,6 +12,7 @@ const { updateGigDataOnCompletion, updateGigDataOnCancellation } = require("../u
 const { normalizePhoneNumber } = require("../utils/dataNormalization");
 const { createGigHistoryEvent } = require("./gigHistoryService");
 const { cancelDispatchState } = require("./dispatchStateService");
+const { sendNotificationToUserPhone } = require("../utils/push");
 
 const payInFlightLocks = new Map();
 const payIdempotencyResults = new Map();
@@ -249,6 +250,7 @@ async function markAttendance({ jobId, status, workerPhone, userPhone, deps }) {
       return { code: 404, body: { success: false, message: "Worker not found on this bulk job" } };
     }
 
+    const oldState = { status: job.status, attendanceStatus: job.attendanceStatus, paymentStatus: job.paymentStatus };
     target.attendanceStatus = canonicalStatus;
     target.attendanceTime = new Date();
     if (canonicalStatus === "Present" && job.status === "accepted") {
@@ -263,6 +265,24 @@ async function markAttendance({ jobId, status, workerPhone, userPhone, deps }) {
 
     if (trackingJobs.has(jobId)) trackingJobs.delete(jobId);
     await emitJobUpdatedToUsers(job, [job.contractorPhone, workerPhone, job.acceptedBy || job.contractorPhone]);
+
+    // Send push notification to the specific worker
+    if (workerPhone) {
+      const isJobStarted = job.status === "in_progress" && oldState.status === "accepted";
+      await sendNotificationToUserPhone(workerPhone, {
+        title: isJobStarted ? "Job Started" : "Job Update",
+        body: isJobStarted 
+          ? `Your job has started: ${job.title}`
+          : `Contractor marked your attendance as ${canonicalStatus} for job: ${job.title}`,
+        type: isJobStarted ? "job_started" : "job_progress",
+        metadata: {
+          jobId: job._id.toString(),
+          status: canonicalStatus,
+          action: isJobStarted ? "job_started" : "attendance_marked"
+        }
+      });
+    }
+
     return { code: 200, body: { success: true, job } };
   }
 
@@ -300,6 +320,25 @@ async function markAttendance({ jobId, status, workerPhone, userPhone, deps }) {
     job.contractorPhone,
     job.acceptedBy || job.contractorPhone,
   ]);
+
+  // Send push notification to worker about attendance marking or job start
+  const workerPhone = job.bulkHiring ? workerPhone : job.acceptedBy;
+  if (workerPhone) {
+    const isJobStarted = oldState.status === "accepted" && job.status === "in_progress";
+    await sendNotificationToUserPhone(workerPhone, {
+      title: isJobStarted ? "Job Started" : "Job Update",
+      body: isJobStarted 
+        ? `Your job has started: ${job.title}`
+        : `Contractor marked your attendance as ${canonicalStatus} for job: ${job.title}`,
+      type: isJobStarted ? "job_started" : "job_progress",
+      metadata: {
+        jobId: job._id.toString(),
+        status: canonicalStatus,
+        action: isJobStarted ? "job_started" : "attendance_marked"
+      }
+    });
+  }
+
   return { code: 200, body: { success: true, job } };
 }
 
@@ -1999,6 +2038,38 @@ async function cancelJob({ jobId, reason, reasonDescription, idempotencyKey, use
     status: "success",
     metadata: { reason: normalizedReason, refundAmount, cancellationFee },
   });
+
+  // Send push notification for job cancellation
+  try {
+    const recipientPhones = [];
+    if (cancelledBy === "contractor") {
+      // Notify worker(s)
+      if (job.acceptedBy) recipientPhones.push(job.acceptedBy);
+      if (Array.isArray(job.acceptedWorkers)) {
+        job.acceptedWorkers.forEach(w => { if (w?.phone) recipientPhones.push(w.phone); });
+      }
+    } else if (cancelledBy === "worker") {
+      // Notify contractor
+      recipientPhones.push(job.contractorPhone);
+    }
+
+    for (const phone of recipientPhones) {
+      await sendNotificationToUserPhone(phone, {
+        type: "job_cancelled",
+        title: "Job Cancelled",
+        body: `Job cancelled: ${job.title}. Reason: ${normalizedReasonDescription || normalizedReason}`,
+        jobId: job._id.toString(),
+        metadata: {
+          jobTitle: job.title,
+          reason: normalizedReason,
+          cancelledBy,
+          actionRequired: false,
+        },
+      });
+    }
+  } catch (notifyErr) {
+    console.error("Error sending job cancellation notification:", notifyErr);
+  }
 
   try {
     if (typeof updateContractorStats === "function" && job.contractorPhone) {

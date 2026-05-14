@@ -24,21 +24,23 @@ const isWageInRange = (jobAmount, workerWageRange) => {
 };
 
 /**
- * Find nearby workers within 10km radius with SKILL and WAGE matching
+ * Find nearby workers within specified radius with SKILL and WAGE matching
  * Filters workers by:
- * 1. Location (within 10km)
+ * 1. Location (within radiusKm)
  * 2. Online status
  * 3. Skill match (worker's mainSkill matches job's mainSkill)
  * 4. Wage range match (job wage within worker's expected wage range)
  * 5. No unpaid jobs (checks database)
  * 6. Haven't declined this job
+ * 7. Location freshness (optional, within last 30 minutes)
  * 
  * @param {Object} jobLocation - { lat, lon, mainSkill, amount, description }
  * @param {Map} connectedWorkers - Map of connected workers with their locations
+ * @param {number} radiusKm - Search radius in kilometers (default 10)
+ * @param {number} maxLocationAgeMinutes - Maximum age of worker location in minutes (default 30, 0 to disable)
  * @returns {Array} Array of nearby workers sorted by distance to contractor
  */
-exports.findNearbyWorkers = (jobLocation, connectedWorkers) => {
-  const RADIUS_KM = 10; // 10km radius
+exports.findNearbyWorkers = (jobLocation, connectedWorkers, radiusKm = 10, maxLocationAgeMinutes = 30) => {
   const nearbyWorkers = [];
   const skippedWorkers = [];
 
@@ -47,6 +49,15 @@ exports.findNearbyWorkers = (jobLocation, connectedWorkers) => {
     if (!worker.lat || !worker.lon || !worker.name) {
       skippedWorkers.push(`${worker.name || 'unknown'} (incomplete location data)`);
       continue;
+    }
+
+    // ✅ LOCATION FRESHNESS: Skip if location is too old
+    if (maxLocationAgeMinutes > 0 && worker.locationLastUpdated) {
+      const locationAgeMinutes = (Date.now() - new Date(worker.locationLastUpdated).getTime()) / (1000 * 60);
+      if (locationAgeMinutes > maxLocationAgeMinutes) {
+        skippedWorkers.push(`${worker.name} (location too old: ${locationAgeMinutes.toFixed(1)}min ago)`);
+        continue;
+      }
     }
 
     // ✅ Skip if worker is OFFLINE (isAvailable = false)
@@ -86,8 +97,8 @@ exports.findNearbyWorkers = (jobLocation, connectedWorkers) => {
     // ✅ DEBUG: Log all workers and distances
     console.log(`📍 Worker: ${worker.name} (${worker.mainSkill}, ₹${worker.expectedWage}) at (${worker.lat}, ${worker.lon}) → Distance: ${distKm.toFixed(2)}km`);
 
-    // Only include workers within 10km radius
-    if (distKm <= RADIUS_KM) {
+    // Only include workers within specified radius
+    if (distKm <= radiusKm) {
       console.log(`✅ MATCHED: ${worker.name} - Skill: ${worker.mainSkill}, Wage: ${worker.expectedWage}, Distance: ${distKm.toFixed(2)}km`);
       nearbyWorkers.push({
         socketId,
@@ -100,7 +111,7 @@ exports.findNearbyWorkers = (jobLocation, connectedWorkers) => {
         distance: Math.round(distKm * 10) / 10, // Round to 1 decimal
       });
     } else {
-      console.log(`❌ TOO FAR: ${worker.name} (${distKm.toFixed(2)}km away) - exceeds 10km radius`);
+      console.log(`❌ TOO FAR: ${worker.name} (${distKm.toFixed(2)}km away) - exceeds ${radiusKm}km radius`);
     }
   }
 

@@ -7,8 +7,13 @@ const Wallet = require("../models/Wallet");
 const NotificationHistory = require("../models/NotificationHistory");
 const District = require("../models/City");
 const GigHistory = require("../models/GigHistory");
+const IncentiveLedger = require("../models/IncentiveLedger");
 const CashDeposit = require("../models/CashDeposit");
-const { calculateEligibility } = require("../services/incentiveEligibilityService");
+const {
+  calculateEligibility,
+  MILESTONE_IDS,
+  buildClaimStatusByMilestone,
+} = require("../services/incentiveEligibilityService");
 const jobsLifecycleService = require("../services/jobsLifecycleService");
 
 function createWorkersRouter({
@@ -181,7 +186,8 @@ function createWorkersRouter({
 
   router.post("/workers/request-job", authenticateToken, async (req, res) => {
     try {
-      const { workerPhone, date, startTime, endTime, location, message } = req.body || {};
+      const { workerPhone, date, startTime, endTime, location, message, siteImageUri, requiredWorkers } = req.body || {};
+      const requiredWorkersCount = Number.parseInt(requiredWorkers, 10) || 1;
 
       if (!workerPhone || !date || !startTime || !endTime || !location) {
         return res.status(400).json({
@@ -203,9 +209,7 @@ function createWorkersRouter({
       // Create job request notification
       const requestId = `req_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 
-      const notificationData = {
-        recipientPhone: workerPhone,
-        phone: workerPhone,
+      const payload = {
         type: "job_request",
         title: "New Job Request",
         body: `Job request from ${contractor.name || req.user.phone} for ${date}`,
@@ -217,12 +221,13 @@ function createWorkersRouter({
           startTime,
           endTime,
           location,
+          requiredWorkers: requiredWorkersCount,
+          paymentFrequency: paymentFrequency || 'daily',
           message: message || "",
+          siteImageUri: siteImageUri || undefined,
           timestamp: new Date().toISOString(),
         },
       };
-
-      await NotificationHistory.create(notificationData);
 
       // Send real-time notification if worker is online
       if (worker.socketId) {
@@ -235,7 +240,10 @@ function createWorkersRouter({
             startTime,
             endTime,
             location,
+            requiredWorkers: requiredWorkersCount,
+            paymentFrequency: paymentFrequency || 'daily',
             message: message || "",
+            siteImageUri: siteImageUri || undefined,
             timestamp: new Date().toISOString(),
           });
         } catch (e) {
@@ -245,21 +253,6 @@ function createWorkersRouter({
 
       // Send push notification
       try {
-        const payload = {
-          type: "job_request",
-          title: "New Job Request",
-          body: `Job request from ${contractor.name || req.user.phone} for ${date}`,
-          metadata: {
-            requestId,
-            contractorPhone: req.user.phone,
-            contractorName: contractor.name,
-            date,
-            startTime,
-            endTime,
-            location,
-            message: message || "",
-          },
-        };
         await sendNotificationToUserPhone(workerPhone, payload);
       } catch (e) {
         console.error("Error sending push notification for job request:", e && e.message);
@@ -527,6 +520,15 @@ function createWorkersRouter({
         .lean();
 
       const eligibility = calculateEligibility(events);
+      const ledgerRecords = await IncentiveLedger.find({
+        phone: workerPhone,
+        milestoneId: { $in: MILESTONE_IDS },
+      }).lean();
+      const claimStatusByMilestone = buildClaimStatusByMilestone(eligibility, ledgerRecords);
+      const claimedMilestones = MILESTONE_IDS.filter((id) => claimStatusByMilestone[id] === 'claimed');
+      const availableMilestones = MILESTONE_IDS.filter((id) => claimStatusByMilestone[id] === 'available');
+      const pendingMilestones = MILESTONE_IDS.filter((id) => claimStatusByMilestone[id] === 'processing');
+      const failedMilestones = MILESTONE_IDS.filter((id) => claimStatusByMilestone[id] === 'failed');
 
       return res.json({
         success: true,
@@ -541,6 +543,11 @@ function createWorkersRouter({
           eligibleFor5Days: eligibility.eligibleFor5Days,
           eligibleFor10Days: eligibility.eligibleFor10Days,
           eligibleFor20Days: eligibility.eligibleFor20Days,
+          claimStatusByMilestone,
+          claimedMilestones,
+          availableMilestones,
+          pendingMilestones,
+          failedMilestones,
           lastWorkDate: eligibility.lastWorkDate,
           recentGigs: worker.recentGigs || [],
         },
@@ -937,14 +944,25 @@ function createWorkersRouter({
         return res.status(404).json({ success: false, message: "User not found" });
       }
 
-      await WorkerModel.findOneAndUpdate(
+      console.log(`✅ [AVAILABILITY UPDATE] User ${phone}: isAvailable=${isAvailable} written to User collection`, {
+        updateObj,
+        resultIsAvailable: updatedUser.isAvailable
+      });
+
+      const updatedWorker = await WorkerModel.findOneAndUpdate(
         { phone },
         updateObj,
         { new: true, upsert: true, setDefaultsOnInsert: true }
       );
 
+      console.log(`✅ [AVAILABILITY UPDATE] Worker ${phone}: isAvailable=${isAvailable} written to WorkerModel`, {
+        resultIsAvailable: updatedWorker?.isAvailable
+      });
+
+      let connectedWorkerFound = false;
       for (const [socketId, worker] of connectedWorkers.entries()) {
         if (worker.phone === phone) {
+          console.log(`📍 [AVAILABILITY UPDATE] Found worker in connectedWorkers at socketId=${socketId}. Before: isAvailable=${worker.isAvailable}`);
           worker.isAvailable = isAvailable;
           if (updateObj.latitude !== undefined) {
             worker.latitude = updateObj.latitude;
@@ -952,8 +970,14 @@ function createWorkersRouter({
             worker.city = updateObj.city;
           }
           connectedWorkers.set(socketId, worker);
+          console.log(`📍 [AVAILABILITY UPDATE] Updated connectedWorkers: Worker ${phone} isAvailable=${worker.isAvailable}`);
+          connectedWorkerFound = true;
           break;
         }
+      }
+      
+      if (!connectedWorkerFound) {
+        console.warn(`⚠️ [AVAILABILITY UPDATE] Worker ${phone} NOT found in connectedWorkers map (size=${connectedWorkers.size}). Will be updated on next socket registration.`);
       }
 
       if (isAvailable === true) {

@@ -221,6 +221,7 @@ io.on("connection", (socket) => {
           expectedWage: expectedWage, // ✅ Fetch from User model
           socketId: socket.id,
           isAvailable: isAvailable, // ✅ Now fetches from USER model (source of truth)
+          locationLastUpdated: new Date(), // ✅ Track when location was last updated
         });
 
         // ✅ Store connection timestamp for TTL cleanup
@@ -275,10 +276,15 @@ io.on("connection", (socket) => {
         return;
       }
 
+      console.log(`🔴 [OFFLINE EVENT] Worker ${phone} going offline via socket event`);
+      
       connectedWorkers.delete(socket.id);
       workerConnectionTimes.delete(socket.id);
+      console.log(`🔴 [OFFLINE EVENT] Removed ${phone} from connectedWorkers (size now: ${connectedWorkers.size})`);
 
       await setWorkerOfflineByPhone(phone);
+      console.log(`🔴 [OFFLINE EVENT] Updated database: Worker ${phone} isAvailable=false`);
+      
       io.to(phone).emit("workerStatusUpdate", {
         isAvailable: false,
         phone,
@@ -291,6 +297,7 @@ io.on("connection", (socket) => {
         source: "workerOffline",
         timestamp: new Date(),
       });
+      console.log(`🔴 [OFFLINE EVENT] Emitted workerStatusUpdate to client ${phone}`);
     } catch (err) {
       console.error("workerOffline handler error:", err);
     }
@@ -306,6 +313,7 @@ io.on("connection", (socket) => {
         const worker = connectedWorkers.get(socket.id);
         worker.lat = lat;
         worker.lon = lon;
+        worker.locationLastUpdated = new Date(); // ✅ Update timestamp when location changes
         console.log(`📍 Worker location updated: ${worker.name} -> ${lat}, ${lon}`);
       }
 
