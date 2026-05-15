@@ -322,10 +322,10 @@ async function markAttendance({ jobId, status, workerPhone, userPhone, deps }) {
   ]);
 
   // Send push notification to worker about attendance marking or job start
-  const workerPhone = job.bulkHiring ? workerPhone : job.acceptedBy;
-  if (workerPhone) {
+  const workerNotificationPhone = job.bulkHiring ? workerPhone : job.acceptedBy;
+  if (workerNotificationPhone) {
     const isJobStarted = oldState.status === "accepted" && job.status === "in_progress";
-    await sendNotificationToUserPhone(workerPhone, {
+    await sendNotificationToUserPhone(workerNotificationPhone, {
       title: isJobStarted ? "Job Started" : "Job Update",
       body: isJobStarted 
         ? `Your job has started: ${job.title}`
