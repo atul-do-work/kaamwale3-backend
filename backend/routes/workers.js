@@ -830,11 +830,24 @@ function createWorkersRouter({
 
   router.put("/workers/availability", authenticateToken, async (req, res) => {
     try {
-      const { isAvailable, latitude, longitude } = req.body;
+      let { isAvailable, latitude, longitude } = req.body;
       const phone = req.user.phone;
 
+      // Accept boolean-like values from clients (string, number)
+      if (typeof isAvailable === "string") {
+        if (isAvailable.toLowerCase() === "true") {
+          isAvailable = true;
+        } else if (isAvailable.toLowerCase() === "false") {
+          isAvailable = false;
+        }
+      }
+
+      if (typeof isAvailable === "number") {
+        isAvailable = isAvailable === 1;
+      }
+
       if (typeof isAvailable !== "boolean") {
-        return res.status(400).json({ success: false, message: "isAvailable must be a boolean" });
+        return res.status(400).json({ success: false, message: "isAvailable must be a boolean or boolean-like value" });
       }
 
       const workerState = await WorkerModel.findOne({ phone }).select("isBlocked blockedReason compliance").lean();
@@ -939,21 +952,41 @@ function createWorkersRouter({
         updateObj.locationEnabled = true;
       }
 
-      const updatedUser = await User.findOneAndUpdate({ phone }, updateObj, { new: true });
-      if (!updatedUser) {
-        return res.status(404).json({ success: false, message: "User not found" });
+      let updatedUser;
+      let updatedWorker;
+      const session = await User.startSession();
+      try {
+        await session.withTransaction(async () => {
+          updatedUser = await User.findOneAndUpdate(
+            { phone },
+            updateObj,
+            { new: true, session }
+          );
+          if (!updatedUser) {
+            throw new Error("User not found during transaction");
+          }
+
+          updatedWorker = await WorkerModel.findOneAndUpdate(
+            { phone },
+            updateObj,
+            { new: true, upsert: true, setDefaultsOnInsert: true, session }
+          );
+        });
+      } catch (trxErr) {
+        console.error("Availability transaction failed:", trxErr);
+        return res.status(500).json({ success: false, message: "Failed to update availability", error: trxErr.message });
+      } finally {
+        session.endSession();
       }
 
       console.log(`✅ [AVAILABILITY UPDATE] User ${phone}: isAvailable=${isAvailable} written to User collection`, {
         updateObj,
-        resultIsAvailable: updatedUser.isAvailable
+        resultIsAvailable: updatedUser?.isAvailable
       });
 
-      const updatedWorker = await WorkerModel.findOneAndUpdate(
-        { phone },
-        updateObj,
-        { new: true, upsert: true, setDefaultsOnInsert: true }
-      );
+      if (!updatedWorker) {
+        return res.status(500).json({ success: false, message: "Failed to update worker availability" });
+      }
 
       console.log(`✅ [AVAILABILITY UPDATE] Worker ${phone}: isAvailable=${isAvailable} written to WorkerModel`, {
         resultIsAvailable: updatedWorker?.isAvailable

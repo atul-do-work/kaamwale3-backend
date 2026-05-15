@@ -59,11 +59,56 @@ function attachSocketConnectionHandlers(io, deps) {
         ),
         WorkerModel.findOneAndUpdate(
           { phone: normalizedPhone },
-          { $set: { isAvailable: false, updatedAt: new Date() } }
+          { $set: { isAvailable: false, socketId: "", updatedAt: new Date() } }
         ),
       ]);
     } catch (err) {
       console.error("Error marking worker offline by phone:", err);
+    }
+  }
+
+  function parseBooleanFlag(value) {
+    if (typeof value === "boolean") return value;
+    if (typeof value === "string") {
+      const normalized = value.toLowerCase().trim();
+      if (normalized === "true") return true;
+      if (normalized === "false") return false;
+    }
+    if (typeof value === "number") {
+      return value === 1;
+    }
+    return null;
+  }
+
+  async function setWorkerOnlineByPhone(phone, locationPayload = {}) {
+    if (!phone || !String(phone).trim()) return null;
+    const normalizedPhone = String(phone).trim();
+    const updateObj = { isAvailable: true, updatedAt: new Date() };
+
+    const { lat, lon } = locationPayload;
+    if (typeof lat === "number" && typeof lon === "number" && Math.abs(lat) <= 90 && Math.abs(lon) <= 180) {
+      updateObj.location = { type: "Point", coordinates: [lon, lat] };
+      updateObj.latitude = lat;
+      updateObj.longitude = lon;
+      updateObj.locationLastUpdated = new Date();
+      updateObj.locationEnabled = true;
+    }
+
+    try {
+      await Promise.all([
+        User.findOneAndUpdate(
+          { phone: normalizedPhone },
+          { $set: updateObj },
+          { new: true }
+        ),
+        WorkerModel.findOneAndUpdate(
+          { phone: normalizedPhone },
+          { $set: updateObj },
+          { new: true, upsert: true, setDefaultsOnInsert: true }
+        ),
+      ]);
+    } catch (err) {
+      console.error("Error marking worker online by phone:", err);
     }
   }
 
@@ -283,7 +328,7 @@ io.on("connection", (socket) => {
       console.log(`🔴 [OFFLINE EVENT] Removed ${phone} from connectedWorkers (size now: ${connectedWorkers.size})`);
 
       await setWorkerOfflineByPhone(phone);
-      console.log(`🔴 [OFFLINE EVENT] Updated database: Worker ${phone} isAvailable=false`);
+      console.log(`🔴 [OFFLINE EVENT] Updated database: Worker ${phone} isAvailable=false and socketId cleared`);
       
       io.to(phone).emit("workerStatusUpdate", {
         isAvailable: false,
@@ -300,6 +345,55 @@ io.on("connection", (socket) => {
       console.log(`🔴 [OFFLINE EVENT] Emitted workerStatusUpdate to client ${phone}`);
     } catch (err) {
       console.error("workerOffline handler error:", err);
+    }
+  });
+
+  socket.on("workerOnline", async (payload) => {
+    try {
+      const phone = socket.user?.phone;
+      if (!phone) {
+        console.warn("workerOnline received without authenticated phone");
+        socket.emit('error', { message: 'Authentication required to go online' });
+        return;
+      }
+
+      const { isAvailable, lat, lon } = payload || {};
+      const parsedAvailable = parseBooleanFlag(isAvailable);
+      if (parsedAvailable !== true) {
+        socket.emit('error', { message: 'workerOnline requires isAvailable=true' });
+        return;
+      }
+
+      await setWorkerOnlineByPhone(phone, { lat, lon });
+
+      if (connectedWorkers.has(socket.id)) {
+        const worker = connectedWorkers.get(socket.id);
+        worker.isAvailable = true;
+        if (typeof lat === "number" && typeof lon === "number") {
+          worker.lat = lat;
+          worker.lon = lon;
+          worker.locationLastUpdated = new Date();
+        }
+        connectedWorkers.set(socket.id, worker);
+      }
+
+      io.to(phone).emit("workerStatusUpdate", {
+        isAvailable: true,
+        phone,
+        source: "workerOnline",
+        timestamp: new Date(),
+      });
+      socket.emit("workerStatusUpdate", {
+        isAvailable: true,
+        phone,
+        source: "workerOnline",
+        timestamp: new Date(),
+      });
+
+      console.log(`🟢 [ONLINE EVENT] Worker ${phone} marked online via socket`);
+    } catch (err) {
+      console.error("workerOnline handler error:", err);
+      socket.emit('error', { message: 'Failed to go online', details: err.message });
     }
   });
 
