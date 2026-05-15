@@ -2,6 +2,7 @@ const express = require("express");
 const { authenticateToken } = require("../utils/auth");
 const ContractorStats = require("../models/ContractorStats");
 const Job = require("../models/Jobs");
+const User = require("../models/User");
 
 const normalizePaymentStatus = (status) => String(status || "").trim().toLowerCase();
 const isPaidStatus = (status) => normalizePaymentStatus(status) === "paid";
@@ -188,8 +189,17 @@ function createContractorStatsRouter() {
 
       const stats = buildStatsFromJobs(jobs, phone);
       const aggregated = aggregateStats(stats);
+      const userDoc = await User.findOne({ phone }).select("avgRating").lean();
+      const contractorRating = Number(userDoc?.avgRating ?? 0);
 
-      return res.json({ success: true, stats, aggregated, range });
+      return res.json({
+        success: true,
+        stats,
+        aggregated,
+        range,
+        rating: contractorRating,
+        avgRating: contractorRating,
+      });
     } catch (err) {
       console.error("Fetch stats error", err);
       return res.status(500).json({ success: false, message: "Internal server error" });
@@ -213,7 +223,15 @@ function createContractorStatsRouter() {
         },
       }).sort({ date: 1 });
 
-      return res.json({ success: true, stats });
+      const userDoc = await User.findOne({ phone }).select("avgRating").lean();
+      const contractorRating = Number(userDoc?.avgRating ?? 0);
+
+      return res.json({
+        success: true,
+        stats,
+        rating: contractorRating,
+        avgRating: contractorRating,
+      });
     } catch (err) {
       console.error("Fetch range stats error", err);
       return res.status(500).json({ success: false, message: "Internal server error" });

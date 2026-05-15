@@ -579,8 +579,16 @@ async function payJob({ jobId, mode, workerPhone, idempotencyKey, userPhone, use
       }
     } catch (walletErr) {
       console.error("Error processing bulk payment:", walletErr);
-      await rollbackJobPayment(job, oldState, target, oldTargetState);
-      return finalize({ code: 500, body: { success: false, message: "Payment failed. Job state rolled back." } });
+      // ✅ CRITICAL: For cash payments, deposit creation failure is not fatal
+      // The CashDeposit record is for tracking only - payment is complete regardless
+      if (normalizedPaymentMode !== "cash") {
+        // For online payments, rollback on wallet failure
+        await rollbackJobPayment(job, oldState, target, oldTargetState);
+        return finalize({ code: 500, body: { success: false, message: "Payment failed. Job state rolled back." } });
+      } else {
+        // For cash payments, log the error but continue - deposit tracking is best-effort
+        console.warn("[jobsLifecycleService] Cash deposit creation warning (non-fatal):", walletErr.message);
+      }
     }
 
     try {
