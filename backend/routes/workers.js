@@ -186,13 +186,24 @@ function createWorkersRouter({
 
   router.post("/workers/request-job", authenticateToken, async (req, res) => {
     try {
-      const { workerPhone, date, startTime, endTime, location, message, siteImageUri, requiredWorkers } = req.body || {};
+      const {
+        workerPhone,
+        date,
+        startTime,
+        endTime,
+        location,
+        message,
+        siteImageUri,
+        requiredWorkers,
+        paymentFrequency,
+      } = req.body || {};
       const requiredWorkersCount = Number.parseInt(requiredWorkers, 10) || 1;
+      const paymentFrequencyValue = paymentFrequency || 'daily';
 
       if (!workerPhone || !date || !startTime || !endTime || !location) {
         return res.status(400).json({
           success: false,
-          message: "workerPhone, date, startTime, endTime, and location are required"
+          message: "workerPhone, date, startTime, endTime, and location are required",
         });
       }
 
@@ -222,7 +233,7 @@ function createWorkersRouter({
           endTime,
           location,
           requiredWorkers: requiredWorkersCount,
-          paymentFrequency: paymentFrequency || 'daily',
+          paymentFrequency: paymentFrequencyValue,
           message: message || "",
           siteImageUri: siteImageUri || undefined,
           timestamp: new Date().toISOString(),
@@ -241,7 +252,7 @@ function createWorkersRouter({
             endTime,
             location,
             requiredWorkers: requiredWorkersCount,
-            paymentFrequency: paymentFrequency || 'daily',
+            paymentFrequency: paymentFrequencyValue,
             message: message || "",
             siteImageUri: siteImageUri || undefined,
             timestamp: new Date().toISOString(),

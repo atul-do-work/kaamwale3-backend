@@ -1630,9 +1630,6 @@ router.post('/wallet-adjustments', authenticateToken, checkAdmin, async (req, re
             return res.status(400).json({ success: false, message: 'Invalid payload' });
         }
 
-        const wallet = await Wallet.findOne({ phone: normalizedPhone });
-        if (!wallet) return res.status(404).json({ success: false, message: 'Wallet not found' });
-
         const opening = Number(wallet.availableBalance ?? wallet.balance ?? 0);
         const delta = normalizedMode === 'debit' ? -Math.abs(normalizedAmount) : Math.abs(normalizedAmount);
         const closing = opening + delta;
@@ -1653,22 +1650,40 @@ router.post('/wallet-adjustments', authenticateToken, checkAdmin, async (req, re
             rejectedAt: null,
         };
 
-        wallet.availableBalance = closing;
-        wallet.balance = closing;
-        wallet.transactions.push({
-            type: normalizedMode === 'debit' ? 'withdraw' : 'deposit',
-            amount: Math.abs(normalizedAmount),
-            description: `Admin adjustment (${normalizedMode}): ${row.reason}`,
-            idempotencyKey: id,
-            status: 'completed',
-            openingBalance: opening,
-            closingBalance: closing,
-            source: 'admin',
-            provider: 'internal',
-            metadata: { actor: req.user.phone || 'admin', checker: req.user.phone || 'admin', reason: row.reason },
-        });
-        wallet.updateTotals();
-        await wallet.save();
+        const query = {
+            phone: normalizedPhone,
+            'transactions.idempotencyKey': { $ne: id },
+            ...(normalizedMode === 'debit' ? { availableBalance: { $gte: normalizedAmount } } : {}),
+        };
+
+        const updatedWallet = await Wallet.findOneAndUpdate(
+            query,
+            {
+                $inc: normalizedMode === 'debit'
+                    ? { availableBalance: -normalizedAmount, balance: -normalizedAmount, totalWithdrawn: normalizedAmount }
+                    : { availableBalance: normalizedAmount, balance: normalizedAmount, totalDeposited: normalizedAmount },
+                $push: {
+                    transactions: {
+                        type: normalizedMode === 'debit' ? 'withdraw' : 'deposit',
+                        amount: Math.abs(normalizedAmount),
+                        description: `Admin adjustment (${normalizedMode}): ${row.reason}`,
+                        idempotencyKey: id,
+                        status: 'completed',
+                        openingBalance: opening,
+                        closingBalance: closing,
+                        source: 'admin',
+                        provider: 'internal',
+                        metadata: { actor: req.user.phone || 'admin', checker: req.user.phone || 'admin', reason: row.reason },
+                    }
+                }
+            },
+            { new: true }
+        );
+
+        if (!updatedWallet) {
+            return res.status(500).json({ success: false, message: 'Failed to apply wallet adjustment atomically' });
+        }
+
         adminAdjustments.set(id, row);
 
         await logAdminAudit({
@@ -1718,30 +1733,44 @@ router.post('/finance/refund', authenticateToken, checkAdmin, async (req, res) =
             return res.status(400).json({ success: false, message: 'Invalid payload' });
         }
 
-        const wallet = await Wallet.findOne({ phone: contractorPhone });
-        if (!wallet) return res.status(404).json({ success: false, message: 'Contractor wallet not found' });
-        const duplicate = (wallet.transactions || []).find((t) => t.idempotencyKey === idempotencyKey && t.status === 'completed');
-        if (duplicate) return res.json({ success: true, idempotent: true, transaction: duplicate });
+        const duplicate = await Wallet.findOne({ phone: contractorPhone, 'transactions.idempotencyKey': idempotencyKey, 'transactions.status': 'completed' }).lean();
+        if (duplicate) return res.json({ success: true, idempotent: true, transaction: duplicate.transactions?.[0] || duplicate });
 
-        const opening = Number(wallet.availableBalance || wallet.balance || 0);
+        const existingWallet = await Wallet.findOne({ phone: contractorPhone }).lean();
+        if (!existingWallet) return res.status(404).json({ success: false, message: 'Contractor wallet not found' });
+
+        const opening = Number(existingWallet.availableBalance || existingWallet.balance || 0);
         const closing = opening + amount;
-        wallet.availableBalance = closing;
-        wallet.balance = closing;
-        wallet.transactions.push({
-            type: 'refund',
-            amount,
-            description: `Admin refund for job ${jobId}`,
-            jobId,
-            idempotencyKey,
-            status: 'completed',
-            openingBalance: opening,
-            closingBalance: closing,
-            source: 'admin',
-            provider: 'internal',
-            metadata: { actor: req.user.phone || 'admin', reason: safeText(req.body?.reason || '', 200) },
-        });
-        wallet.updateTotals();
-        await wallet.save();
+
+        const updatedWallet = await Wallet.findOneAndUpdate(
+            {
+                phone: contractorPhone,
+                'transactions.idempotencyKey': { $ne: idempotencyKey },
+            },
+            {
+                $inc: { availableBalance: amount, balance: amount },
+                $push: {
+                    transactions: {
+                        type: 'refund',
+                        amount,
+                        description: `Admin refund for job ${jobId}`,
+                        jobId,
+                        idempotencyKey,
+                        status: 'completed',
+                        openingBalance: opening,
+                        closingBalance: closing,
+                        source: 'admin',
+                        provider: 'internal',
+                        metadata: { actor: req.user.phone || 'admin', reason: safeText(req.body?.reason || '', 200) },
+                    }
+                }
+            },
+            { new: true }
+        );
+
+        if (!updatedWallet) {
+            return res.status(500).json({ success: false, message: 'Failed to apply refund atomically' });
+        }
 
         await logAdminAudit({ req, action: 'job_refund_admin', phone: contractorPhone, description: `Refund processed`, before: { balance: opening }, after: { balance: closing }, metadata: { jobId: String(jobId), idempotencyKey, amount } });
         return res.json({ success: true, amount, contractorPhone, idempotencyKey });

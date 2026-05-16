@@ -1,5 +1,5 @@
 const PORT = Number(process.env.PORT || 3000);
-const JWT_SECRET = process.env.JWT_SECRET || "supersecretkey";
+const JWT_SECRET = process.env.JWT_SECRET ;
 const SERVER_PUBLIC_URL = process.env.SERVER_PUBLIC_URL || "";
 
 function getPublicBaseUrl(req) {

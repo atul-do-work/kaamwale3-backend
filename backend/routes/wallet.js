@@ -156,6 +156,112 @@ function rollbackWithdrawalOnWallet({ wallet, withdrawal, rollbackEventId, descr
   return true;
 }
 
+async function updateWalletTransactionStatus(phone, walletTransactionId, status, extraMetadata = null) {
+  if (!phone || !walletTransactionId) return false;
+
+  const existingWallet = await Wallet.findOne(
+    { phone, 'transactions._id': walletTransactionId },
+    { 'transactions.$': 1 }
+  ).lean();
+
+  const existingTx = existingWallet?.transactions?.[0];
+  if (!existingTx) return false;
+
+  const metadata = {
+    ...(existingTx.metadata || {}),
+    ...(extraMetadata || {}),
+  };
+
+  const updated = await Wallet.findOneAndUpdate(
+    { phone, 'transactions._id': walletTransactionId },
+    {
+      $set: {
+        'transactions.$.status': status,
+        'transactions.$.metadata': metadata,
+      }
+    },
+    { new: true }
+  );
+
+  return Boolean(updated);
+}
+
+async function rollbackWithdrawalOnWalletAtomic({ phone, withdrawal, rollbackEventId, description, source, providerEventId, metadata = {} }) {
+  if (!phone || !withdrawal) return false;
+
+  const duplicateRollback = await Wallet.exists({ phone, 'transactions.providerEventId': rollbackEventId });
+  if (duplicateRollback) return false;
+
+  const walletDoc = await Wallet.findOne(
+    { phone, 'transactions._id': withdrawal.walletTransactionId },
+    { availableBalance: 1, balance: 1, pocketBalance: 1, 'transactions.$': 1 }
+  ).lean();
+
+  if (!walletDoc || !walletDoc.transactions?.[0]) return false;
+
+  const refundAvailable = Number(withdrawal.deductedFromAvailable || 0);
+  const refundPocket = Number(withdrawal.deductedFromPocket || 0);
+  const fallbackAmount = Number(withdrawal.amount || 0);
+  const openingBalance = Number(walletDoc.availableBalance ?? walletDoc.balance ?? 0) + Number(walletDoc.pocketBalance ?? 0);
+
+  const incOps = {};
+  if (refundAvailable > 0) {
+    incOps.availableBalance = refundAvailable;
+    incOps.balance = refundAvailable;
+  }
+  if (refundPocket > 0) {
+    incOps.pocketBalance = refundPocket;
+  }
+
+  const balanceSource = String(withdrawal.balanceSource || 'available').toLowerCase();
+  if (!refundAvailable && !refundPocket) {
+    if (balanceSource === 'pocket') {
+      incOps.pocketBalance = fallbackAmount;
+    } else {
+      incOps.availableBalance = fallbackAmount;
+      incOps.balance = fallbackAmount;
+    }
+  }
+
+  const closingBalance = openingBalance + Object.values(incOps).reduce((sum, value) => sum + Number(value || 0), 0);
+  const existingTx = walletDoc.transactions[0];
+  const currentMetadata = existingTx.metadata || {};
+
+  const update = {
+    ...(Object.keys(incOps).length ? { $inc: incOps } : {}),
+    $set: {
+      'transactions.$.status': 'failed',
+      'transactions.$.metadata': { ...currentMetadata, rollbackEventId, providerEventId, ...metadata },
+    },
+    $push: {
+      transactions: appendAuditFields({
+        type: 'refund',
+        amount: fallbackAmount,
+        openingBalance,
+        closingBalance,
+        status: 'completed',
+        description,
+        source,
+        provider: 'razorpay',
+        providerEventId: rollbackEventId,
+        metadata,
+      })
+    }
+  };
+
+  const updated = await Wallet.findOneAndUpdate(
+    {
+      phone,
+      'transactions._id': withdrawal.walletTransactionId,
+      'transactions.providerEventId': { $ne: rollbackEventId },
+    },
+    update,
+    { new: true }
+  );
+
+  return Boolean(updated);
+}
+
 const depositOrderLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 30,
@@ -357,16 +463,25 @@ router.get("/", authenticateToken, async (req, res) => {
   }
 });
 
-// GET transactions
+// GET wallet transactions with pagination
 router.get("/transactions", authenticateToken, async (req, res) => {
   try {
     forceFreshJson(req, res);
-    let wallet = await Wallet.findOne({ phone: req.user.phone });
+    const page = Math.max(1, Number.parseInt(String(req.query.page || '1'), 10) || 1);
+    const limit = Math.min(50, Math.max(5, Number.parseInt(String(req.query.limit || '20'), 10) || 20));
+
+    const wallet = await Wallet.findOne({ phone: req.user.phone });
     if (!wallet) {
-      return res.json({ success: true, transactions: [] });
+      return res.json({ success: true, transactions: [], page, limit, total: 0, totalPages: 0 });
     }
-    
-    const formattedTransactions = wallet.transactions.map((t) => {
+
+    const allTransactions = Array.isArray(wallet.transactions) ? [...wallet.transactions] : [];
+    const sortedTransactions = allTransactions.sort((a, b) => new Date(b.date) - new Date(a.date));
+    const total = sortedTransactions.length;
+    const totalPages = Math.ceil(total / limit);
+    const paginated = sortedTransactions.slice((page - 1) * limit, page * limit);
+
+    const formattedTransactions = paginated.map((t) => {
       const txDate = t.date ? new Date(t.date) : null;
       const formattedDate =
         txDate && !Number.isNaN(txDate.getTime())
@@ -375,20 +490,15 @@ router.get("/transactions", authenticateToken, async (req, res) => {
 
       return {
         id: t._id,
-        type:
-          t.type === "deposit" || t.type === "pocket_deposit" || t.type === "credit"
-            ? "credit"
-            : t.type === "refund"
-              ? "refund"
-              : "debit",
-        description: t.description || `${t.type.charAt(0).toUpperCase() + t.type.slice(1)}`,
+        type: t.type,
+        description: t.description || `${String(t.type || '').charAt(0).toUpperCase() + String(t.type || '').slice(1)}`,
         amount: t.amount,
         date: formattedDate,
         status: "completed",
       };
     });
-    
-    res.json({ success: true, transactions: formattedTransactions });
+
+    res.json({ success: true, transactions: formattedTransactions, page, limit, total, totalPages });
   } catch (err) {
     console.error('Transactions fetch error:', err);
     res.status(500).json({ success: false, message: "Error fetching transactions" });
@@ -1693,26 +1803,26 @@ router.post("/payout/webhook", async (req, res) => {
     withdrawal.reconciledAt = new Date();
     await withdrawal.save();
 
-    const wallet = await Wallet.findOne({ phone: withdrawal.phone });
-    if (wallet) {
-      markWalletTransactionStatus(
-        wallet,
-        withdrawal.walletTransactionId,
-        mappedStatus === "success" ? "completed" : mappedStatus === "processing" ? "processing" : "failed",
-        {
-          payoutId,
-          payoutEvent: event,
-          payoutStatus: mappedStatus,
-          failureReason: withdrawal.failureReason || null,
-        }
-      );
+    const walletUpdateStatus = await updateWalletTransactionStatus(
+      withdrawal.phone,
+      withdrawal.walletTransactionId,
+      mappedStatus === "success" ? "completed" : mappedStatus === "processing" ? "processing" : "failed",
+      {
+        payoutId,
+        payoutEvent: event,
+        payoutStatus: mappedStatus,
+        failureReason: withdrawal.failureReason || null,
+      }
+    );
+
+    if (!walletUpdateStatus) {
+      console.warn(`⚠️ Payout webhook: wallet transaction ${withdrawal.walletTransactionId} not found or status not updated`);
     }
 
-    // Rollback wallet on failed/reversed payout if not already rolled back
-    if (wallet && (mappedStatus === "failed" || mappedStatus === "reversed")) {
+    if (mappedStatus === "failed" || mappedStatus === "reversed") {
       const rollbackEventId = `rollback:${withdrawal._id.toString()}`;
-      const rolledBack = rollbackWithdrawalOnWallet({
-        wallet,
+      await rollbackWithdrawalOnWalletAtomic({
+        phone: withdrawal.phone,
         withdrawal,
         rollbackEventId,
         description: `Withdrawal rollback for ${withdrawal._id.toString()}`,
@@ -1727,11 +1837,6 @@ router.post("/payout/webhook", async (req, res) => {
           failureReason: withdrawal.failureReason || null,
         },
       });
-      if (rolledBack) {
-        await wallet.save();
-      }
-    } else if (wallet) {
-      await wallet.save();
     }
 
     return res.status(200).json({ success: true, status: mappedStatus });
