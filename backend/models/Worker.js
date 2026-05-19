@@ -45,10 +45,22 @@ const workerSchema = new mongoose.Schema({
 
     // Milestone tracking
     milestonesUnlocked: {
-      fiveDaysMilestone: { type: Boolean, default: false, unlockedDate: Date },
-      tenDaysMilestone: { type: Boolean, default: false, unlockedDate: Date },
-      twentyDaysMilestone: { type: Boolean, default: false, unlockedDate: Date },
+      fiveDaysMilestone: {
+        unlocked: { type: Boolean, default: false },
+        unlockedDate: { type: Date, default: null },
+      },
+      tenDaysMilestone: {
+        unlocked: { type: Boolean, default: false },
+        unlockedDate: { type: Date, default: null },
+      },
+      twentyDaysMilestone: {
+        unlocked: { type: Boolean, default: false },
+        unlockedDate: { type: Date, default: null },
+      },
     },
+
+    // Active accepted count (in-flight accepted jobs)
+    activeAcceptedCount: { type: Number, default: 0 },
 
     // Incentive eligibility (real-time tracking)
     eligibleFor5Days: { type: Boolean, default: false },

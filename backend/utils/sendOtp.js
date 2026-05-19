@@ -11,11 +11,8 @@ function initializeFirebase() {
         clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
       };
 
-      console.log('🔧 Firebase Config Check:');
-      console.log('  - projectId:', serviceAccount.projectId);
-      console.log('  - clientEmail:', serviceAccount.clientEmail);
-      console.log('  - privateKey exists:', !!serviceAccount.privateKey);
-      console.log('  - privateKey length:', serviceAccount.privateKey?.length);
+      // Minimal Firebase config logging - avoid printing secrets
+      console.log('🔧 Firebase Config Check: projectId present:', !!serviceAccount.projectId);
 
       admin.initializeApp({
         credential: admin.credential.cert(serviceAccount),

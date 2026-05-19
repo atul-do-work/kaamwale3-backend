@@ -1898,6 +1898,8 @@ router.post('/payouts/batches', authenticateToken, checkAdmin, async (req, res) 
             payoutWeek: { year, week: wk, startDate, endDate },
             status: 'pending',
             totalAmount: Array.from(byWorker.values()).reduce((s, r) => s + Number(r.netAmount || 0), 0),
+            totalEarnings: Array.from(byWorker.values()).reduce((s, r) => s + Number(r.earningsAmount || 0), 0),
+            totalDeductions: Array.from(byWorker.values()).reduce((s, r) => s + Number(r.deductions || 0), 0),
             totalWorkers: byWorker.size,
             workers: Array.from(byWorker.values()),
             notes: safeText(req.body?.notes || '', 500),

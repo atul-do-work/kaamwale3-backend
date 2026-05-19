@@ -396,7 +396,17 @@ function computeWorkerWeeklyMetrics(walletDoc, now = new Date()) {
       tx.type === "incentive_reward" ||
       tx.type === "incentive" ||
       String(tx?.metadata?.source || "").toLowerCase() === "incentive";
-    if (tx.type === "payment" || isIncentive) {
+    const isReferral =
+      tx.type === "referral" ||
+      tx.type === "referral_reward" ||
+      String(tx?.metadata?.source || "").toLowerCase() === "referral";
+    const isPocketCredit =
+      tx.type === "cash_deposit" ||
+      tx.type === "pocket_deposit" ||
+      isReferral ||
+      (tx.type === "deposit" && String(tx?.metadata?.balanceType || "").toLowerCase() === "pocket");
+
+    if (tx.type === "payment" || isIncentive || isReferral || isPocketCredit) {
       earnings += amount;
       continue;
     }
@@ -751,15 +761,16 @@ router.post("/deposit/verify", authenticateToken, depositVerifyLimiter, async (r
     const role = String(req.user?.role || "").toLowerCase();
     const isWorker = role === "worker";
     const isContractor = role === "contractor";
-    const usePocketBalance = isWorker || isContractor;
-    const targetBalanceField = isContractor ? "pocketBalance" : "availableBalance";
+    const targetBalanceField = isPendingCashDeposit && isWorker ? "pocketBalance" : isContractor ? "pocketBalance" : "availableBalance";
     const openingBalance = Number(existingWalletBeforeUpdate[targetBalanceField] || 0);
     const closingBalance = openingBalance + depositAmount;
-    const balanceInc = isContractor
-      ? { pocketBalance: depositAmount }
-      : isWorker
-        ? { pocketBalance: depositAmount, availableBalance: depositAmount, balance: depositAmount }
-        : { availableBalance: depositAmount, balance: depositAmount };
+    const balanceInc = isPendingCashDeposit
+      ? { pocketBalance: depositAmount, totalEarned: depositAmount }
+      : isContractor
+        ? { pocketBalance: depositAmount }
+        : isWorker
+          ? { pocketBalance: depositAmount, availableBalance: depositAmount, balance: depositAmount }
+          : { availableBalance: depositAmount, balance: depositAmount };
 
     const wallet = await Wallet.findOneAndUpdate(
       {
@@ -788,7 +799,7 @@ router.post("/deposit/verify", authenticateToken, depositVerifyLimiter, async (r
             providerEventId: paymentId,
             metadata: {
               verifiedBy: 'deposit/verify',
-              balanceType: isContractor ? 'pocket' : isWorker ? 'available+pocket' : 'available',
+              balanceType: isPendingCashDeposit ? 'pocket' : isContractor ? 'pocket' : isWorker ? 'available+pocket' : 'available',
             },
           })
         }
@@ -1660,19 +1671,22 @@ router.post("/deposit/webhook", async (req, res) => {
     }
     const isWorker = role === "worker";
     const isContractor = role === "contractor";
-    const usePocketBalance = isWorker || isContractor;
-    const targetBalanceField = isContractor ? "pocketBalance" : "availableBalance";
+    const targetBalanceField = isCashDeposit && isWorker ? "pocketBalance" : isContractor ? "pocketBalance" : "availableBalance";
     
     // 🔐 ATOMIC: Credit wallet only after signature verification passes
     // This ensures wallet never credited if callback succeeds but verification fails on retry
+    const incOps = isCashDeposit
+      ? { pocketBalance: amount, totalEarned: amount }
+      : isContractor
+        ? { pocketBalance: amount }
+        : isWorker
+          ? { pocketBalance: amount, availableBalance: amount, balance: amount }
+          : { availableBalance: amount, balance: amount };
+
     const updatedWallet = await Wallet.findOneAndUpdate(
       { phone, "transactions.paymentId": { $ne: paymentId } },
       {
-        $inc: isContractor
-          ? { pocketBalance: amount }
-          : isWorker
-            ? { pocketBalance: amount, availableBalance: amount, balance: amount }
-            : { availableBalance: amount, balance: amount },
+        $inc: incOps,
         $push: {
           transactions: appendAuditFields({
             type: isCashDeposit ? "cash_deposit" : isContractor ? "pocket_deposit" : "deposit",
@@ -1695,7 +1709,7 @@ router.post("/deposit/webhook", async (req, res) => {
             idempotencyKey: paymentId,
             metadata: {
               webhookEvent: event,
-              balanceType: isContractor ? "pocket" : isWorker ? "available+pocket" : "available",
+              balanceType: isCashDeposit ? "pocket" : isContractor ? "pocket" : isWorker ? "available+pocket" : "available",
               verifiedAt: new Date(),
             },
           }),

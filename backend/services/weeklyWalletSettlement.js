@@ -1,5 +1,6 @@
 const Wallet = require("../models/Wallet");
 const User = require("../models/User");
+const PayoutBatch = require("../models/PayoutBatch");
 const WorkerEarnings = require("../models/WorkerEarnings");
 
 const PAYOUT_CYCLE_ANCHOR_ISO = process.env.PAYOUT_CYCLE_ANCHOR_ISO || "2025-02-25T00:00:00+05:30";
@@ -25,10 +26,30 @@ function getWeekBounds(now = new Date()) {
   return { start, endExclusive };
 }
 
-function computeClosedWeekNet(walletDoc, closedStart, closedEndExclusive) {
+function getIsoWeekNumber(date = new Date()) {
+  const tmp = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
+  const dayNumber = tmp.getUTCDay() || 7;
+  tmp.setUTCDate(tmp.getUTCDate() + 4 - dayNumber);
+  const yearStart = new Date(Date.UTC(tmp.getUTCFullYear(), 0, 1));
+  return Math.ceil((((tmp.getTime() - yearStart.getTime()) / 86400000) + 1) / 7);
+}
+
+function getPayoutWeekInfo(date = new Date()) {
+  const { start, endExclusive } = getWeekBounds(date);
+  return {
+    year: start.getUTCFullYear(),
+    week: getIsoWeekNumber(start),
+    startDate: start,
+    endDate: new Date(endExclusive.getTime() - 1),
+  };
+}
+
+function computeClosedWeekSummary(walletDoc, closedStart, closedEndExclusive) {
   const txs = Array.isArray(walletDoc?.transactions) ? walletDoc.transactions : [];
-  let earnings = 0;
-  let deducted = 0;
+  let totalEarnings = 0;
+  let availableEarnings = 0;
+  let pocketEarnings = 0;
+  let deductions = 0;
 
   for (const tx of txs) {
     const txDate = tx?.date ? new Date(tx.date) : null;
@@ -42,18 +63,69 @@ function computeClosedWeekNet(walletDoc, closedStart, closedEndExclusive) {
       tx.type === "incentive_reward" ||
       tx.type === "incentive" ||
       String(tx?.metadata?.source || "").toLowerCase() === "incentive";
+    const isReferral =
+      tx.type === "referral" ||
+      tx.type === "referral_reward" ||
+      String(tx?.metadata?.source || "").toLowerCase() === "referral";
+    const balanceType = String(tx?.metadata?.balanceType || "").toLowerCase();
 
-    if (tx.type === "payment" || isIncentive) {
-      earnings += amount;
+    if (tx.type === "payment" || isIncentive || (isReferral && balanceType !== "pocket" && balanceType !== "available")) {
+      availableEarnings += amount;
+      totalEarnings += amount;
+      continue;
+    }
+
+    const isAvailableReferral = isReferral && balanceType === "available";
+    if (isAvailableReferral) {
+      availableEarnings += amount;
+      totalEarnings += amount;
+      continue;
+    }
+
+    const isPocketCredit =
+      tx.type === "cash_deposit" ||
+      tx.type === "pocket_deposit" ||
+      (isReferral && balanceType === "pocket") ||
+      (tx.type === "deposit" && balanceType === "pocket");
+    if (isPocketCredit) {
+      pocketEarnings += amount;
+      totalEarnings += amount;
       continue;
     }
     if (tx.type === "withdraw") {
       const fromPocket = String(tx?.metadata?.balanceSource || "") === "pocket";
-      if (!fromPocket) deducted += amount;
+      if (!fromPocket) deductions += amount;
     }
   }
 
-  return Math.max(0, earnings - deducted);
+  return {
+    totalEarnings,
+    availableEarnings,
+    pocketEarnings,
+    deductions,
+    netAmount: Math.max(0, totalEarnings - deductions),
+  };
+}
+
+function getWorkerWeekTransactions(walletDoc, closedStart, closedEndExclusive) {
+  const txs = Array.isArray(walletDoc?.transactions) ? walletDoc.transactions : [];
+  return txs
+    .filter((tx) => {
+      const txDate = tx?.date ? new Date(tx.date) : null;
+      if (!txDate || Number.isNaN(txDate.getTime())) return false;
+      if (txDate < closedStart || txDate >= closedEndExclusive) return false;
+      return Boolean(Number(tx.amount || 0) > 0);
+    })
+    .map((tx) => ({
+      type: tx.type,
+      amount: tx.amount,
+      date: tx.date,
+      description: tx.description,
+      jobId: tx.jobId || null,
+      provider: tx.provider || null,
+      providerEventId: tx.providerEventId || null,
+      metadata: tx.metadata || null,
+    }));
 }
 
 async function runWeeklyWalletSettlement(now = new Date(), options = {}) {
@@ -62,11 +134,10 @@ async function runWeeklyWalletSettlement(now = new Date(), options = {}) {
   const closedStart = new Date(currentStart.getTime() - PAYOUT_CYCLE_MS);
   const closedEndExclusive = new Date(currentStart);
 
-  // Process wallets that had financial activity in the closed cycle.
+  // Process all active worker wallets with a positive balance.
   const candidateWallets = await Wallet.find({
-    availableBalance: { $gt: 0 },
-    transactions: { $elemMatch: { date: { $gte: closedStart, $lt: closedEndExclusive } } },
-  }).select("phone availableBalance balance transactions");
+    $or: [{ availableBalance: { $gt: 0 } }, { pocketBalance: { $gt: 0 } }],
+  }).select("phone availableBalance pocketBalance balance transactions");
 
   if (!candidateWallets.length) {
     return { settledWorkers: 0, settledAmount: 0, cycleStart: closedStart, cycleEnd: new Date(closedEndExclusive.getTime() - 1) };
@@ -76,66 +147,83 @@ async function runWeeklyWalletSettlement(now = new Date(), options = {}) {
   const workerUsers = await User.find({
     phone: { $in: phones },
     role: { $regex: /^worker$/i },
-  }).select("phone");
+  }).select("phone name");
+  const workerMap = new Map(workerUsers.map((u) => [u.phone, u]));
   const workerPhones = new Set(workerUsers.map((u) => u.phone));
 
   let settledWorkers = 0;
   let settledAmount = 0;
+  const batchWorkers = [];
 
   for (const wallet of candidateWallets) {
     if (!workerPhones.has(wallet.phone)) continue;
 
-    const currentAvailable = Number(wallet.availableBalance ?? wallet.balance ?? 0);
-    if (!Number.isFinite(currentAvailable) || currentAvailable <= 0) continue;
-
-    const closedWeekNet = computeClosedWeekNet(wallet, closedStart, closedEndExclusive);
-    if (!Number.isFinite(closedWeekNet) || closedWeekNet <= 0) continue;
-
-    const settleAmount = Math.min(currentAvailable, closedWeekNet);
+    const availableSettle = Math.max(0, Number(wallet.availableBalance ?? wallet.balance ?? 0));
+    const pocketSettle = Math.max(0, Number(wallet.pocketBalance ?? 0));
+    const settleAmount = availableSettle + pocketSettle;
     if (settleAmount <= 0) continue;
 
     const idempotencyKey = `weekly_settlement:${wallet.phone}:${closedStart.toISOString()}:${closedEndExclusive.toISOString()}`;
-    const openingBalance = currentAvailable;
-    const closingBalance = openingBalance - settleAmount;
-
-    const updatedWallet = await Wallet.findOneAndUpdate(
-      {
-        phone: wallet.phone,
-        availableBalance: { $gte: settleAmount },
-        "transactions.idempotencyKey": { $ne: idempotencyKey },
+    const openingBalance = availableSettle + pocketSettle;
+    const closingBalance = 0;
+    const settlementTransaction = {
+      type: "payout_settlement",
+      amount: settleAmount,
+      date: new Date(),
+      description: `Weekly wallet reset settlement (${closedStart.toISOString().slice(0, 10)} to ${new Date(
+        closedEndExclusive.getTime() - 1
+      ).toISOString().slice(0, 10)})`,
+      status: "completed",
+      openingBalance,
+      closingBalance,
+      source: "scheduler",
+      provider: "internal",
+      providerEventId: idempotencyKey,
+      idempotencyKey,
+      metadata: {
+        settlementWindowStart: closedStart,
+        settlementWindowEnd: new Date(closedEndExclusive.getTime() - 1),
+        basedOn: "weekly_wallet_reset",
+        availableSettle,
+        pocketSettle,
       },
-      {
-        $inc: { availableBalance: -settleAmount, balance: -settleAmount },
-        $push: {
-          transactions: {
-            type: "payout_settlement",
-            amount: settleAmount,
-            date: new Date(),
-            description: `Weekly payout settlement (${closedStart.toISOString().slice(0, 10)} to ${new Date(
-              closedEndExclusive.getTime() - 1
-            ).toISOString().slice(0, 10)})`,
-            status: "completed",
-            openingBalance,
-            closingBalance,
-            source: "scheduler",
-            provider: "internal",
-            providerEventId: idempotencyKey,
-            idempotencyKey,
-            metadata: {
-              settlementWindowStart: closedStart,
-              settlementWindowEnd: new Date(closedEndExclusive.getTime() - 1),
-              basedOn: "weekly_earnings_net_of_withdrawals",
-            },
-          },
-        },
-      },
-      { new: true }
-    );
+    };
 
+    const update = { $inc: {}, $push: { transactions: settlementTransaction } };
+
+    if (availableSettle > 0) {
+      update.$inc.availableBalance = -availableSettle;
+      update.$inc.balance = -availableSettle;
+    }
+    if (pocketSettle > 0) {
+      update.$inc.pocketBalance = -pocketSettle;
+    }
+
+    const query = {
+      phone: wallet.phone,
+      "transactions.idempotencyKey": { $ne: idempotencyKey },
+    };
+    if (availableSettle > 0) query.availableBalance = { $gte: availableSettle };
+    if (pocketSettle > 0) query.pocketBalance = { $gte: pocketSettle };
+
+    const updatedWallet = await Wallet.findOneAndUpdate(query, update, { new: true });
     if (!updatedWallet) continue;
 
     settledWorkers += 1;
     settledAmount += settleAmount;
+
+    const workerName = String(workerMap.get(wallet.phone)?.name || '');
+    batchWorkers.push({
+      workerPhone: wallet.phone,
+      workerName,
+      earningsAmount: settleAmount,
+      deductions: 0,
+      netAmount: settleAmount,
+      status: 'pending',
+      transactionId: idempotencyKey,
+      bankDetails: {},
+      transactions: [settlementTransaction],
+    });
 
     if (io) {
       io.to(wallet.phone).emit("walletUpdated", {
@@ -162,14 +250,44 @@ async function runWeeklyWalletSettlement(now = new Date(), options = {}) {
           provider: "internal",
           source: "reconciliation",
           providerEventId: idempotencyKey,
+          payoutDetails: {
+            batchId,
+            transactionId: idempotencyKey,
+            settlementWindowStart: closedStart,
+            settlementWindowEnd: new Date(closedEndExclusive.getTime() - 1),
+          },
         },
       }
     );
   }
 
+  const payoutWeek = getPayoutWeekInfo(closedStart);
+  const batchId = `PAYOUT_${payoutWeek.year}_W${String(payoutWeek.week).padStart(2, '0')}`;
+  let batchCreated = false;
+
+  if (batchWorkers.length > 0) {
+    const existingBatch = await PayoutBatch.findOne({ batchId });
+    if (!existingBatch) {
+      await PayoutBatch.create({
+        batchId,
+        payoutWeek,
+        status: 'pending',
+        totalAmount: batchWorkers.reduce((sum, item) => sum + Number(item.netAmount || 0), 0),
+        totalEarnings: batchWorkers.reduce((sum, item) => sum + Number(item.earningsAmount || 0), 0),
+        totalDeductions: batchWorkers.reduce((sum, item) => sum + Number(item.deductions || 0), 0),
+        totalWorkers: batchWorkers.length,
+        workers: batchWorkers,
+        processedBy: 'scheduler',
+      });
+      batchCreated = true;
+    }
+  }
+
   return {
     settledWorkers,
     settledAmount,
+    batchId: batchWorkers.length > 0 ? batchId : null,
+    batchCreated,
     cycleStart: closedStart,
     cycleEnd: new Date(closedEndExclusive.getTime() - 1),
   };

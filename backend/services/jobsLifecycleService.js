@@ -25,7 +25,7 @@ const depositIdempotencyResults = new Map();
 const PAYOUT_CYCLE_ANCHOR_ISO = process.env.PAYOUT_CYCLE_ANCHOR_ISO || "2025-02-25T00:00:00+05:30";
 const PAYOUT_CYCLE_MS = 7 * 24 * 60 * 60 * 1000;
 const CANCEL_REFUND_BEFORE_ACCEPT = Number(process.env.CANCEL_REFUND_BEFORE_ACCEPT || 25);
-const CANCEL_FEE_AFTER_ACCEPT = Number(process.env.CANCEL_FEE_AFTER_ACCEPT || 0);
+const CANCEL_FEE_AFTER_ACCEPT = Number(process.env.CANCEL_FEE_AFTER_ACCEPT || 25);
 const WORKER_CANCEL_WINDOW_MINUTES = Number(process.env.WORKER_CANCEL_WINDOW_MINUTES || 10);
 const WORKER_CANCEL_LATE_FEE = Number(process.env.WORKER_CANCEL_LATE_FEE || 100);
 const WORKER_CANCEL_MAX_IN_WINDOW = Number(process.env.WORKER_CANCEL_MAX_IN_WINDOW || 3);
@@ -394,9 +394,9 @@ async function payJob({ jobId, mode, workerPhone, idempotencyKey, userPhone, use
   }
 
   if (job.bulkHiring && workerPhone) {
-    const normalizedWorkerPhone = normalizeWorkerPhone(workerPhone);
+    const bulkNormalizedWorkerPhone = normalizeWorkerPhone(workerPhone);
     const target = (job.acceptedWorkers || []).find((w) =>
-      normalizeWorkerPhone(w?.phone) === normalizedWorkerPhone
+      normalizeWorkerPhone(w?.phone) === bulkNormalizedWorkerPhone
     );
     if (!target) {
       return finalize({ code: 404, body: { success: false, message: "Worker not found on this bulk job" } });
@@ -476,14 +476,14 @@ async function payJob({ jobId, mode, workerPhone, idempotencyKey, userPhone, use
         // ✅ Use upsert to handle idempotency - if duplicate exists, update it instead of failing
         const existingDeposit = await CashDeposit.findOne({
           jobId: job._id,
-          workerPhone: normalizedWorkerPhone,
+          workerPhone: bulkNormalizedWorkerPhone,
         });
 
         if (!existingDeposit) {
-          console.log(`[jobsLifecycleService] creating CashDeposit jobId=${job._id} workerPhone=${normalizedWorkerPhone} amount=${job.amount} isBulk=true`);
+          console.log(`[jobsLifecycleService] creating CashDeposit jobId=${job._id} workerPhone=${bulkNormalizedWorkerPhone} amount=${job.amount} isBulk=true`);
           const created = await CashDeposit.create({
             jobId: job._id,
-            workerPhone: normalizedWorkerPhone,
+            workerPhone: bulkNormalizedWorkerPhone,
             contractorPhone: job.contractorPhone,
             amount: job.amount,
             status: 'pending',
@@ -499,7 +499,7 @@ async function payJob({ jobId, mode, workerPhone, idempotencyKey, userPhone, use
           // Update existing deposit if found (idempotency handling)
           console.log(`[jobsLifecycleService] updating existing CashDeposit id=${existingDeposit._id}`);
           await CashDeposit.findOneAndUpdate(
-            { jobId: job._id, workerPhone: normalizedWorkerPhone },
+            { jobId: job._id, workerPhone: bulkNormalizedWorkerPhone },
             {
               $set: {
                 status: 'pending',
@@ -516,7 +516,7 @@ async function payJob({ jobId, mode, workerPhone, idempotencyKey, userPhone, use
         // Only send if this is a new deposit
         if (!existingDeposit) {
           await NotificationHistory.create({
-            recipientPhone: normalizedWorkerPhone,
+            recipientPhone: bulkNormalizedWorkerPhone,
             senderPhone: userPhone,
             senderName: userName || job.contractorName || "Contractor",
             type: "cash_deposit_required",
@@ -528,7 +528,7 @@ async function payJob({ jobId, mode, workerPhone, idempotencyKey, userPhone, use
               amount: job.amount,
               actionRequired: true,
               depositDeadline: depositDeadline.toISOString(),
-              workerPhone: normalizedWorkerPhone
+              workerPhone: bulkNormalizedWorkerPhone
             },
             deepLink: "worker/wallet",
             pushNotificationSent: false,
@@ -536,9 +536,9 @@ async function payJob({ jobId, mode, workerPhone, idempotencyKey, userPhone, use
         }
       } else {
         // For non-cash payments, credit wallet immediately
-        let workerWallet = await Wallet.findOne({ phone: normalizedWorkerPhone });
+        let workerWallet = await Wallet.findOne({ phone: bulkNormalizedWorkerPhone });
         if (!workerWallet) {
-          workerWallet = new Wallet({ phone: normalizedWorkerPhone, balance: 0, availableBalance: 0, pocketBalance: 0 });
+          workerWallet = new Wallet({ phone: bulkNormalizedWorkerPhone, balance: 0, availableBalance: 0, pocketBalance: 0 });
           await workerWallet.save();
         }
 
@@ -549,7 +549,7 @@ async function payJob({ jobId, mode, workerPhone, idempotencyKey, userPhone, use
         }
 
         const updatedWorkerWallet = await Wallet.findOneAndUpdate(
-          { phone: normalizedWorkerPhone },
+          { phone: bulkNormalizedWorkerPhone },
           {
             $inc: {
               balance: creditAmount,
@@ -594,7 +594,7 @@ async function payJob({ jobId, mode, workerPhone, idempotencyKey, userPhone, use
     try {
       await upsertWorkerEarningForJobPayment({
         job,
-        workerPhone: normalizedWorkerPhone,
+        workerPhone: bulkNormalizedWorkerPhone,
         amount: job.amount,
         mode,
       });
@@ -614,12 +614,12 @@ async function payJob({ jobId, mode, workerPhone, idempotencyKey, userPhone, use
       console.error("Error updating gigs data on completion:", e);
     }
 
-    await setWorkerOfflineByPhone(normalizedWorkerPhone);
-    if (io && normalizedWorkerPhone) {
+    await setWorkerOfflineByPhone(bulkNormalizedWorkerPhone);
+    if (io && bulkNormalizedWorkerPhone) {
       try {
-        io.to(normalizedWorkerPhone).emit("workerStatusUpdate", {
+        io.to(bulkNormalizedWorkerPhone).emit("workerStatusUpdate", {
           isAvailable: false,
-          phone: normalizedWorkerPhone,
+          phone: bulkNormalizedWorkerPhone,
           source: "payment",
           jobId: job._id.toString(),
           timestamp: new Date(),
@@ -629,8 +629,8 @@ async function payJob({ jobId, mode, workerPhone, idempotencyKey, userPhone, use
       }
     }
     await updateContractorStats(userPhone);
-    await emitJobUpdatedToUsers(job, [job.contractorPhone, normalizedWorkerPhone, job.acceptedBy || job.contractorPhone]);
-    return finalize({ code: 200, body: { success: true, message: "Payment successful", job, workerPhone: normalizedWorkerPhone } });
+    await emitJobUpdatedToUsers(job, [job.contractorPhone, bulkNormalizedWorkerPhone, job.acceptedBy || job.contractorPhone]);
+    return finalize({ code: 200, body: { success: true, message: "Payment successful", job, workerPhone: bulkNormalizedWorkerPhone } });
   }
 
   if (job.attendanceStatus !== "Present") {
@@ -654,46 +654,7 @@ async function payJob({ jobId, mode, workerPhone, idempotencyKey, userPhone, use
     job.timeSpentMinutes = Math.round(timeSpentMs / 60000);
     job.hoursWorked = Math.round(((job.timeSpentMinutes || 0) / 60) * 10) / 10;
   }
-  await job.save();
-
-  // Record completion for incentive eligibility only after payment is finalized.
-  try {
-    const historyWorkerPhone = paymentWorkerPhone || job.acceptedBy;
-    if (historyWorkerPhone) {
-      await createGigHistoryEvent({
-        workerPhone: historyWorkerPhone,
-        workerName: job.acceptedWorker?.name || historyWorkerPhone,
-        jobId: job._id,
-        jobTitle: job.title,
-        contractorPhone: job.contractorPhone,
-        contractorName: job.contractorName,
-        eventType: "job_completed",
-        status: job.status,
-        paymentStatus: job.paymentStatus,
-        hoursWorked: job.hoursWorked || 0,
-        timeSpentMinutes: job.timeSpentMinutes || 0,
-        eventTime: job.paymentTime || new Date(),
-      });
-    }
-  } catch (e) {
-    console.error("Error writing gig history completion event:", e);
-  }
-
-  await logJobEvent({
-    jobId: job._id,
-    eventType: "job_completed",
-    actorType: "contractor",
-    actorPhone: userPhone,
-    source: "app",
-    oldState,
-    newState: {
-      status: job.status,
-      paymentStatus: job.paymentStatus,
-      paymentMode: job.paymentMode,
-      paymentTime: job.paymentTime,
-    },
-    metadata: { amount: job.amount },
-  });
+  // Job state (payment fields) set — persist after wallet/deposit handling below
 
   try {
     const paymentNotificationPhone = paymentWorkerPhone || job.acceptedWorker?.phone || job.acceptedBy;
@@ -804,7 +765,7 @@ async function payJob({ jobId, mode, workerPhone, idempotencyKey, userPhone, use
       job.paymentMode = normalizedPaymentMode;
       job.paymentTime = new Date();
       job.status = normalizePaidJobStatus(job.status);
-      await job.save();
+      // job will be persisted once after wallet/deposit handling completes
     } else {
       // For non-cash payments, credit wallet immediately
       const updatedWorkerWallet = await Wallet.findOneAndUpdate(
@@ -840,6 +801,59 @@ async function payJob({ jobId, mode, workerPhone, idempotencyKey, userPhone, use
     console.error("Error processing payment:", walletErr);
     await rollbackJobPayment(job, oldState);
     return finalize({ code: 500, body: { success: false, message: "Payment failed. Job state rolled back." } });
+  }
+
+  // Persist job state now that wallet/deposit handling succeeded
+  try {
+    await job.save();
+  } catch (saveErr) {
+    console.error("Error saving job after payment wallet handling:", saveErr);
+    // Attempt rollback if saving job fails
+    await rollbackJobPayment(job, oldState);
+    return finalize({ code: 500, body: { success: false, message: "Payment failed while finalizing job state" } });
+  }
+
+  // Record completion for incentive eligibility only after payment is finalized.
+  try {
+    const historyWorkerPhone = paymentWorkerPhone || job.acceptedBy;
+    if (historyWorkerPhone) {
+      await createGigHistoryEvent({
+        workerPhone: historyWorkerPhone,
+        workerName: job.acceptedWorker?.name || historyWorkerPhone,
+        jobId: job._id,
+        jobTitle: job.title,
+        contractorPhone: job.contractorPhone,
+        contractorName: job.contractorName,
+        eventType: "job_completed",
+        status: job.status,
+        paymentStatus: job.paymentStatus,
+        hoursWorked: job.hoursWorked || 0,
+        timeSpentMinutes: job.timeSpentMinutes || 0,
+        eventTime: job.paymentTime || new Date(),
+      });
+    }
+  } catch (e) {
+    console.error("Error writing gig history completion event:", e);
+  }
+
+  try {
+    await logJobEvent({
+      jobId: job._id,
+      eventType: "job_completed",
+      actorType: "contractor",
+      actorPhone: userPhone,
+      source: "app",
+      oldState,
+      newState: {
+        status: job.status,
+        paymentStatus: job.paymentStatus,
+        paymentMode: job.paymentMode,
+        paymentTime: job.paymentTime,
+      },
+      metadata: { amount: job.amount },
+    });
+  } catch (e) {
+    console.error("Error logging job completed event:", e);
   }
 
   try {
@@ -1006,11 +1020,12 @@ async function depositCash({ jobId, workerPhone, idempotencyKey, deps }) {
   };
 
   try {
-    // Find the cash deposit record
+    // Find the cash deposit record (only consider deposits whose deadline has not passed)
     const cashDeposit = await CashDeposit.findOne({
       jobId,
       workerPhone: normalizedWorkerPhone,
-      status: 'pending'
+      status: 'pending',
+      depositDeadline: { $gt: new Date() }
     });
 
     if (!cashDeposit) {
@@ -1044,8 +1059,7 @@ async function depositCash({ jobId, workerPhone, idempotencyKey, deps }) {
       { phone: normalizedWorkerPhone },
       {
         $inc: {
-          balance: cashDeposit.amount,
-          availableBalance: cashDeposit.amount,
+          pocketBalance: cashDeposit.amount,
           totalEarned: cashDeposit.amount
         },
         $push: {
@@ -1057,8 +1071,8 @@ async function depositCash({ jobId, workerPhone, idempotencyKey, deps }) {
             source: "app",
             provider: "cash_deposit",
             status: "completed",
-            description: `Cash deposit credited to available balance (${job.title})`,
-            metadata: { balanceType: "available", workerPhone: normalizedWorkerPhone },
+            description: `Cash deposit credited to pocket balance (${job.title})`,
+            metadata: { balanceType: "pocket", workerPhone: normalizedWorkerPhone },
           }
         }
       },
@@ -1248,8 +1262,7 @@ async function depositCashById({ depositId, workerPhone, idempotencyKey, deps })
         { phone: normalizedWorkerPhone },
         {
           $inc: {
-            balance: cashDeposit.amount,
-            availableBalance: cashDeposit.amount,
+            pocketBalance: cashDeposit.amount,
             totalEarned: cashDeposit.amount
           },
           $push: {
@@ -1261,8 +1274,8 @@ async function depositCashById({ depositId, workerPhone, idempotencyKey, deps })
               source: "app",
               provider: "cash_deposit",
               status: "completed",
-              description: `Cash deposit credited to available balance (${job.title})`,
-              metadata: { balanceType: "available", workerPhone: normalizedWorkerPhone },
+              description: `Cash deposit credited to pocket balance (${job.title})`,
+              metadata: { balanceType: "pocket", workerPhone: normalizedWorkerPhone },
             }
           }
         },
@@ -1946,18 +1959,33 @@ async function cancelJob({ jobId, reason, reasonDescription, idempotencyKey, use
       description: `Cancellation fee charged for job ${job._id}`,
       metadata: { debitedFrom: "pocketBalance", reason: "job_cancel_fee", jobId: job._id, cancellationId: cancellation._id },
     });
-    await wallet.save();
+    try {
+      await wallet.save();
 
-    if (io) {
-      io.to(job.contractorPhone).emit("walletUpdated", {
-        phone: job.contractorPhone,
-        type: "job_post_fee",
-        amount: cancellationFee,
-        balance: Number(wallet.balance || 0),
-        availableBalance: Number(wallet.availableBalance ?? wallet.balance ?? 0),
-        pocketBalance: Number(wallet.pocketBalance || 0),
-        message: `Cancellation fee debited: ₹${cancellationFee}`,
-      });
+      if (io) {
+        io.to(job.contractorPhone).emit("walletUpdated", {
+          phone: job.contractorPhone,
+          type: "job_post_fee",
+          amount: cancellationFee,
+          balance: Number(wallet.balance || 0),
+          availableBalance: Number(wallet.availableBalance ?? wallet.balance ?? 0),
+          pocketBalance: Number(wallet.pocketBalance || 0),
+          message: `Cancellation fee debited: ₹${cancellationFee}`,
+        });
+      }
+    } catch (walletErr) {
+      console.error("Error saving contractor wallet for cancellation fee:", walletErr);
+      try {
+        // Best-effort rollback: restore job state and remove cancellation log
+        await Job.collection.updateOne(
+          { _id: job._id },
+          { $set: { status: oldState.status, paymentStatus: oldState.paymentStatus, isCancelled: false, cancelledAt: null, cancelledBy: null, cancellationReason: null, cancellationReasonDescription: null } }
+        );
+        await CancellationLog.deleteOne({ _id: cancellation._id });
+      } catch (rbErr) {
+        console.error("Error rolling back cancellation after wallet failure:", rbErr);
+      }
+      return finalize({ code: 500, body: { success: false, message: "Cancellation failed: wallet update error" } });
     }
   }
 
@@ -1972,18 +2000,33 @@ async function cancelJob({ jobId, reason, reasonDescription, idempotencyKey, use
       description: `Refund for cancelled job ${job._id}`,
       metadata: { creditedTo: "pocketBalance", reason: "job_cancel_refund", jobId: job._id, cancellationId: cancellation._id },
     });
-    await wallet.save();
+    try {
+      await wallet.save();
 
-    if (io) {
-      io.to(job.contractorPhone).emit("walletUpdated", {
-        phone: job.contractorPhone,
-        type: "refund",
-        amount: refundAmount,
-        balance: Number(wallet.balance || 0),
-        availableBalance: Number(wallet.availableBalance ?? wallet.balance ?? 0),
-        pocketBalance: Number(wallet.pocketBalance || 0),
-        message: `Refund credited: ₹${refundAmount}`,
-      });
+      if (io) {
+        io.to(job.contractorPhone).emit("walletUpdated", {
+          phone: job.contractorPhone,
+          type: "refund",
+          amount: refundAmount,
+          balance: Number(wallet.balance || 0),
+          availableBalance: Number(wallet.availableBalance ?? wallet.balance ?? 0),
+          pocketBalance: Number(wallet.pocketBalance || 0),
+          message: `Refund credited: ₹${refundAmount}`,
+        });
+      }
+    } catch (walletErr) {
+      console.error("Error saving contractor wallet for refund:", walletErr);
+      try {
+        // Best-effort rollback: restore job state and remove cancellation log
+        await Job.collection.updateOne(
+          { _id: job._id },
+          { $set: { status: oldState.status, paymentStatus: oldState.paymentStatus, isCancelled: false, cancelledAt: null, cancelledBy: null, cancellationReason: null, cancellationReasonDescription: null } }
+        );
+        await CancellationLog.deleteOne({ _id: cancellation._id });
+      } catch (rbErr) {
+        console.error("Error rolling back cancellation after refund wallet failure:", rbErr);
+      }
+      return finalize({ code: 500, body: { success: false, message: "Cancellation failed: wallet update error" } });
     }
   }
 

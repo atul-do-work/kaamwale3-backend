@@ -205,7 +205,7 @@ function createOpsSupportRouter({ upload, PORT }) {
     }
   });
 
-  const ALLOWED_DOCUMENT_TYPES = new Set(["aadhar", "pan", "voter", "bank_account"]);
+  const ALLOWED_DOCUMENT_TYPES = new Set(["aadhar", "pan", "voter", "policy", "bank_account"]);
 
   const verificationUploadMiddleware = upload.single('file');
 

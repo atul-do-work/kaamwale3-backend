@@ -280,6 +280,183 @@ function createWorkersRouter({
     }
   });
 
+  // Broadcast job request to all workers within 80 km radius
+  router.post("/workers/broadcast-job-request", authenticateToken, async (req, res) => {
+    try {
+      const {
+        lat,
+        lon,
+        date,
+        startTime,
+        endTime,
+        location,
+        message,
+        siteImageUri,
+        requiredWorkers,
+        paymentFrequency,
+      } = req.body || {};
+
+      // Validate required fields
+      if (!lat || !lon || !date || !startTime || !endTime || !location) {
+        return res.status(400).json({
+          success: false,
+          message: "lat, lon, date, startTime, endTime, and location are required",
+        });
+      }
+
+      // Validate coordinates
+      const latNum = parseFloat(lat);
+      const lonNum = parseFloat(lon);
+      if (isNaN(latNum) || isNaN(lonNum) || !isValidPoint(latNum, lonNum)) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid latitude or longitude",
+        });
+      }
+
+      const requiredWorkersCount = Number.parseInt(requiredWorkers, 10) || 1;
+      const paymentFrequencyValue = paymentFrequency || 'daily';
+
+      // Get contractor info
+      const contractor = await User.findOne({ phone: req.user.phone });
+      if (!contractor) {
+        return res.status(404).json({ success: false, message: "Contractor not found" });
+      }
+
+      // Find all workers within 80 km (80000 meters)
+      const radiusMeters = 80000; // 80 km
+      const workersQuery = {
+        location: {
+          $near: {
+            $geometry: { type: "Point", coordinates: [lonNum, latNum] },
+            $maxDistance: radiusMeters,
+          },
+        },
+      };
+
+      const nearbyWorkers = await WorkerModel.find(workersQuery).lean();
+
+      if (!nearbyWorkers || nearbyWorkers.length === 0) {
+        return res.json({
+          success: true,
+          message: "No workers found within 80 km radius",
+          broadcastRequestIds: [],
+          sentCount: 0,
+          failedCount: 0,
+        });
+      }
+
+      // Get all worker phone numbers and their user profiles
+      const workerPhones = nearbyWorkers.map((w) => w.phone);
+      const userProfiles = await User.find({ phone: { $in: workerPhones } }).lean();
+      const userMap = {};
+      userProfiles.forEach((u) => {
+        userMap[u.phone] = u;
+      });
+
+      // Filter only valid workers (those with 'worker' role)
+      const validWorkers = nearbyWorkers.filter((worker) => {
+        const userProfile = userMap[worker.phone];
+        if (!userProfile) return false;
+        return String(userProfile.role).toLowerCase() === "worker";
+      });
+
+      if (validWorkers.length === 0) {
+        return res.json({
+          success: true,
+          message: "No valid workers found within 80 km radius",
+          broadcastRequestIds: [],
+          sentCount: 0,
+          failedCount: 0,
+        });
+      }
+
+      // Send job request to all valid workers
+      const broadcastRequestIds = [];
+      let successCount = 0;
+      let failureCount = 0;
+
+      for (const worker of validWorkers) {
+        try {
+          const requestId = `req_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+          broadcastRequestIds.push(requestId);
+
+          const payload = {
+            type: "job_request",
+            title: "New Job Request",
+            body: `Job request from ${contractor.name || req.user.phone} for ${date}`,
+            metadata: {
+              requestId,
+              contractorPhone: req.user.phone,
+              contractorName: contractor.name,
+              date,
+              startTime,
+              endTime,
+              location,
+              requiredWorkers: requiredWorkersCount,
+              paymentFrequency: paymentFrequencyValue,
+              message: message || "",
+              siteImageUri: siteImageUri || undefined,
+              timestamp: new Date().toISOString(),
+              isBroadcast: true, // Flag to indicate this is a broadcast request
+            },
+          };
+
+          // Send real-time notification if worker is online
+          if (worker.socketId) {
+            try {
+              io.to(worker.socketId).emit("jobRequest", {
+                requestId,
+                contractorPhone: req.user.phone,
+                contractorName: contractor.name,
+                date,
+                startTime,
+                endTime,
+                location,
+                requiredWorkers: requiredWorkersCount,
+                paymentFrequency: paymentFrequencyValue,
+                message: message || "",
+                siteImageUri: siteImageUri || undefined,
+                timestamp: new Date().toISOString(),
+                isBroadcast: true,
+              });
+            } catch (e) {
+              console.warn(`Could not emit jobRequest to worker socket (${worker.phone}):`, e.message);
+            }
+          }
+
+          // Send push notification
+          try {
+            await sendNotificationToUserPhone(worker.phone, payload);
+          } catch (e) {
+            console.error(`Error sending push notification for broadcast to ${worker.phone}:`, e && e.message);
+          }
+
+          successCount++;
+        } catch (err) {
+          console.error(`Error sending broadcast job request to worker ${worker.phone}:`, err);
+          failureCount++;
+        }
+      }
+
+      return res.json({
+        success: true,
+        message: `Broadcast job request sent to ${successCount} worker(s)`,
+        broadcastRequestIds,
+        sentCount: successCount,
+        failedCount: failureCount,
+        totalWorkersInRadius: validWorkers.length,
+      });
+    } catch (err) {
+      console.error("workers/broadcast-job-request error", err);
+      return res.status(500).json({
+        success: false,
+        message: "Failed to broadcast job request",
+        error: err.message,
+      });
+    }
+  });
+
   router.get("/workers/job-requests", authenticateToken, async (req, res) => {
     try {
       const contractorPhone = req.user?.phone;

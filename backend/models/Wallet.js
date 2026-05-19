@@ -24,7 +24,7 @@ const walletSchema = new mongoose.Schema(
       {
         type: {
           type: String,
-          enum: ['deposit', 'withdraw', 'payment', 'job_post_fee', 'refund', 'premium_subscription', 'pocket_deposit', 'incentive_reward', 'payout_settlement'],
+          enum: ['deposit', 'withdraw', 'payment', 'cash_deposit', 'job_post_fee', 'refund', 'premium_subscription', 'pocket_deposit', 'incentive_reward', 'payout_settlement', 'referral', 'referral_reward'],
         },
         amount: Number,
         date: { type: Date, default: Date.now },
@@ -81,8 +81,19 @@ walletSchema.methods.updateTotals = function updateTotals() {
     .reduce((sum, t) => sum + t.amount, 0);
 
   this.totalEarned = this.transactions
-    .filter((t) => t.type === 'payment' && t.status === 'completed')
-    .reduce((sum, t) => sum + t.amount, 0);
+    .filter((t) => {
+      if (t.status !== 'completed') return false;
+      const earningTypes = new Set([
+        'payment',
+        'incentive_reward',
+        'cash_deposit',
+        'pocket_deposit',
+        'referral',
+        'referral_reward'
+      ]);
+      return earningTypes.has(t.type);
+    })
+    .reduce((sum, t) => sum + Number(t.amount || 0), 0);
 };
 
 module.exports = mongoose.model('Wallet', walletSchema);

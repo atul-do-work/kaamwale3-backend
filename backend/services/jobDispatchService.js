@@ -97,7 +97,7 @@ async function checkJobMatchesForWorker(workerPhone) {
           },
           key: "jobLocation",
           distanceField: "distanceKm",
-          maxDistance: 10000, // 10km in meters
+          maxDistance: 15000, // 15km in meters
           spherical: true,
           query: {
             status: "pending",
@@ -148,19 +148,21 @@ async function checkJobMatchesForWorker(workerPhone) {
       }
     ];
 
-    const matchingJobs = await Job.aggregate(pipeline);
-    console.log(`📋 [Availability] Found ${matchingJobs.length} matching jobs for ${workerPhone}...`);
+    const matchingJobIds = await Job.aggregate([...pipeline, { $project: { _id: 1 } }]);
+    console.log(`📋 [Availability] Found ${matchingJobIds.length} matching jobs for ${workerPhone}...`);
     
     let matchCount = 0;
-    for (const job of matchingJobs) {
-      // Additional validation (already filtered by aggregation, but double-check)
-      if (job.distanceKm > 10) continue; // Shouldn't happen due to maxDistance, but safety check
+    for (const jobRef of matchingJobIds) {
+      const jobId = jobRef._id;
+      // ✅ FIX: Fetch full Mongoose document (aggregation returns plain objects without .toObject())
+      const fullJob = await Job.findById(jobId);
+      if (!fullJob || fullJob.status !== 'pending') continue;
       
-      console.log(`✅ [Availability] Worker ${workerPhone} matches job ${job._id} (${job.title}, ₹${job.amount}, ${job.distanceKm.toFixed(2)}km away)`);
+      console.log(`✅ [Availability] Worker ${workerPhone} matches job ${jobId} (${fullJob.title}, ₹${fullJob.amount})`);
       matchCount++;
       
-      // Offer the job  
-      await offerJobToNextWorker(job);
+      // Offer the job with full Mongoose document
+      await offerJobToNextWorker(fullJob);
     }
     
     if (matchCount === 0) {
@@ -182,6 +184,13 @@ async function offerJobToNextWorker(job) {
   }
   offerInFlightLocks.add(jobId);
   try {
+    // ✅ FIX: Fetch full Mongoose document to ensure .toObject() works (aggregation results are plain objects)
+    const currentJob = await Job.findById(jobId).lean();
+    if (!currentJob || currentJob.status !== 'pending') {
+      console.log(`⏹️ Job ${jobId} is no longer pending (${currentJob?.status ?? 'missing'}) - aborting offer`);
+      offerInFlightLocks.delete(jobId);
+      return;
+    }
     cleanupRecentOffers();
     const declinedWorkerIds = Array.isArray(job.declinedBy) ? job.declinedBy : [];
     
@@ -191,8 +200,9 @@ async function offerJobToNextWorker(job) {
       pendingJobTimeouts.delete(job._id.toString());
     }
     
-    // ✅ PROGRESSIVE RADIUS EXPANSION: Try 10km, then 20km, then 50km if no candidates found
-    const radiiToTry = [10, 20, 50]; // km
+    // ✅ PROGRESSIVE RADIUS EXPANSION: Try nearby radii up to maximum 15km
+    // Start from closest workers and expand to farther ones, but never beyond 15km
+    const radiiToTry = [5, 10, 15]; // km
     let currentNearbyWorkers = [];
     let usedRadius = 10;
 
@@ -202,7 +212,7 @@ async function offerJobToNextWorker(job) {
         { 
           lat: job.lat, 
           lon: job.lon, 
-          mainSkill: job.workerType || job.description,
+          mainSkill: job.workerType,
           amount: job.amount, // Job wage
           workerType: job.workerType,
         },
@@ -258,25 +268,26 @@ async function offerJobToNextWorker(job) {
         runAt: new Date(Date.now() + RETRY_SECONDS * 1000),
         metadata: { reason: "no_available_workers" },
       });
+      offerInFlightLocks.delete(jobId);
       return;
     }
-    
-    // Bulk fetch user availability
-    const userRecords = await User.find({ 
-      phone: { $in: candidatePhones },
-      isAvailable: true 
-    }).select('phone isAvailable fcmToken');
-    
-    const availablePhones = new Set(userRecords.map(u => u.phone));
+
+    const [userRecords, workerRecords] = await Promise.all([
+      User.find({ phone: { $in: candidatePhones } }).select('phone isAvailable fcmToken expectedWage').lean(),
+      WorkerModel.find({ phone: { $in: candidatePhones } }).select('phone mainSkill location socketId').lean(),
+    ]);
+
+    const availablePhones = new Set(userRecords.filter(u => u.isAvailable).map(u => u.phone));
     const userMap = new Map(userRecords.map(u => [u.phone, u]));
-    
-    console.log(`🔍 [DISPATCH] Candidate phones after skill/wage filter: ${candidatePhones.length}`);
+    const workerMap = new Map(workerRecords.map(w => [w.phone, w]));
+
+    console.log(`🔍 [DISPATCH] Candidate phones after initial filter: ${candidatePhones.length}`);
     console.log(`🔍 [DISPATCH] Available phones (isAvailable=true in DB): ${availablePhones.size}`);
     if (candidatePhones.length !== availablePhones.size) {
       const offlinePhones = candidatePhones.filter(p => !availablePhones.has(p));
       console.log(`⚠️ [DISPATCH] Filtering out OFFLINE workers: ${offlinePhones.join(', ')}`);
     }
-    
+
     // Bulk check for unpaid jobs
     const unpaidJobs = await Job.find({
       $and: [
@@ -296,7 +307,7 @@ async function offerJobToNextWorker(job) {
         { status: { $nin: ["cancelled", "expired", "completed"] } },
       ],
     }).select('acceptedBy acceptedWorkers');
-    
+
     // Build set of phones with unpaid jobs
     const phonesWithUnpaidJobs = new Set();
     unpaidJobs.forEach(job => {
@@ -311,28 +322,75 @@ async function offerJobToNextWorker(job) {
         });
       }
     });
-    
-    // Filter candidates based on availability and unpaid jobs
+
+    // Determine contractor location (fall back to job location when missing)
+    let contractorLat = job.lat;
+    let contractorLon = job.lon;
+    try {
+      const contractorRecord = await User.findOne({ phone: job.contractorPhone }).select('location.coordinates latitude longitude').lean();
+      if (contractorRecord) {
+        contractorLat = contractorRecord.location?.coordinates?.[1] ?? contractorRecord.latitude ?? contractorLat;
+        contractorLon = contractorRecord.location?.coordinates?.[0] ?? contractorRecord.longitude ?? contractorLon;
+      }
+    } catch (e) {
+      console.error('Error fetching contractor location for prioritization:', e);
+    }
+
+    // Filter candidates based on DB skill, wage, availability, unpaid jobs and fresh location
     for (const worker of currentNearbyWorkers) {
+      if (!candidatePhones.includes(worker.phone)) continue;
+
+      const userRecord = userMap.get(worker.phone);
+      const dbWorkerRecord = workerMap.get(worker.phone);
+      const candidateSkill = dbWorkerRecord?.mainSkill || worker.mainSkill;
+      const candidateWage = userRecord?.expectedWage ?? worker.expectedWage;
+      const candidateLat = dbWorkerRecord?.location?.coordinates?.[1] ?? worker.lat;
+      const candidateLon = dbWorkerRecord?.location?.coordinates?.[0] ?? worker.lon;
+
       if (!availablePhones.has(worker.phone)) {
         console.log(`🔴 [DISPATCH] Worker ${worker.name} (${worker.phone}) is OFFLINE in User model ← BLOCKED from receiving job`);
         continue;
       }
-      
+
       if (phonesWithUnpaidJobs.has(worker.phone)) {
         console.log(`⏭️ [DISPATCH] Worker ${worker.name} (${worker.phone}) has unpaid job ← BLOCKED from receiving job`);
         continue;
       }
-      
+
+      if (job.workerType && candidateSkill !== job.workerType) {
+        console.log(`🔴 [DISPATCH] Worker ${worker.name} (${worker.phone}) skill mismatch: requires ${job.workerType}, has ${candidateSkill}`);
+        continue;
+      }
+
+      if (!isWageInRange(job.amount, candidateWage)) {
+        console.log(`🔴 [DISPATCH] Worker ${worker.name} (${worker.phone}) wage mismatch: job=₹${job.amount}, expects ${candidateWage}`);
+        continue;
+      }
+
+      const realDist = getDistanceFromLatLonInKm(job.lat, job.lon, candidateLat, candidateLon);
+      const contractorDist = getDistanceFromLatLonInKm(contractorLat, contractorLon, candidateLat, candidateLon);
+      if (realDist > usedRadius) {
+        console.log(`🔴 [DISPATCH] Worker ${worker.name} (${worker.phone}) location moved outside radius: ${realDist.toFixed(2)}km`);
+        continue;
+      }
+
       console.log(`✅ [DISPATCH] Worker ${worker.name} (${worker.phone}) is AVAILABLE and eligible ← CAN receive job`);
-      candidates.push(worker);
+      candidates.push({
+        ...worker,
+        mainSkill: candidateSkill,
+        expectedWage: candidateWage,
+        lat: candidateLat,
+        lon: candidateLon,
+        distance: Math.round(realDist * 10) / 10,
+        contractorDistance: Math.round(contractorDist * 10) / 10,
+        socketId: dbWorkerRecord?.socketId || worker.socketId,
+      });
     }
-    
+
     if (!candidates || candidates.length === 0) {
       // No available worker right now - just wait and retry
       console.log(`⏳ No available workers for job ${job._id} - will retry when workers come online`);
-      
-      // Retry in 30 seconds
+
       const RETRY_SECONDS = 30;
       const retryTimeoutId = setTimeout(async () => {
         try {
@@ -345,7 +403,7 @@ async function offerJobToNextWorker(job) {
           console.error('Error in job retry timeout:', e);
         }
       }, RETRY_SECONDS * 1000);
-      
+
       pendingJobTimeouts.set(job._id.toString(), retryTimeoutId);
       await scheduleDispatchState({
         jobId: job._id,
@@ -353,107 +411,116 @@ async function offerJobToNextWorker(job) {
         runAt: new Date(Date.now() + RETRY_SECONDS * 1000),
         metadata: { reason: "no_available_workers" },
       });
+      offerInFlightLocks.delete(jobId);
       return;
     }
 
-    // If this is a bulk hiring job, offer to multiple workers simultaneously up to required slots
     if (job.bulkHiring) {
       const alreadyAccepted = job.acceptedWorkers ? job.acceptedWorkers.length : 0;
       const slots = Math.max(0, (job.requiredWorkers || 1) - alreadyAccepted);
       if (slots <= 0) {
         console.log(`✅ Job ${job._id} already has required workers accepted`);
+        offerInFlightLocks.delete(jobId);
         return;
       }
 
       console.log(`📤 Bulk offer: offering to up to ${slots} workers from ${candidates.length} candidates`);
       let offered = 0;
+
+      // Prioritize candidates by distance to contractor first, then distance to job
+      candidates.sort((a, b) => (a.contractorDistance || 0) - (b.contractorDistance || 0) || (a.distance || 0) - (b.distance || 0));
+
       for (const candidate of candidates) {
         if (offered >= slots) break;
         const dedupeKey = `${jobId}:${candidate.phone}`;
-        if (recentOfferTargets.has(dedupeKey)) {
-          continue;
-        }
+        if (recentOfferTargets.has(dedupeKey)) continue;
         const workerSocket = io.sockets.sockets.get(candidate.socketId);
         if (!workerSocket) continue;
 
         try {
-          // Double-check distance server-side and stringify _id before emitting
-          try {
-            const realDist = getDistanceFromLatLonInKm(job.lat, job.lon, candidate.lat, candidate.lon);
-            if (realDist <= 10) {
-              workerSocket.emit("newJob", {
-                ...job.toObject(),
-                _id: job._id.toString(),
-                id: job._id.toString(),
-                distance: Math.round(realDist * 10) / 10,
-                totalNearbyWorkers: currentNearbyWorkers.length,
+          const currentJobBeforeEmit = await Job.findById(job._id).lean();
+          if (!currentJobBeforeEmit || currentJobBeforeEmit.status !== 'pending' ||
+              (currentJobBeforeEmit.bulkHiring && (currentJobBeforeEmit.acceptedWorkers?.length || 0) >= (currentJobBeforeEmit.requiredWorkers || 1))) {
+            console.log(`⏹️ Job ${job._id} is no longer open for bulk offering; aborting further emits`);
+            break;
+          }
+
+          const realDist = getDistanceFromLatLonInKm(job.lat, job.lon, candidate.lat, candidate.lon);
+          if (realDist <= 15) {
+            workerSocket.emit("newJob", {
+              ...job.toObject(),
+              _id: job._id.toString(),
+              id: job._id.toString(),
+              distance: Math.round(realDist * 10) / 10,
+              totalNearbyWorkers: currentNearbyWorkers.length,
+              bulkOffer: true,
+            });
+            recentOfferTargets.set(dedupeKey, Date.now());
+            await logJobEvent({
+              jobId: job._id,
+              eventType: "offer_sent",
+              actorType: "system",
+              source: "system",
+              newState: { status: job.status },
+              metadata: {
+                targetPhone: candidate.phone,
                 bulkOffer: true,
-              });
-              recentOfferTargets.set(dedupeKey, Date.now());
-              await logJobEvent({
-                jobId: job._id,
-                eventType: "offer_sent",
-                actorType: "system",
-                source: "system",
-                newState: { status: job.status },
-                metadata: {
-                  targetPhone: candidate.phone,
-                  bulkOffer: true,
-                  distanceKm: Math.round(realDist * 100) / 100,
-                  amount: job.amount,
-                },
-              });
-            } else {
-              console.log(`❌ Skipping emit to ${candidate.name} due to distance ${realDist.toFixed(2)}km (>10km)`);
-            }
-          } catch (e) {
-            console.error('Error while verifying distance before emit (bulk):', e);
+                distanceKm: Math.round(realDist * 100) / 100,
+                amount: job.amount,
+              },
+            });
+            offered++;
+            console.log(`⏳ Bulk offer sent to ${candidate.name} (${candidate.phone})`);
+          } else {
+            console.log(`❌ Skipping emit to ${candidate.name} due to distance ${realDist.toFixed(2)}km (>15km)`);
           }
-
-          // Send push notification if available
-          try {
-            const worker = userMap.get(candidate.phone);
-            if (worker && worker.fcmToken) {
-              await sendNotificationToUserPhone(worker.phone, {
-                type: 'job_offer',
-                title: `New Job: ${job.title}`,
-                body: `₹${job.amount} • ${job.workerType || job.description} • ${candidate.distance}km away`,
-                jobId: job._id.toString(),
-                metadata: { jobTitle: job.title, amount: job.amount, workerType: job.workerType, lat: job.lat, lon: job.lon, actionRequired: true },
-              });
-            }
-          } catch (pushErr) {
-            console.error(`❌ Error sending push for bulk candidate ${candidate.phone}:`, pushErr);
-          }
-
-          // Set individual timeout to try other workers if not enough acceptances
-          const WORKER_TIMEOUT_SECONDS = 60;
-          const timeoutId = setTimeout(async () => {
-            try {
-              const jobCheck = await Job.findById(job._id);
-              if (jobCheck && (!jobCheck.bulkHiring || (jobCheck.acceptedWorkers?.length || 0) < (jobCheck.requiredWorkers || 1))) {
-                console.log(`⏱️ Bulk candidate ${candidate.name} timeout - retrying offers for job ${job._id}...`);
-                await offerJobToNextWorker(jobCheck);
-              }
-            } catch (e) {
-              console.error('Error in bulk job timeout:', e);
-            }
-          }, WORKER_TIMEOUT_SECONDS * 1000);
-
-          // Store timeout (overwrite previous simple timeout id)
-          pendingJobTimeouts.set(job._id.toString(), timeoutId);
-          await scheduleDispatchState({
-            jobId: job._id,
-            type: "retry_offer",
-            runAt: new Date(Date.now() + WORKER_TIMEOUT_SECONDS * 1000),
-            metadata: { reason: "bulk_worker_offer_timeout", workerPhone: candidate.phone },
-          });
-          offered++;
-          console.log(`⏳ Bulk offer sent to ${candidate.name} (${candidate.phone})`);
         } catch (emitErr) {
           console.error('Error emitting bulk offer to candidate:', emitErr);
         }
+
+        try {
+          const worker = userMap.get(candidate.phone);
+          if (worker && worker.fcmToken) {
+            await sendNotificationToUserPhone(worker.phone, {
+              type: 'job_offer',
+              title: `New Job: ${job.title}`,
+              body: `₹${job.amount} • ${job.workerType || job.description} • ${candidate.distance}km away`,
+              jobId: job._id.toString(),
+              metadata: { jobTitle: job.title, amount: job.amount, workerType: job.workerType, lat: job.lat, lon: job.lon, actionRequired: true },
+            });
+          }
+        } catch (pushErr) {
+          console.error(`❌ Error sending push for bulk candidate ${candidate.phone}:`, pushErr);
+        }
       }
+
+      if (offered === 0) {
+        console.log(`⚠️ No bulk offers were delivered for job ${job._id}; scheduling a retry.`);
+      } else {
+        // At least one offer sent, proceed to bulk retry timer
+      }
+
+      const WORKER_TIMEOUT_SECONDS = 60;
+      const timeoutId = setTimeout(async () => {
+        try {
+          const jobCheck = await Job.findById(job._id);
+          if (jobCheck && (!jobCheck.bulkHiring || (jobCheck.acceptedWorkers?.length || 0) < (jobCheck.requiredWorkers || 1))) {
+            console.log(`⏱️ Bulk retry timer fired for job ${job._id} after ${WORKER_TIMEOUT_SECONDS}s`);
+            await offerJobToNextWorker(jobCheck);
+          }
+        } catch (e) {
+          console.error('Error in bulk job timeout:', e);
+        }
+      }, WORKER_TIMEOUT_SECONDS * 1000);
+
+      pendingJobTimeouts.set(job._id.toString(), timeoutId);
+      await scheduleDispatchState({
+        jobId: job._id,
+        type: "retry_offer",
+        runAt: new Date(Date.now() + WORKER_TIMEOUT_SECONDS * 1000),
+        metadata: { reason: "bulk_worker_offer_timeout", offeredCandidates: offered },
+      });
+      offerInFlightLocks.delete(jobId);
       return;
     }
 
@@ -461,6 +528,7 @@ async function offerJobToNextWorker(job) {
     const nextWorker = candidates[0];
     if (!nextWorker) {
       console.log(`⚠️ No single candidate found after filtering for job ${job._id}`);
+      offerInFlightLocks.delete(jobId);
       return;
     }
     
@@ -470,14 +538,23 @@ async function offerJobToNextWorker(job) {
       if (!workerCheckBeforeOffer?.isAvailable) {
         console.log(`🚨 [SAFETY CHECK] Worker ${nextWorker.name} (${nextWorker.phone}) is OFFLINE in database! Cannot offer job ${job._id}`);
         console.log(`⚠️ [SAFETY CHECK] This worker was in candidates but is now offline - possible race condition or socket lag`);
+        offerInFlightLocks.delete(jobId);
         return; // Do not offer to offline worker
       }
     } catch (checkErr) {
       console.error(`❌ [SAFETY CHECK] Could not verify worker status before offer:`, checkErr);
     }
-    
+
     const singleDedupeKey = `${jobId}:${nextWorker.phone}`;
     if (recentOfferTargets.has(singleDedupeKey)) {
+      offerInFlightLocks.delete(jobId);
+      return;
+    }
+
+    const currentJobBeforeEmit = await Job.findById(job._id).lean();
+    if (!currentJobBeforeEmit || currentJobBeforeEmit.status !== 'pending') {
+      console.log(`⏹️ Job ${job._id} is no longer pending before emit; aborting offer to ${nextWorker.phone}`);
+      offerInFlightLocks.delete(jobId);
       return;
     }
 
@@ -488,7 +565,7 @@ async function offerJobToNextWorker(job) {
       // Double-check distance server-side and make sure _id is a string
       try {
         const realDist = getDistanceFromLatLonInKm(job.lat, job.lon, nextWorker.lat, nextWorker.lon);
-        if (realDist <= 10) {
+        if (realDist <= 15) {
           workerSocket.emit("newJob", {
             ...job.toObject(),
             _id: job._id.toString(),
@@ -510,8 +587,8 @@ async function offerJobToNextWorker(job) {
               amount: job.amount,
             },
           });
-        } else {
-          console.log(`❌ Skipping emit to ${nextWorker.name} due to distance ${realDist.toFixed(2)}km (>10km)`);
+          } else {
+          console.log(`❌ Skipping emit to ${nextWorker.name} due to distance ${realDist.toFixed(2)}km (>15km)`);
         }
       } catch (e) {
         console.error('Error while verifying distance before emit (single):', e);

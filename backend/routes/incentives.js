@@ -5,6 +5,7 @@ const { authenticateToken } = require('../utils/auth');
 const Worker = require('../models/Worker');
 const IncentiveLedger = require('../models/IncentiveLedger');
 const Wallet = require('../models/Wallet');
+const WorkerEarnings = require('../models/WorkerEarnings');
 const GigHistory = require('../models/GigHistory');
 const Job = require('../models/Jobs');
 const {
@@ -331,7 +332,7 @@ router.post('/claim/:milestoneId', authenticateToken, async (req, res) => {
       walletUpdateResult = await Wallet.findOneAndUpdate(
         { phone },
         {
-          $inc: { balance: rewardAmount, availableBalance: rewardAmount, totalEarned: rewardAmount },
+          $inc: { balance: rewardAmount, availableBalance: rewardAmount, pocketBalance: rewardAmount, totalEarned: rewardAmount },
           $push: {
             transactions: {
               type: 'incentive_reward',
@@ -360,6 +361,39 @@ router.post('/claim/:milestoneId', authenticateToken, async (req, res) => {
 
       const latestTx = walletUpdateResult.transactions[walletUpdateResult.transactions.length - 1];
       await IncentiveLedger.updateOne({ _id: ledgerDoc._id }, { $set: { 'walletCredit.status': 'credited', 'walletCredit.walletTransactionId': latestTx?._id?.toString(), 'walletCredit.creditedAt': new Date() } });
+
+      // ✅ Create WorkerEarnings entry for incentive reward (for analytics and weekly payouts)
+      try {
+        const idempotencyKeyEarnings = `incentive_earnings:${phone}:${milestoneId}`;
+        const consecutiveDays = ledgerDoc?.eligibilityData?.consecutiveDays || eligibilityData.consecutiveDays;
+        await WorkerEarnings.findOneAndUpdate(
+          { workerPhone: phone, idempotencyKey: idempotencyKeyEarnings },
+          {
+            workerPhone: phone,
+            jobId: null,
+            amount: rewardAmount,
+            currency: 'INR',
+            status: 'earned',
+            source: 'app',
+            provider: 'internal',
+            earnedAt: new Date(),
+            contractorName: 'System Incentive',
+            jobTitle: `Incentive Reward - ${milestoneId} milestone`,
+            notes: `Milestone incentive reward for ${milestoneId} (${consecutiveDays} consecutive days)`,
+            idempotencyKey: idempotencyKeyEarnings,
+            metadata: {
+              milestoneId,
+              incentiveId: ledgerDoc._id.toString(),
+              source: 'incentive',
+              consecutiveDays,
+            },
+          },
+          { upsert: true, new: true }
+        );
+      } catch (workerEarningsErr) {
+        console.error('Failed to create WorkerEarnings entry for incentive:', workerEarningsErr);
+        // Log error but don't fail the entire request - wallet credit is primary
+      }
 
       responsePayload = {
         success: true,

@@ -14,6 +14,8 @@ const payoutBatchSchema = new mongoose.Schema({
     default: 'pending'
   },
   totalAmount: { type: Number, default: 0 },
+  totalEarnings: { type: Number, default: 0 },
+  totalDeductions: { type: Number, default: 0 },
   totalWorkers: { type: Number, default: 0 },
   workers: [
     {
@@ -34,7 +36,19 @@ const payoutBatchSchema = new mongoose.Schema({
         accountNumber: String,
         ifscCode: String,
         bankName: String
-      }
+      },
+      transactions: [
+        {
+          type: String,
+          amount: Number,
+          date: Date,
+          description: String,
+          jobId: { type: mongoose.Schema.Types.ObjectId, ref: 'Job', default: null },
+          provider: String,
+          providerEventId: String,
+          metadata: { type: mongoose.Schema.Types.Mixed, default: null }
+        }
+      ]
     }
   ],
   createdAt: { type: Date, default: Date.now },

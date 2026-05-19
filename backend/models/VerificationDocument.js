@@ -8,7 +8,7 @@ const verificationDocumentSchema = new mongoose.Schema(
       {
         type: {
           type: String,
-          enum: ["aadhar", "pan", "driver_license", "voter_id", "bank_account", "gst", "other"],
+          enum: ["aadhar", "pan", "driver_license", "voter_id", "voter", "policy", "bank_account", "gst", "other"],
           required: true,
         },
         fileUrl: { type: String, required: true },

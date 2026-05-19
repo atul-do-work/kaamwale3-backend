@@ -289,7 +289,7 @@ io.on("connection", (socket) => {
                 { 
                   lat: job.lat, 
                   lon: job.lon, 
-                  mainSkill: job.workerType || job.description,
+                  mainSkill: job.workerType,
                   amount: job.amount,
                   workerType: job.workerType,
                 },

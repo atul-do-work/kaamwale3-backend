@@ -23,7 +23,8 @@ exports.updateGigDataOnCompletion = async (workerPhone, jobData) => {
       {
         $inc: {
           'gigsData.totalGigsCompleted': 1,
-          'gigsData.totalGigsAccepted': -1,
+          // decrement active accepted (in-flight) count, do NOT decrement lifetime totalGigsAccepted
+          'gigsData.activeAcceptedCount': -1,
           'gigsData.totalEarnings': amount,
           'gigsData.totalHours': hours,
         },
@@ -52,8 +53,41 @@ exports.updateGigDataOnCompletion = async (workerPhone, jobData) => {
     );
 
     if (!updated) {
-      console.warn(`Worker not found for gig completion: ${workerPhone}`);
-      return null;
+      console.warn(`Worker not found for gig completion: ${workerPhone}, attempting creation`);
+      try {
+        await Worker.create({
+          phone: workerPhone,
+          gigsData: {
+            consecutiveDays: 0,
+            lastWorkDate: null,
+            streakStartDate: null,
+            totalHours: 0,
+            hoursPerDay: new Map(),
+            totalCancellations: 0,
+            cancellationDates: [],
+            totalGigsAccepted: 0,
+            totalGigsCompleted: 0,
+            totalGigsCancelled: 0,
+            totalGigsPending: 0,
+            activeAcceptedCount: 0,
+            totalEarnings: 0,
+            earningsPerDay: new Map(),
+            milestonesUnlocked: {
+              fiveDaysMilestone: { unlocked: false, unlockedDate: null },
+              tenDaysMilestone: { unlocked: false, unlockedDate: null },
+              twentyDaysMilestone: { unlocked: false, unlockedDate: null },
+            },
+            eligibleFor5Days: false,
+            eligibleFor10Days: false,
+            eligibleFor20Days: false,
+            lastUpdated: new Date(),
+          },
+        });
+        updated = await Worker.findOne({ phone: workerPhone });
+      } catch (createErr) {
+        console.error('Failed to create worker:', createErr);
+        return null;
+      }
     }
 
     // 🔧 FIX: Recalculate incentive eligibility after gig update
@@ -68,6 +102,7 @@ exports.updateGigDataOnCompletion = async (workerPhone, jobData) => {
     return updated;
   } catch (err) {
     console.error('Error updating gig data on completion:', err);
+    return null;
   }
 };
 
@@ -86,7 +121,8 @@ exports.updateGigDataOnCancellation = async (workerPhone, jobData) => {
       {
         $inc: {
           'gigsData.totalGigsCancelled': 1,
-          'gigsData.totalGigsAccepted': -1,
+          // decrement active accepted (in-flight) count, do NOT decrement lifetime totalGigsAccepted
+          'gigsData.activeAcceptedCount': -1,
           'gigsData.totalCancellations': 1,
         },
         $set: {
@@ -128,11 +164,14 @@ exports.updateGigDataOnCancellation = async (workerPhone, jobData) => {
     return updated;
   } catch (err) {
     console.error('Error updating gig data on cancellation:', err);
+    return null;
   }
 };
 
 /**
- * Update worker gigs data when a job is accepted
+ * Update worker gigs data when a job is accepted (ATOMIC)
+ * 🔧 FIX: Use atomic $inc to prevent race conditions
+ * 🔧 FIX: Call incentive recalculation after update (BUG #1)
  */
 exports.updateGigDataOnAcceptance = async (workerPhone, jobData) => {
   try {
@@ -141,7 +180,9 @@ exports.updateGigDataOnAcceptance = async (workerPhone, jobData) => {
       { phone: workerPhone },
       {
         $inc: {
+          // increment lifetime total and active accepted counter
           'gigsData.totalGigsAccepted': 1,
+          'gigsData.activeAcceptedCount': 1,
         },
         $set: {
           'gigsData.lastUpdated': new Date(),
@@ -169,9 +210,19 @@ exports.updateGigDataOnAcceptance = async (workerPhone, jobData) => {
       return null;
     }
 
+    // 🔧 FIX BUG #1: Recalculate incentive eligibility after acceptance (was missing)
+    try {
+      const { updateIncentiveEligibility } = require('../services/incentiveEligibilityService');
+      await updateIncentiveEligibility(workerPhone);
+    } catch (eligibilityErr) {
+      console.error('Error recalculating incentive eligibility on acceptance:', eligibilityErr);
+      // Don't fail the whole operation - incentive is secondary
+    }
+
     return updated;
   } catch (err) {
     console.error('Error updating gig data on acceptance:', err);
+    return null;
   }
 };
 
@@ -221,26 +272,29 @@ async function updateIncentiveEligibility(worker) {
 
     // Track when milestones were unlocked
     // Bug #6 Fix: Store milestone as object with unlock date (not boolean)
-    if (eligibleFor5 && !worker.gigsData.milestonesUnlocked.fiveDaysMilestone) {
+    if (eligibleFor5 && !(worker.gigsData.milestonesUnlocked?.fiveDaysMilestone?.unlocked)) {
+      worker.gigsData.milestonesUnlocked = worker.gigsData.milestonesUnlocked || {};
       worker.gigsData.milestonesUnlocked.fiveDaysMilestone = {
         unlocked: true,
-        unlockedDate: new Date()
+        unlockedDate: new Date(),
       };
       console.log(`✅ 5-day milestone unlocked for ${worker.phone}`);
     }
 
-    if (eligibleFor10 && !worker.gigsData.milestonesUnlocked.tenDaysMilestone) {
+    if (eligibleFor10 && !(worker.gigsData.milestonesUnlocked?.tenDaysMilestone?.unlocked)) {
+      worker.gigsData.milestonesUnlocked = worker.gigsData.milestonesUnlocked || {};
       worker.gigsData.milestonesUnlocked.tenDaysMilestone = {
         unlocked: true,
-        unlockedDate: new Date()
+        unlockedDate: new Date(),
       };
       console.log(`✅ 10-day milestone unlocked for ${worker.phone}`);
     }
 
-    if (eligibleFor20 && !worker.gigsData.milestonesUnlocked.twentyDaysMilestone) {
+    if (eligibleFor20 && !(worker.gigsData.milestonesUnlocked?.twentyDaysMilestone?.unlocked)) {
+      worker.gigsData.milestonesUnlocked = worker.gigsData.milestonesUnlocked || {};
       worker.gigsData.milestonesUnlocked.twentyDaysMilestone = {
         unlocked: true,
-        unlockedDate: new Date()
+        unlockedDate: new Date(),
       };
       console.log(`✅ 20-day milestone unlocked for ${worker.phone}`);
     }
@@ -330,12 +384,14 @@ exports.resetWorkerGigsData = async (workerPhone) => {
       totalGigsCompleted: 0,
       totalGigsCancelled: 0,
       totalGigsPending: 0,
+      // activeAcceptedCount tracks in-flight accepted jobs (not lifetime)
+      activeAcceptedCount: 0,
       totalEarnings: 0,
       earningsPerDay: new Map(),
       milestonesUnlocked: {
-        fiveDaysMilestone: false,
-        tenDaysMilestone: false,
-        twentyDaysMilestone: false,
+        fiveDaysMilestone: { unlocked: false, unlockedDate: null },
+        tenDaysMilestone: { unlocked: false, unlockedDate: null },
+        twentyDaysMilestone: { unlocked: false, unlockedDate: null },
       },
       eligibleFor5Days: false,
       eligibleFor10Days: false,

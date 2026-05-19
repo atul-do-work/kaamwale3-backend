@@ -213,13 +213,18 @@ function createJobsLifecycleCoreRouter({
         });
 
         try {
-          await updateGigDataOnAcceptance(workerPhone, {
+          const gigDataUpdated = await updateGigDataOnAcceptance(workerPhone, {
             jobId: bulkJob._id.toString(),
             title: bulkJob.title,
             amount: bulkJob.amount,
             workerType: bulkJob.workerType,
           });
-          await createGigHistoryEvent({
+          if (!gigDataUpdated) {
+            console.warn(`[JobAccept] Gig data not updated for ${workerPhone} on job ${bulkJob._id}`);
+          }
+          
+          // Bug #4: job_accepted event passes hoursWorked=0 (intentional - work hasn't happened yet)
+          const historyEvent = await createGigHistoryEvent({
             workerPhone,
             workerName: workerName || workerPhone,
             jobId: bulkJob._id,
@@ -229,10 +234,19 @@ function createJobsLifecycleCoreRouter({
             eventType: "job_accepted",
             status: bulkJob.status,
             paymentStatus: bulkJob.paymentStatus,
+            hoursWorked: 0, // Intentional: no work done yet, just accepted
+            timeSpentMinutes: 0,
             eventTime: new Date(),
+            metadata: { eventReason: 'job_offer_accepted_bulk', bulkJobId: bulkJob._id },
           });
+          if (!historyEvent) {
+            console.warn(`[JobAccept] GigHistory event not created for ${workerPhone} on job ${bulkJob._id}`);
+          }
         } catch (e) {
-          console.error("Error updating gigs data on acceptance:", e);
+          console.error("[JobAccept] Error updating gigs data on acceptance:", e.message, {
+            workerPhone,
+            jobId: bulkJob._id,
+          });
         }
 
         const acceptedCount = bulkJob.acceptedWorkers?.length || 0;
@@ -339,13 +353,18 @@ function createJobsLifecycleCoreRouter({
       });
 
       try {
-        await updateGigDataOnAcceptance(workerPhone, {
+        const gigDataUpdated = await updateGigDataOnAcceptance(workerPhone, {
           jobId: updated._id.toString(),
           title: updated.title,
           amount: updated.amount,
           workerType: updated.workerType,
         });
-        await createGigHistoryEvent({
+        if (!gigDataUpdated) {
+          console.warn(`[JobAccept] Gig data not updated for ${workerPhone} on job ${updated._id}`);
+        }
+        
+        // Bug #4: job_accepted event passes hoursWorked=0 (intentional - work hasn't happened yet)
+        const historyEvent = await createGigHistoryEvent({
           workerPhone,
           workerName: workerName || workerPhone,
           jobId: updated._id,
@@ -355,10 +374,19 @@ function createJobsLifecycleCoreRouter({
           eventType: "job_accepted",
           status: updated.status,
           paymentStatus: updated.paymentStatus,
+          hoursWorked: 0, // Intentional: no work done yet, just accepted
+          timeSpentMinutes: 0,
           eventTime: new Date(),
+          metadata: { eventReason: 'job_offer_accepted_single', jobId: updated._id },
         });
+        if (!historyEvent) {
+          console.warn(`[JobAccept] GigHistory event not created for ${workerPhone} on job ${updated._id}`);
+        }
       } catch (e) {
-        console.error("Error updating gigs data on acceptance:", e);
+        console.error("[JobAccept] Error updating gigs data on acceptance:", e.message, {
+          workerPhone,
+          jobId: updated._id,
+        });
       }
 
       try {
@@ -533,6 +561,10 @@ function createJobsLifecycleCoreRouter({
               status: job.status,
               paymentStatus: job.paymentStatus,
               eventTime: new Date(),
+              metadata: { 
+                declineReason: job.declineReason || 'not_specified',
+                timestamp: new Date().toISOString()
+              }
             });
           } catch (e) {
             console.error("Error updating gigs data on cancellation:", e);
@@ -565,6 +597,10 @@ function createJobsLifecycleCoreRouter({
             status: job.status,
             paymentStatus: job.paymentStatus,
             eventTime: new Date(),
+            metadata: { 
+              declineReason: job.declineReason || 'not_specified',
+              timestamp: new Date().toISOString()
+            }
           });
         } catch (e) {
           console.error("Error updating gigs data on cancellation:", e);

@@ -272,14 +272,13 @@ async function updateIncentiveEligibility(workerPhone) {
     const GigHistory = require('../models/GigHistory');
     const Worker = require('../models/Worker');
 
-    const normalizePhoneDigits = (value) => String(value || '').replace(/\D/g, '').slice(-10);
-    const phoneDigits = normalizePhoneDigits(workerPhone);
+    const normalizedPhone = workerPhone.replace(/[^0-9]/g, '').slice(-10);
 
     // Fetch recent gig history events
     const events = await GigHistory.find({
       $or: [
-        { workerPhone: { $in: [workerPhone, phoneDigits] } },
-        { workerPhone: { $regex: `${phoneDigits}$` } }
+        { workerPhone: normalizedPhone },
+        { workerPhone: { $regex: `${normalizedPhone}$` } }
       ]
     })
       .sort({ eventTime: -1 })
