@@ -332,7 +332,7 @@ router.post('/claim/:milestoneId', authenticateToken, async (req, res) => {
       walletUpdateResult = await Wallet.findOneAndUpdate(
         { phone },
         {
-          $inc: { balance: rewardAmount, availableBalance: rewardAmount, pocketBalance: rewardAmount, totalEarned: rewardAmount },
+          $inc: { balance: rewardAmount, availableBalance: rewardAmount, totalEarned: rewardAmount },
           $push: {
             transactions: {
               type: 'incentive_reward',
@@ -346,7 +346,7 @@ router.post('/claim/:milestoneId', authenticateToken, async (req, res) => {
               provider: 'internal',
               providerEventId: `incentive:${ledgerDoc._id.toString()}`,
               idempotencyKey: `incentive:${phone}:${milestoneId}`,
-              metadata: { source: 'incentive' },
+              metadata: { source: 'incentive', balanceType: 'available' },
             },
           },
         },

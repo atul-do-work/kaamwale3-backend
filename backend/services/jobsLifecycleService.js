@@ -1059,7 +1059,8 @@ async function depositCash({ jobId, workerPhone, idempotencyKey, deps }) {
       { phone: normalizedWorkerPhone },
       {
         $inc: {
-          pocketBalance: cashDeposit.amount,
+          availableBalance: cashDeposit.amount,
+          balance: cashDeposit.amount,
           totalEarned: cashDeposit.amount
         },
         $push: {
@@ -1071,8 +1072,8 @@ async function depositCash({ jobId, workerPhone, idempotencyKey, deps }) {
             source: "app",
             provider: "cash_deposit",
             status: "completed",
-            description: `Cash deposit credited to pocket balance (${job.title})`,
-            metadata: { balanceType: "pocket", workerPhone: normalizedWorkerPhone },
+            description: `Cash deposit credited to available balance (${job.title})`,
+            metadata: { balanceType: "available", workerPhone: normalizedWorkerPhone },
           }
         }
       },
@@ -1262,7 +1263,8 @@ async function depositCashById({ depositId, workerPhone, idempotencyKey, deps })
         { phone: normalizedWorkerPhone },
         {
           $inc: {
-            pocketBalance: cashDeposit.amount,
+            availableBalance: cashDeposit.amount,
+            balance: cashDeposit.amount,
             totalEarned: cashDeposit.amount
           },
           $push: {
@@ -1274,8 +1276,8 @@ async function depositCashById({ depositId, workerPhone, idempotencyKey, deps })
               source: "app",
               provider: "cash_deposit",
               status: "completed",
-              description: `Cash deposit credited to pocket balance (${job.title})`,
-              metadata: { balanceType: "pocket", workerPhone: normalizedWorkerPhone },
+              description: `Cash deposit credited to available balance (${job.title})`,
+              metadata: { balanceType: "available", workerPhone: normalizedWorkerPhone },
             }
           }
         },

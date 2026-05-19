@@ -383,6 +383,20 @@ function computeWorkerWeeklyMetrics(walletDoc, now = new Date()) {
   const txs = Array.isArray(walletDoc?.transactions) ? walletDoc.transactions : [];
   let earnings = 0;
   let deducted = 0;
+  let jobPayments = 0;
+  let incentiveRewards = 0;
+  let referralRewards = 0;
+  let cashDeposits = 0;
+  let pocketDeposits = 0;
+  let otherCredits = 0;
+  let totalWithdrawn = 0;
+  const dailyTotals = {};
+  for (let i = 0; i < 7; i += 1) {
+    const day = new Date(start);
+    day.setDate(start.getDate() + i);
+    const key = `${day.getFullYear()}-${day.getMonth() + 1}-${day.getDate()}`;
+    dailyTotals[key] = 0;
+  }
 
   for (const tx of txs) {
     const txDate = tx?.date ? new Date(tx.date) : null;
@@ -392,35 +406,55 @@ function computeWorkerWeeklyMetrics(walletDoc, now = new Date()) {
     const amount = Number(tx.amount || 0);
     if (!Number.isFinite(amount) || amount <= 0) continue;
 
-    const isIncentive =
-      tx.type === "incentive_reward" ||
-      tx.type === "incentive" ||
-      String(tx?.metadata?.source || "").toLowerCase() === "incentive";
-    const isReferral =
-      tx.type === "referral" ||
-      tx.type === "referral_reward" ||
-      String(tx?.metadata?.source || "").toLowerCase() === "referral";
-    const isPocketCredit =
-      tx.type === "cash_deposit" ||
-      tx.type === "pocket_deposit" ||
-      isReferral ||
-      (tx.type === "deposit" && String(tx?.metadata?.balanceType || "").toLowerCase() === "pocket");
+    const normalizedType = String(tx.type || '').toLowerCase();
+    const normalizedSource = String(tx?.metadata?.source || tx.source || '').toLowerCase();
+    const isJobPayment = normalizedType === 'payment';
+    const isIncentive = normalizedType === 'incentive_reward' || normalizedSource === 'incentive';
+    const isReferral = normalizedType === 'referral_reward' || normalizedType === 'referral' || normalizedSource === 'referral';
+    const isCashDeposit = normalizedType === 'cash_deposit';
+    const isPocketDeposit = normalizedType === 'pocket_deposit';
+    const isDepositAvailable = normalizedType === 'deposit' && String(tx?.metadata?.balanceType || '').toLowerCase() !== 'pocket';
+    const isDepositPocket = normalizedType === 'deposit' && String(tx?.metadata?.balanceType || '').toLowerCase() === 'pocket';
+    const isEarning = isJobPayment || isIncentive || isReferral || isCashDeposit || isPocketDeposit || isDepositAvailable || isDepositPocket;
 
-    if (tx.type === "payment" || isIncentive || isReferral || isPocketCredit) {
+    if (isEarning) {
       earnings += amount;
-      continue;
+      if (isJobPayment) jobPayments += amount;
+      else if (isIncentive) incentiveRewards += amount;
+      else if (isReferral) referralRewards += amount;
+      else if (isCashDeposit || isDepositAvailable) cashDeposits += amount;
+      else if (isPocketDeposit || isDepositPocket) pocketDeposits += amount;
+      else otherCredits += amount;
+      const dayKey = `${txDate.getFullYear()}-${txDate.getMonth() + 1}-${txDate.getDate()}`;
+      if (dailyTotals[dayKey] !== undefined) {
+        dailyTotals[dayKey] += amount;
+      }
     }
-    if (tx.type === "withdraw") {
-      const fromPocket = String(tx?.metadata?.balanceSource || "") === "pocket";
+    if (normalizedType === 'withdraw') {
+      const fromPocket = String(tx?.metadata?.balanceSource || '').toLowerCase() === 'pocket';
       if (!fromPocket) deducted += amount;
+      totalWithdrawn += amount;
     }
   }
 
   const available = Math.max(0, earnings - deducted);
+  const netEarnings = Math.max(0, earnings - deducted);
   return {
     earnings,
     available,
     deducted,
+    grossEarnings: earnings,
+    netEarnings,
+    totalWithdrawn,
+    categoryTotals: {
+      jobPayments,
+      incentiveRewards,
+      referralRewards,
+      cashDeposits,
+      pocketDeposits,
+      otherCredits,
+    },
+    dailyBreakdown: Object.keys(dailyTotals).map((key) => ({ key, amount: dailyTotals[key] || 0 })),
     weekStart: start,
     weekEnd: new Date(endExclusive.getTime() - 1),
   };
@@ -761,16 +795,14 @@ router.post("/deposit/verify", authenticateToken, depositVerifyLimiter, async (r
     const role = String(req.user?.role || "").toLowerCase();
     const isWorker = role === "worker";
     const isContractor = role === "contractor";
-    const targetBalanceField = isPendingCashDeposit && isWorker ? "pocketBalance" : isContractor ? "pocketBalance" : "availableBalance";
+    const targetBalanceField = isContractor ? "pocketBalance" : "availableBalance";
     const openingBalance = Number(existingWalletBeforeUpdate[targetBalanceField] || 0);
     const closingBalance = openingBalance + depositAmount;
     const balanceInc = isPendingCashDeposit
-      ? { pocketBalance: depositAmount, totalEarned: depositAmount }
+      ? { availableBalance: depositAmount, balance: depositAmount, totalEarned: depositAmount }
       : isContractor
         ? { pocketBalance: depositAmount }
-        : isWorker
-          ? { pocketBalance: depositAmount, availableBalance: depositAmount, balance: depositAmount }
-          : { availableBalance: depositAmount, balance: depositAmount };
+        : { availableBalance: depositAmount, balance: depositAmount };
 
     const wallet = await Wallet.findOneAndUpdate(
       {
@@ -791,15 +823,13 @@ router.post("/deposit/verify", authenticateToken, depositVerifyLimiter, async (r
               ? `Pending cash deposit settled via Razorpay (${paymentId})`
               : isContractor
                 ? `Pocket balance deposit via Razorpay (${paymentId})`
-                : isWorker
-                  ? `Worker deposit credited to available + pocket (${paymentId})`
-                  : `Wallet deposit via Razorpay (${paymentId})`,
+                : `Worker deposit credited to available via Razorpay (${paymentId})`,
             source: 'app',
             provider: 'razorpay',
             providerEventId: paymentId,
             metadata: {
               verifiedBy: 'deposit/verify',
-              balanceType: isPendingCashDeposit ? 'pocket' : isContractor ? 'pocket' : isWorker ? 'available+pocket' : 'available',
+              balanceType: isPendingCashDeposit ? 'available' : isContractor ? 'pocket' : 'available',
             },
           })
         }
@@ -1671,17 +1701,13 @@ router.post("/deposit/webhook", async (req, res) => {
     }
     const isWorker = role === "worker";
     const isContractor = role === "contractor";
-    const targetBalanceField = isCashDeposit && isWorker ? "pocketBalance" : isContractor ? "pocketBalance" : "availableBalance";
+    const targetBalanceField = "availableBalance";
     
     // 🔐 ATOMIC: Credit wallet only after signature verification passes
     // This ensures wallet never credited if callback succeeds but verification fails on retry
-    const incOps = isCashDeposit
-      ? { pocketBalance: amount, totalEarned: amount }
-      : isContractor
-        ? { pocketBalance: amount }
-        : isWorker
-          ? { pocketBalance: amount, availableBalance: amount, balance: amount }
-          : { availableBalance: amount, balance: amount };
+    const incOps = isContractor
+      ? { pocketBalance: amount }
+      : { availableBalance: amount, balance: amount, totalEarned: amount };
 
     const updatedWallet = await Wallet.findOneAndUpdate(
       { phone, "transactions.paymentId": { $ne: paymentId } },
@@ -1700,16 +1726,14 @@ router.post("/deposit/webhook", async (req, res) => {
               ? `Pending cash deposit settled via webhook (${paymentId})`
               : isContractor
                 ? `Pocket balance deposit via webhook (${paymentId})`
-                : isWorker
-                  ? `Worker deposit credited to available + pocket via webhook (${paymentId})`
-                  : `Wallet deposit via webhook (${paymentId})`,
+                : `Worker deposit credited to available via webhook (${paymentId})`,
             source: "webhook",
             provider: "razorpay",
             providerEventId: paymentId,
             idempotencyKey: paymentId,
             metadata: {
               webhookEvent: event,
-              balanceType: isCashDeposit ? "pocket" : isContractor ? "pocket" : isWorker ? "available+pocket" : "available",
+              balanceType: isCashDeposit ? "available" : isContractor ? "pocket" : "available",
               verifiedAt: new Date(),
             },
           }),
