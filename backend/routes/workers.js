@@ -9,6 +9,7 @@ const District = require("../models/City");
 const GigHistory = require("../models/GigHistory");
 const IncentiveLedger = require("../models/IncentiveLedger");
 const CashDeposit = require("../models/CashDeposit");
+const { getWeekBounds } = require("../utils/weekBounds");
 const {
   calculateEligibility,
   MILESTONE_IDS,
@@ -765,18 +766,11 @@ function createWorkersRouter({
       };
 
       const now = new Date();
+      const { start: weekStart, endExclusive: weekEnd } = getWeekBounds(now);
       const todayStart = new Date(now);
       todayStart.setHours(0, 0, 0, 0);
       const todayEnd = new Date(todayStart);
       todayEnd.setDate(todayEnd.getDate() + 1);
-
-      // Week window: Monday 00:00 -> next Monday 00:00 (local time)
-      const weekStart = new Date(todayStart);
-      const dayOfWeek = weekStart.getDay(); // 0=Sunday, 1=Monday...
-      const diffToMonday = (dayOfWeek + 6) % 7;
-      weekStart.setDate(weekStart.getDate() - diffToMonday);
-      const weekEnd = new Date(weekStart);
-      weekEnd.setDate(weekEnd.getDate() + 7);
 
       const workerJobQuery = {
         $or: [

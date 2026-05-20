@@ -14,6 +14,7 @@ const Job = require("../models/Jobs");
 const NotificationHistory = require("../models/NotificationHistory");
 const { sendOpsAlert } = require("../utils/opsAlert");
 const axios = require('axios');
+const { getWeekBounds } = require('../utils/weekBounds');
 
 async function createRazorpayPayout({ withdrawalId, amountPaise, payoutMethod, bankAccount, upiId, phone, loggerContext = {} }) {
   const key = process.env.RAZORPAY_KEY_ID;
@@ -354,30 +355,6 @@ async function findPendingDuplicateWithdrawal({ phone, amount, payoutMethod, ide
   }).sort({ createdAt: -1 });
 }
 
-const PAYOUT_CYCLE_ANCHOR_ISO = process.env.PAYOUT_CYCLE_ANCHOR_ISO || "2025-02-25T00:00:00+05:30";
-const PAYOUT_CYCLE_MS = 7 * 24 * 60 * 60 * 1000;
-
-function getWeekBounds(now = new Date()) {
-  const anchor = new Date(PAYOUT_CYCLE_ANCHOR_ISO);
-  if (Number.isNaN(anchor.getTime())) {
-    const fallbackStart = new Date(now);
-    const day = fallbackStart.getDay(); // 0=Sun
-    const diff = day === 0 ? -6 : 1 - day; // Monday-start week fallback
-    fallbackStart.setDate(fallbackStart.getDate() + diff);
-    fallbackStart.setHours(0, 0, 0, 0);
-    const fallbackEnd = new Date(fallbackStart);
-    fallbackEnd.setDate(fallbackEnd.getDate() + 7);
-    return { start: fallbackStart, endExclusive: fallbackEnd };
-  }
-
-  const elapsedMs = now.getTime() - anchor.getTime();
-  const cycleIndex = Math.floor(elapsedMs / PAYOUT_CYCLE_MS);
-  const cycleStartMs = anchor.getTime() + cycleIndex * PAYOUT_CYCLE_MS;
-  const start = new Date(cycleStartMs);
-  const endExclusive = new Date(cycleStartMs + PAYOUT_CYCLE_MS);
-  return { start, endExclusive };
-}
-
 function computeWorkerWeeklyMetrics(walletDoc, now = new Date()) {
   const { start, endExclusive } = getWeekBounds(now);
   const txs = Array.isArray(walletDoc?.transactions) ? walletDoc.transactions : [];
@@ -390,6 +367,8 @@ function computeWorkerWeeklyMetrics(walletDoc, now = new Date()) {
   let pocketDeposits = 0;
   let otherCredits = 0;
   let totalWithdrawn = 0;
+  let availableChange = 0;
+  let pocketChange = 0;
   const dailyTotals = {};
   for (let i = 0; i < 7; i += 1) {
     const day = new Date(start);
@@ -408,17 +387,28 @@ function computeWorkerWeeklyMetrics(walletDoc, now = new Date()) {
 
     const normalizedType = String(tx.type || '').toLowerCase();
     const normalizedSource = String(tx?.metadata?.source || tx.source || '').toLowerCase();
+    const balanceType = String(tx?.metadata?.balanceType || '').toLowerCase();
     const isJobPayment = normalizedType === 'payment';
     const isIncentive = normalizedType === 'incentive_reward' || normalizedSource === 'incentive';
     const isReferral = normalizedType === 'referral_reward' || normalizedType === 'referral' || normalizedSource === 'referral';
     const isCashDeposit = normalizedType === 'cash_deposit';
     const isPocketDeposit = normalizedType === 'pocket_deposit';
-    const isDepositAvailable = normalizedType === 'deposit' && String(tx?.metadata?.balanceType || '').toLowerCase() !== 'pocket';
-    const isDepositPocket = normalizedType === 'deposit' && String(tx?.metadata?.balanceType || '').toLowerCase() === 'pocket';
+    const isDepositAvailable = normalizedType === 'deposit' && balanceType !== 'pocket';
+    const isDepositPocket = normalizedType === 'deposit' && balanceType === 'pocket';
+    const isPocketReferral = isReferral && balanceType === 'pocket';
+    const isAvailableReferral = isReferral && balanceType !== 'pocket';
     const isEarning = isJobPayment || isIncentive || isReferral || isCashDeposit || isPocketDeposit || isDepositAvailable || isDepositPocket;
 
     if (isEarning) {
       earnings += amount;
+      const isPocketCredit = isPocketDeposit || isDepositPocket || isPocketReferral;
+      const isAvailableCredit = isJobPayment || isIncentive || isCashDeposit || isDepositAvailable || isAvailableReferral;
+      if (isPocketCredit) {
+        pocketChange += amount;
+      } else if (isAvailableCredit) {
+        availableChange += amount;
+      }
+
       if (isJobPayment) jobPayments += amount;
       else if (isIncentive) incentiveRewards += amount;
       else if (isReferral) referralRewards += amount;
@@ -430,12 +420,48 @@ function computeWorkerWeeklyMetrics(walletDoc, now = new Date()) {
         dailyTotals[dayKey] += amount;
       }
     }
+
     if (normalizedType === 'withdraw') {
       const fromPocket = String(tx?.metadata?.balanceSource || '').toLowerCase() === 'pocket';
-      if (!fromPocket) deducted += amount;
+      if (fromPocket) {
+        pocketChange -= amount;
+      } else {
+        deducted += amount;
+        availableChange -= amount;
+      }
       totalWithdrawn += amount;
     }
+
+    if (normalizedType === 'payout_settlement') {
+      const settleAvailable = Number(tx?.metadata?.availableSettle || 0);
+      const settlePocket = Number(tx?.metadata?.pocketSettle || 0);
+      if (settleAvailable > 0) {
+        availableChange -= settleAvailable;
+        deducted += settleAvailable;
+      }
+      if (settlePocket > 0) {
+        pocketChange -= settlePocket;
+      }
+      totalWithdrawn += settleAvailable + settlePocket;
+    }
+
+    if (normalizedType === 'refund') {
+      const refundFromPocket = String(tx?.metadata?.balanceSource || '').toLowerCase() === 'pocket';
+      if (refundFromPocket) {
+        pocketChange += amount;
+      } else {
+        availableChange += amount;
+      }
+    }
   }
+
+  const currentAvailable = Number(walletDoc.availableBalance ?? walletDoc.balance ?? 0);
+  const currentPocket = Number(walletDoc.pocketBalance ?? 0);
+  const startingAvailableBalance = Math.max(0, currentAvailable - availableChange);
+  const startingPocketBalance = Math.max(0, currentPocket - pocketChange);
+  const startingTotalBalance = startingAvailableBalance + startingPocketBalance;
+  const currentTotalBalance = currentAvailable + currentPocket;
+  const totalBalanceChange = availableChange + pocketChange;
 
   const available = Math.max(0, earnings - deducted);
   const netEarnings = Math.max(0, earnings - deducted);
@@ -446,6 +472,15 @@ function computeWorkerWeeklyMetrics(walletDoc, now = new Date()) {
     grossEarnings: earnings,
     netEarnings,
     totalWithdrawn,
+    availableChange,
+    pocketChange,
+    totalBalanceChange,
+    startingAvailableBalance,
+    startingPocketBalance,
+    startingTotalBalance,
+    currentAvailableBalance: currentAvailable,
+    currentPocketBalance: currentPocket,
+    currentTotalBalance,
     categoryTotals: {
       jobPayments,
       incentiveRewards,

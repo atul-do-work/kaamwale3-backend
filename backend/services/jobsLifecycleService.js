@@ -983,6 +983,26 @@ async function payJob({ jobId, mode, workerPhone, idempotencyKey, userPhone, use
       console.error("Error emitting cash payment event to contractor:", contractorEmitErr);
     }
   }
+
+  // ✅ CRITICAL: Emit real-time incentive update to worker after job completion
+  // This triggers immediate UI refresh for consecutive days counter
+  if (io && paymentWorkerPhone) {
+    try {
+      const { emitIncentiveUpdatedEvent } = require('./incentiveEligibilityService');
+      emitIncentiveUpdatedEvent(paymentWorkerPhone, {
+        type: 'job_completed_incentive_refresh',
+        jobId: job._id.toString(),
+        jobTitle: job.title,
+        hoursWorked: job.hoursWorked || 0,
+        timeSpentMinutes: job.timeSpentMinutes || 0,
+        timestamp: new Date(),
+        message: 'Your consecutive days count may have been updated'
+      });
+    } catch (incentiveErr) {
+      console.error("Error emitting incentive update event after payment:", incentiveErr);
+    }
+  }
+
   return finalize({ code: 200, body: { success: true, message: "Payment successful", job } });
   } catch (err) {
     payInFlightLocks.delete(lockKey);
