@@ -8,7 +8,8 @@ const api = axios.create({ baseURL: API_BASE });
 let isRefreshing = false;
 let refreshQueue: Array<(token?: string | null, err?: any) => void> = [];
 
-const processQueue = (error: any, token: string | null = null) => {
+// processQueue(token, error) - call queued callbacks with (token, error)
+const processQueue = (token: string | null = null, error: any = null) => {
   refreshQueue.forEach(cb => cb(token, error));
   refreshQueue = [];
 };
@@ -28,7 +29,7 @@ api.interceptors.response.use(
         return new Promise((resolve, reject) => {
           refreshQueue.push((token, error) => {
             if (error) return reject(error);
-            originalReq.headers.Authorization = 'Bearer ' + token;
+            if (originalReq.headers) originalReq.headers.Authorization = 'Bearer ' + token;
             resolve(axios(originalReq));
           });
         });
@@ -43,11 +44,11 @@ api.interceptors.response.use(
         const response = await axios.post(`${API_BASE}/auth/refresh`, { refreshToken });
         const newToken = response.data.accessToken;
         await setAuthAccessToken(newToken);
-        processQueue(null, newToken);
-        originalReq.headers.Authorization = 'Bearer ' + newToken;
+        processQueue(newToken, null);
+        if (originalReq.headers) originalReq.headers.Authorization = 'Bearer ' + newToken;
         return axios(originalReq);
       } catch (e) {
-        processQueue(e, null);
+        processQueue(null, e);
         // Clear tokens
         await clearAuthTokens();
         throw e;

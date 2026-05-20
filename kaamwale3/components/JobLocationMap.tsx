@@ -11,6 +11,7 @@ import {
 } from '@maplibre/maplibre-react-native';
 import * as Location from 'expo-location';
 import * as Linking from 'expo-linking';
+import { locationPermissionHandler } from '../services/locationPermissionHandler';
 
 // ✅ MapTiler MapLibre-compatible styles (same as WorkerMap)
 const MAPTILER_API_KEY = "rmEy5CtIKMlSfVx4fckr"; 
@@ -84,17 +85,15 @@ export default function JobLocationMap({
       try {
         setLoading(true);
 
-        // Get current location
-        const { status } = await Location.requestForegroundPermissionsAsync();
-        if (status !== 'granted') {
+        const result = await locationPermissionHandler.getLocation();
+        if (!result.success || !result.location) {
           setLoading(false);
           return;
         }
 
-        const loc = await Location.getCurrentPositionAsync({});
         const currentLoc = {
-          latitude: loc.coords.latitude,
-          longitude: loc.coords.longitude,
+          latitude: result.location.latitude,
+          longitude: result.location.longitude,
         };
         
         if (mountedRef.current) {

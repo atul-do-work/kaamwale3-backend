@@ -322,7 +322,6 @@ export const translations = {
     documentRejected: "Document Rejected",
     pendingVerification: "Pending Verification",
     uploadDocument: "Upload Document",
-    documentsAndPolicies: "Documents and Policies",
     activityHistory: "Activity History",
     
     // Payment
@@ -992,7 +991,6 @@ export const translations = {
     documentRejected: "दस्तावेज़ अस्वीकृत",
     pendingVerification: "लंबित सत्यापन",
     uploadDocument: "दस्तावेज़ अपलोड करें",
-    documentsAndPolicies: "दस्तावेज़ और नीतियां",
     activityHistory: "गतिविधि इतिहास",
     
     // Payment
@@ -1367,7 +1365,6 @@ export const translations = {
     documentRejected: "दस्तऐवज नाकारली",
     pendingVerification: "प्रलंबित सत्यापन",
     uploadDocument: "दस्तऐवज अपलोड करा",
-    documentsAndPolicies: "दस्तऐवज आणि धोरणे",
     activityHistory: "क्रियाकलाप इतिहास",
     availableBalance: "उपलब्ध शेष",
     depositLabel: "जमा",

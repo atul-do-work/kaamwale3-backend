@@ -7,6 +7,7 @@ import { useRouter } from 'expo-router';
 import { useFocusEffect, useIsFocused } from '@react-navigation/native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Location from 'expo-location';
+import { locationPermissionHandler } from '../../../services/locationPermissionHandler';
 import { socket } from '../../../utils/socket';
 import { SERVER_URL, API_BASE } from '../../../utils/config';
 import PremiumPlansModal from '../../../components/PremiumPlansModal';
@@ -937,20 +938,13 @@ export default function ContractorHome() {
       setRequestingLocation(true);
       console.log('Requesting location permission for contractor...');
 
-      const { status } = await Location.requestForegroundPermissionsAsync();
-      
-      if (status !== 'granted') {
-        console.warn('Location permission denied');
+      const result = await locationPermissionHandler.getLocation();
+      if (!result.success || !result.location) {
+        console.warn('Location permission or location retrieval failed:', result.error);
         return false;
       }
 
-      console.log('? Location permission granted, getting position...');
-      const location = await Location.getCurrentPositionAsync({
-        accuracy: Location.Accuracy.Balanced,
-      });
-
-      const latitude = location.coords.latitude;
-      const longitude = location.coords.longitude;
+      const { latitude, longitude } = result.location;
 
       console.log(`Location obtained: lat=${latitude}, lon=${longitude}`);
 

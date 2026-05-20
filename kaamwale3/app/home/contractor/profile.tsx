@@ -1,10 +1,11 @@
-import React, { useEffect, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import { View, Text, ScrollView, TouchableOpacity, Modal, Image, DimensionValue } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { MaterialIcons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import { useRouter } from "expo-router";
+import { useFocusEffect } from "@react-navigation/native";
 import * as ImagePicker from "expo-image-picker";
 import { API_BASE } from "../../../utils/config";
 import { clearAllUserData } from "../../../utils/socket";
@@ -40,6 +41,17 @@ const Bubble = ({
     }}
   />
 );
+
+const isJobFullyPaid = (job: any): boolean => {
+  const paymentStatus = String(job?.paymentStatus || "").toLowerCase();
+  if (paymentStatus === "paid") return true;
+  if (Array.isArray(job?.acceptedWorkers)) {
+    return job.acceptedWorkers.some((worker: any) =>
+      String(worker?.paymentStatus || "").toLowerCase() === "paid"
+    );
+  }
+  return false;
+};
 
 const styles = StyleSheet.create({
   container: {
@@ -338,6 +350,8 @@ export default function ContractorProfile(): React.ReactElement {
   const [profilePhoto, setProfilePhoto] = useState<string | null>(null);
   const [uploadProgress, setUploadProgress] = useState(0);
   const { jobsCompleted, totalJobs, rating } = useContractorStats();
+  const [overviewPosted, setOverviewPosted] = useState<number | null>(null);
+  const [overviewCompleted, setOverviewCompleted] = useState<number | null>(null);
   const [viewWorkersModalVisible, setViewWorkersModalVisible] = useState(false);
   const [referralModalVisible, setReferralModalVisible] = useState(false);
 
@@ -365,6 +379,40 @@ export default function ContractorProfile(): React.ReactElement {
       }
     })();
   }, [authUser]);
+
+  useFocusEffect(
+    useCallback(() => {
+      const fetchContractorJobsOverview = async () => {
+        if (!accessToken || !authUser?.phone) return;
+
+        try {
+          const response = await fetch(`${API_BASE}/jobs`, {
+            method: "GET",
+            headers: {
+              Authorization: `Bearer ${accessToken}`,
+              "Content-Type": "application/json",
+            },
+          });
+
+          if (!response.ok) {
+            throw new Error(`Failed to fetch jobs: ${response.status}`);
+          }
+
+          const jobs = await response.json();
+          const myJobs = Array.isArray(jobs)
+            ? jobs.filter((job: any) => job.contractorPhone === authUser.phone && !job.isCancelled)
+            : [];
+
+          setOverviewPosted(myJobs.length);
+          setOverviewCompleted(myJobs.filter(isJobFullyPaid).length);
+        } catch (err) {
+          console.error("Contractor profile overview fetch error:", err);
+        }
+      };
+
+      fetchContractorJobsOverview();
+    }, [accessToken, authUser?.phone])
+  );
 
   const handleLogout = () => {
     setModalType("confirm");
@@ -538,6 +586,7 @@ export default function ContractorProfile(): React.ReactElement {
       color: "#F39C12",
       options: [
         { name: t("settings"), icon: "settings", screen: "/Settings" },
+        { name: t("verification"), icon: "verified-user", screen: "/Verification" },
         { name: t("helpCentre"), icon: "help", screen: "/HelpCentre" },
       ],
     },
@@ -596,11 +645,11 @@ export default function ContractorProfile(): React.ReactElement {
           <Text style={styles.sectionTitle}>Overview</Text>
           <View style={styles.statsContainer}>
             {[
-              { label: "Posted", value: (totalJobs || 0).toString(), icon: "work", color: "#667eea" },
-              { label: "Completed", value: (jobsCompleted || 0).toString(), icon: "check-circle", color: "#2ECC71" },
+              { label: "Posted", value: ((overviewPosted ?? totalJobs) || 0).toString(), icon: "work", color: "#667eea" },
+              { label: "Completed", value: ((overviewCompleted ?? jobsCompleted) || 0).toString(), icon: "check-circle", color: "#2ECC71" },
             ].map((stat, idx) => (
               <View key={idx} style={styles.statCard}>
-                <View style={[styles.statIcon, { backgroundColor: stat.color + "20" }]}>
+                <View style={[styles.statIcon, { backgroundColor: stat.color + "20" }]}> 
                   <MaterialIcons name={stat.icon as any} size={22} color={stat.color} />
                 </View>
                 <Text style={styles.statValue}>{stat.value}</Text>

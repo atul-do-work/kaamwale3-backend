@@ -114,12 +114,17 @@ class LocationPermissionHandler {
   }
 
   private async getCachedPermission(): Promise<{ granted: boolean; timestamp: number } | null> {
+    if (this.permissionCache && ((Date.now() - this.permissionCache.timestamp) < this.CACHE_TTL)) {
+      return this.permissionCache;
+    }
+
     try {
       const cached = await AsyncStorage.getItem('locationPermission');
       if (cached) {
         const parsed = JSON.parse(cached);
         // Check if cache is still valid
         if ((Date.now() - parsed.timestamp) < this.CACHE_TTL) {
+          this.permissionCache = parsed;
           return parsed;
         }
       }
@@ -135,6 +140,7 @@ class LocationPermissionHandler {
         granted,
         timestamp: Date.now(),
       };
+      this.permissionCache = cacheData;
       await AsyncStorage.setItem('locationPermission', JSON.stringify(cacheData));
     } catch (error) {
       console.error('❌ Error caching location permission:', error);

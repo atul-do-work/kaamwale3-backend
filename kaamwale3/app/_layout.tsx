@@ -3,7 +3,7 @@ import * as SplashScreen from 'expo-splash-screen';
 import { useEffect, useRef, useState, Suspense } from 'react';
 import * as Notifications from 'expo-notifications';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { Alert, AppState, Modal, Text, TouchableOpacity, View, type AlertButton, type AlertOptions } from 'react-native';
+import { Alert, AppState, Modal, Text, TouchableOpacity, View, Animated, Easing, type AlertButton, type AlertOptions } from 'react-native';
 import { registerForPushNotificationsAsync } from '../services/notification';
 import { LanguageProvider } from '../context/LanguageContext';
 import { AuthProvider } from '../context/AuthContext';
@@ -29,12 +29,83 @@ Notifications.setNotificationHandler({
 // Create a client
 const queryClient = new QueryClient();
 
+function AnimatedLogoSplash() {
+  const scale = useRef(new Animated.Value(0.98)).current;
+  const rotate = useRef(new Animated.Value(0)).current;
+  const opacity = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    Animated.timing(opacity, { toValue: 1, duration: 300, useNativeDriver: true }).start();
+
+    rotate.setValue(0);
+    const rotateLoop = Animated.loop(
+      Animated.timing(rotate, { toValue: 1, duration: 2000, useNativeDriver: true, easing: Easing.linear })
+    );
+    rotateLoop.start();
+
+    const scaleLoop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(scale, { toValue: 1.06, duration: 700, useNativeDriver: true, easing: Easing.inOut(Easing.ease) }),
+        Animated.timing(scale, { toValue: 0.98, duration: 700, useNativeDriver: true, easing: Easing.inOut(Easing.ease) }),
+      ])
+    );
+    scaleLoop.start();
+
+    return () => {
+      rotateLoop.stop();
+      scaleLoop.stop();
+      opacity.stopAnimation();
+    };
+  }, [rotate, scale, opacity]);
+
+  const rotateInterpolate = rotate.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '360deg'] });
+
+  return (
+    <Animated.View
+      style={{
+        position: 'absolute',
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
+        backgroundColor: '#ffffff',
+        justifyContent: 'center',
+        alignItems: 'center',
+        zIndex: 9999,
+        opacity: opacity,
+      }}
+    >
+      <Animated.Image
+        source={require('../assets/icon.png')}
+        resizeMode="contain"
+        style={{
+          width: 180,
+          height: 180,
+          transform: [{ scale }, { rotate: rotateInterpolate }],
+        }}
+      />
+      <Text
+        style={{
+          marginTop: 20,
+          fontSize: 16,
+          fontWeight: '600',
+          color: '#1a7fe0',
+          letterSpacing: 1,
+        }}
+      >
+        KAAMWALE
+      </Text>
+    </Animated.View>
+  );
+}
+
 export default function RootLayout() {
   const [modalVisible, setModalVisible] = useState(false);
   const [modalTitle, setModalTitle] = useState('');
   const [modalMessage, setModalMessage] = useState('');
   const [modalButtons, setModalButtons] = useState<AlertButton[]>([{ text: 'OK' }]);
   const [modalOptions, setModalOptions] = useState<AlertOptions | undefined>(undefined);
+  const [lottieFinished, setLottieFinished] = useState(false);
   const originalAlertRef = useRef(Alert.alert);
   const dismissAlert = () => {
     if (modalOptions?.cancelable === false) return;
@@ -90,8 +161,11 @@ export default function RootLayout() {
       } catch (error) {
         console.error('❌ Error initializing FCM:', error);
       } finally {
-        // Hide splash screen
-        SplashScreen.hideAsync().catch(() => {});
+        // ✅ Mark Lottie animation as finished and hide splash screen
+        setLottieFinished(true);
+        setTimeout(() => {
+          SplashScreen.hideAsync().catch(() => {});
+        }, 500);
       }
     };
 
@@ -164,6 +238,9 @@ export default function RootLayout() {
         <AuthProvider>
           <LanguageProvider>
             <View style={{ flex: 1 }}>
+              {/* ✅ Animated Logo Splash Overlay */}
+              {!lottieFinished && <AnimatedLogoSplash />}
+
               <Suspense fallback={<View style={{ flex: 1, backgroundColor: '#fff' }} />}>
                 <Stack screenOptions={{ headerShown: false }}>
                   {/* Login/Auth screen is the entry point */}
@@ -183,14 +260,13 @@ export default function RootLayout() {
                   <Stack.Screen name="verify-otp" />
                   <Stack.Screen name="dashboard/index" />
                   <Stack.Screen name="ActivityHistory" />
-                  <Stack.Screen name="DocumentsAndPolicies" />
+                  <Stack.Screen name="Verification" />
                   <Stack.Screen name="GigHistory" />
                   <Stack.Screen name="HelpCentre" />
                   <Stack.Screen name="NotificationHistory" />
                   <Stack.Screen name="PaymentHistory" />
                   <Stack.Screen name="Settings" />
                   <Stack.Screen name="SupportTickets" />
-                  <Stack.Screen name="Verification" />
                   <Stack.Screen name="VideosAndTutorials" />
                   <Stack.Screen name="BrowseJobs" />
                 </Stack>

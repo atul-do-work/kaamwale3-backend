@@ -40,7 +40,14 @@ interface VerificationStatus {
   verifiedAt?: string;
 }
 
-const DOCUMENT_TYPES = [
+const DOCUMENT_TYPES_WORKER = [
+  { id: "aadhar", label: "Aadhar Card", icon: "credit-card" },
+  { id: "pan", label: "PAN Card", icon: "credit-card" },
+  { id: "policy", label: "90-Day Policy", icon: "policy" },
+  { id: "bank_account", label: "Bank Account", icon: "account-balance" },
+];
+
+const DOCUMENT_TYPES_CONTRACTOR = [
   { id: "aadhar", label: "Aadhar Card", icon: "credit-card" },
   { id: "pan", label: "PAN Card", icon: "credit-card" },
   { id: "voter", label: "Voter ID", icon: "how-to-vote" },
@@ -80,7 +87,7 @@ async function validateVerificationFile(uri: string) {
 
 export default function VerificationScreen(): React.ReactElement {
   const router = useRouter();
-  const { accessToken } = useAuth();
+  const { accessToken, user } = useAuth();
   const [verificationStatus, setVerificationStatus] =
     useState<VerificationStatus | null>(null);
   const [loading, setLoading] = useState(true);
@@ -304,6 +311,7 @@ export default function VerificationScreen(): React.ReactElement {
 
   const documentList =
     verificationStatus?.documents || [];
+  const documentTypes = user?.role === 'worker' ? DOCUMENT_TYPES_WORKER : DOCUMENT_TYPES_CONTRACTOR;
   const alreadySubmittedTypes = documentList
     .filter((doc) =>
       doc.verificationStatus === "pending" ||
@@ -421,7 +429,7 @@ export default function VerificationScreen(): React.ReactElement {
 
           {!selectedDocType ? (
             <View style={styles.docTypeGrid}>
-              {DOCUMENT_TYPES.map((doc) => {
+              {((user?.role === 'worker') ? DOCUMENT_TYPES_WORKER : DOCUMENT_TYPES_CONTRACTOR).map((doc) => {
                 const disabled = alreadySubmittedTypes.includes(doc.id);
                 return (
                   <TouchableOpacity
@@ -453,7 +461,7 @@ export default function VerificationScreen(): React.ReactElement {
               <View style={styles.selectedDocRow}>
                 <View>
                   <Text style={styles.selectedDocLabel}>Selected document</Text>
-                  <Text style={styles.selectedDocText}>{DOCUMENT_TYPES.find((d) => d.id === selectedDocType)?.label}</Text>
+                  <Text style={styles.selectedDocText}>{documentTypes.find((d) => d.id === selectedDocType)?.label}</Text>
                 </View>
                 <TouchableOpacity onPress={() => { setSelectedDocType(null); setSelectedFile(null); }}>
                   <MaterialIcons name="close" size={20} color="#EF4444" />
@@ -540,7 +548,7 @@ export default function VerificationScreen(): React.ReactElement {
                   </View>
                   <View>
                     <Text style={styles.docName}>
-                      {DOCUMENT_TYPES.find((d) => d.id === doc.type)?.label ||
+                      {documentTypes.find((d) => d.id === doc.type)?.label ||
                         doc.type}
                     </Text>
                     <Text style={styles.docDate}>

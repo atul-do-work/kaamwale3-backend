@@ -25,6 +25,7 @@ import { socket } from "../../../utils/socket";
 import { useLanguage } from "../../../context/LanguageContext";
 import { useAuth } from "../../../context/AuthContext";
 import api from "../../../utils/api";
+import { buildRazorpayCheckoutHtml, isAllowedRazorpayUrl } from "../../../utils/razorpayUtils";
 import ReferralModal from "../../../components/ReferralModal";
 import { useWalletBalance } from "../../../hooks/useWalletBalance"; // ✅ Smart caching hook
 
@@ -486,6 +487,8 @@ export default function ContractorWalletAttendance() {
   // Pay worker - supports mode: "Cash" | "Online" (keeps existing logic)
   const payWorker = async (jobId: string, mode: string = "Cash", workerPhone?: string) => {
     try {
+      // ✅ Generate idempotency key to prevent duplicate payments
+      const idempotencyKey = buildPaymentIdempotencyKey(jobId, workerPhone, mode);
       const res = await api.post(
         `/jobs/pay/${jobId}`,
         { mode, workerPhone, idempotencyKey: buildPaymentIdempotencyKey(jobId, workerPhone, mode) },
@@ -498,18 +501,20 @@ export default function ContractorWalletAttendance() {
       const data = res.data;
 
       if (data.success) {
+        console.log("✅ Payment successful:", data);
         showAppModal("success", t('success'), t('paymentSuccessful'));
         // Keep UI responsive even if socket update is delayed.
         await fetchJobs();
       } else {
-        console.error("Payment error response:", data.message);
+        console.error("❌ Payment error response:", data.message);
         showAppModal("error", t('error'), data.message || t('paymentFailed'));
         // Even on error, refresh jobs in case payment actually succeeded but response failed
         await fetchJobs();
       }
     } catch (err: any) {
-      console.error("Payment failed:", err?.response?.data || err?.message || err);
+      console.error("❌ Payment failed:", err?.response?.data || err?.message || err);
       const errorMsg = err?.response?.data?.message || err?.message || t('paymentFailed');
+      console.log("Error details:", err?.response?.status, err?.response?.data);
       showAppModal("error", t('error'), errorMsg);
       // Even on network error, refresh jobs in case payment actually succeeded
       await fetchJobs();
@@ -545,61 +550,20 @@ export default function ContractorWalletAttendance() {
         return showAppModal("error", t('error'), t('failedCreatePayment'));
       }
 
-      // Step 2: Create Razorpay checkout HTML
-      const razorpayHtml = `
-        <!DOCTYPE html>
-        <html>
-        <head>
-          <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
-          <style>
-            body { margin: 0; padding: 0; background: #f5f5f5; }
-            #checkout-container { display: flex; justify-content: center; align-items: center; height: 100vh; }
-          </style>
-        </head>
-        <body>
-          <div id="checkout-container">
-            <p>Opening Razorpay Checkout...</p>
-          </div>
-          <script>
-            var options = {
-              "key": "${orderRes.data.key_id}",
-              "amount": ${orderRes.data.amount},
-              "currency": "INR",
-              "name": "Kaamwale",
-              "description": "Payment for job: ${job.title}",
-              "order_id": "${orderRes.data.orderId}",
-              "handler": function (response){
-                window.ReactNativeWebView.postMessage(JSON.stringify({
-                  type: 'payment_success',
-                  paymentId: response.razorpay_payment_id,
-                  orderId: response.razorpay_order_id,
-                  signature: response.razorpay_signature
-                }));
-              },
-              "prefill": {
-                "name": "Test",
-                "email": "test@example.com",
-                "contact": "9999999999"
-              },
-              "theme": {
-                "color": "#1a2f4d"
-              }
-            };
-            var rzp1 = new Razorpay(options);
-            rzp1.open();
-            
-            rzp1.on('payment.failed', function (response){
-              window.ReactNativeWebView.postMessage(JSON.stringify({
-                type: 'payment_failed',
-                error: response.error.description
-              }));
-            });
-          </script>
-        </body>
-        </html>
-      `;
-
-      setRazorpayHtml(razorpayHtml);
+      setRazorpayHtml(
+        buildRazorpayCheckoutHtml({
+          keyId: orderRes.data.key_id,
+          orderId: orderRes.data.orderId,
+          amount: orderRes.data.amount,
+          name: authUser?.name || 'Kaamwale',
+          description: `Payment for job: ${job.title}`,
+          prefillName: authUser?.name || '',
+          prefillEmail: authUser?.email || '',
+          prefillContact: authUser?.phone || '',
+          successEvent: 'payment_success',
+          failureEvent: 'payment_failed',
+        })
+      );
       setCurrentPaymentJobId(jobId);
       setCurrentPaymentWorkerPhone((workerPhone || job.workerPhone || job.acceptedBy || null) as string | null);
       setRazorpayModalVisible(true);
@@ -889,63 +853,20 @@ export default function ContractorWalletAttendance() {
 
       // ✅ SECURITY: Get amount from backend response, NOT frontend calculation
       const { orderId, key_id, amount } = orderRes.data;
-
-      // Step 2: Create Razorpay checkout HTML
-      // ✅ SECURITY: Use real authenticated user data + amount from backend
-      const razorpayHtml = `
-        <!DOCTYPE html>
-        <html>
-        <head>
-          <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
-          <style>
-            body { margin: 0; padding: 0; background: #f5f5f5; }
-            #checkout-container { display: flex; justify-content: center; align-items: center; height: 100vh; }
-          </style>
-        </head>
-        <body>
-          <div id="checkout-container">
-            <p>Opening Razorpay Checkout...</p>
-          </div>
-          <script>
-            var options = {
-              "key": "${key_id}",
-              "amount": ${amount},
-              "currency": "INR",
-              "name": "Kaamwale Wallet",
-              "description": "Wallet Deposit",
-              "order_id": "${orderId}",
-              "handler": function (response){
-                window.ReactNativeWebView.postMessage(JSON.stringify({
-                  type: 'deposit_success',
-                  paymentId: response.razorpay_payment_id,
-                  orderId: response.razorpay_order_id,
-                  signature: response.razorpay_signature
-                }));
-              },
-              "prefill": {
-                "name": "${authUser?.name || ''}",
-                "email": "${authUser?.email || ''}",
-                "contact": "${authUser?.phone || ''}"
-              },
-              "theme": {
-                "color": "#1a2f4d"
-              }
-            };
-            var rzp1 = new Razorpay(options);
-            rzp1.open();
-            
-            rzp1.on('payment.failed', function (response){
-              window.ReactNativeWebView.postMessage(JSON.stringify({
-                type: 'deposit_failed',
-                error: response.error.description
-              }));
-            });
-          </script>
-        </body>
-        </html>
-      `;
-
-      setDepositModalHtml(razorpayHtml);
+      setDepositModalHtml(
+        buildRazorpayCheckoutHtml({
+          keyId: key_id,
+          orderId,
+          amount,
+          name: 'Kaamwale Wallet',
+          description: 'Wallet Deposit',
+          prefillName: authUser?.name || '',
+          prefillEmail: authUser?.email || '',
+          prefillContact: authUser?.phone || '',
+          successEvent: 'deposit_success',
+          failureEvent: 'deposit_failed',
+        })
+      );
       setDepositModalVisible(true);
       setCurrentDepositAmount(Number(depositAmount));
       setCurrentDepositOrderId(orderId);
@@ -1612,6 +1533,15 @@ export default function ContractorWalletAttendance() {
               onMessage={handleRazorpayMessage}
               javaScriptEnabled={true}
               domStorageEnabled={true}
+              startInLoadingState={true}
+              originWhitelist={['*']}
+              onShouldStartLoadWithRequest={(request) => {
+                const isAllowed = isAllowedRazorpayUrl(request.url);
+                if (!isAllowed) {
+                  console.warn(`⚠️ Blocked Razorpay navigation: ${request.url}`);
+                }
+                return isAllowed;
+              }}
             />
           ) : (
             <View style={{ flex: 1, justifyContent: "center", alignItems: "center" }}>
@@ -1657,14 +1587,11 @@ export default function ContractorWalletAttendance() {
               startInLoadingState={true}
               originWhitelist={['*']}
               onShouldStartLoadWithRequest={(request) => {
-                // ✅ SECURITY: Only allow Razorpay checkout domain
-                const isRazorpayURL = request.url.startsWith('https://checkout.razorpay.com') ||
-                                      request.url.startsWith('https://api.razorpay.com') ||
-                                      request.url.startsWith('data:');
-                if (!isRazorpayURL) {
+                const isAllowed = isAllowedRazorpayUrl(request.url);
+                if (!isAllowed) {
                   console.warn(`⚠️ Blocked navigation to: ${request.url}`);
                 }
-                return isRazorpayURL;
+                return isAllowed;
               }}
             />
           ) : (

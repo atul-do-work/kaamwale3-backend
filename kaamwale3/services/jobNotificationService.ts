@@ -43,7 +43,6 @@ export const triggerJobAlert = async () => {
     }
 
     // AUDIO MODE - Critical for sound playback
-    console.log('📢 Setting audio mode...');
     try {
       await Audio.setAudioModeAsync({
         allowsRecordingIOS: false,
@@ -52,9 +51,7 @@ export const triggerJobAlert = async () => {
         shouldDuckAndroid: true,
         playThroughEarpieceAndroid: false,
       });
-      console.log('✅ Audio mode set successfully');
     } catch (e) {
-      console.error('❌ Failed to set audio mode:', e);
     }
 
     // SOUND - Load and play on loop
@@ -64,16 +61,12 @@ export const triggerJobAlert = async () => {
       
       // Load the sound file
       await sound.loadAsync(require('../assets/skype.mp3'));
-      console.log('✅ Sound loaded successfully');
       
       // Set to loop continuously
       await sound.setIsLoopingAsync(true);
-      console.log('🔄 Sound set to loop');
       
       // Play the sound
-      console.log('▶️ Playing sound on loop...');
       await sound.playAsync();
-      console.log('✅ Sound is now playing (looping until stopped)');
       
     } catch (e) {
       console.error('❌ Sound playback failed:', e);

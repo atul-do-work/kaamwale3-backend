@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useRef } from "react";
 import { View, Text, FlatList, Alert, Image, TouchableOpacity, Modal, RefreshControl, TextInput, ActivityIndicator, Linking } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import { useFocusEffect } from "@react-navigation/native";
 import { MaterialIcons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
@@ -15,6 +15,7 @@ import JobLocationMap from "../../../components/JobLocationMap";
 import { useLanguage } from "../../../context/LanguageContext";
 import { useJobStatus } from "../../../hooks/useJobStatus"; // ✅ Real-time job updates
 import { useAuth } from "../../../context/AuthContext"; // ✅ For auth context
+import { getWeekWindow } from "../../../utils/weeklyCycle";
 
 // Local construction image
 // import constructionImg from "@/assets/csite.png";
@@ -64,18 +65,6 @@ interface Job {
 const EMERGENCY_CALL_NUMBER = "112";
 const SUPPORT_CALL_NUMBER = "18001234567";
 
-const getWeekWindow = () => {
-  const now = new Date();
-  const weekStart = new Date(now);
-  weekStart.setHours(0, 0, 0, 0);
-  const day = weekStart.getDay(); // 0=Sun
-  const diffToMonday = (day + 6) % 7;
-  weekStart.setDate(weekStart.getDate() - diffToMonday);
-  const weekEnd = new Date(weekStart);
-  weekEnd.setDate(weekEnd.getDate() + 7);
-  return { weekStart, weekEnd };
-};
-
 const normalizePhoneDigits = (value: any) => String(value || "").replace(/\D/g, "").slice(-10);
 const getWorkerEntryForPhone = (job: Job, currentUserPhone?: string | null) => {
   if (!currentUserPhone || !Array.isArray((job as any)?.acceptedWorkers)) return null;
@@ -90,6 +79,31 @@ const isPaid = (job: Job, currentUserPhone?: string | null): boolean => {
   if (workerEntry && String(workerEntry?.paymentStatus || "").toLowerCase() === "paid") return true;
   return String(job?.paymentStatus || "").toLowerCase() === "paid";
 };
+
+const isCurrentUserAssignedToJob = (job: Job, currentUserPhone?: string | null): boolean => {
+  if (!currentUserPhone) return false;
+  const normalizedCurrent = normalizePhoneDigits(currentUserPhone);
+  if (!normalizedCurrent) return false;
+
+  const phoneMatches = (value?: string | null) => normalizePhoneDigits(value) === normalizedCurrent;
+
+  if (phoneMatches(job.acceptedBy)) return true;
+  const acceptedWorker = (job as any).acceptedWorker;
+  if (acceptedWorker) {
+    if (phoneMatches(acceptedWorker.phone) || phoneMatches(acceptedWorker.workerPhone) || phoneMatches(acceptedWorker.acceptedBy)) {
+      return true;
+    }
+  }
+
+  if (Array.isArray((job as any).acceptedWorkers)) {
+    return (job as any).acceptedWorkers.some((w: any) =>
+      phoneMatches(w?.phone) || phoneMatches(w?.workerPhone) || phoneMatches(w?.acceptedBy)
+    );
+  }
+
+  return false;
+};
+
 const isPaidStatus = (status?: string | null | undefined): boolean => String(status || "").toLowerCase() === "paid";
 
 const isJobDayExpired = (job: Job): boolean => {
@@ -120,6 +134,7 @@ export default function Jobs(): React.ReactElement {
   const router = useRouter();
   const { t } = useLanguage();
   const { accessToken } = useAuth();
+  const insets = useSafeAreaInsets();
   const [workerName, setWorkerName] = useState<string>("Test Worker");
   
   // ✅ Real-time job status with smart caching
@@ -404,10 +419,9 @@ export default function Jobs(): React.ReactElement {
         }
       }
       
-      // 🔐 CRITICAL: Compare with currentUserPhone (phone number) not workerName (name string)
-      // job.acceptedBy is a phone number, so we must compare with currentUserPhone
-      if (!currentUserPhone || job.acceptedBy !== currentUserPhone) {
-        console.log(`⚠️ Job ${job._id} acceptedBy (${job.acceptedBy}) doesn't match current user (${currentUserPhone}), ignoring`);
+      // 🔐 CRITICAL: Verify current user is assigned to this job using normalized phone matching
+      if (!isCurrentUserAssignedToJob(job, currentUserPhone)) {
+        console.log(`⚠️ Job ${job._id} is not assigned to current user (${currentUserPhone}), ignoring`);
         return;
       }
 
@@ -876,21 +890,16 @@ export default function Jobs(): React.ReactElement {
                   Your Rating
                 </Text>
                 {typeof job.rating?.stars === "number" ? (
-                  <View style={{ alignItems: "center" }}>
-                    <View style={{ flexDirection: "row" }}>
-                      {[1, 2, 3, 4, 5].map((star) => (
-                        <MaterialIcons
-                          key={star}
-                          name="star"
-                          size={12}
-                          color={star <= (job.rating?.stars ?? 0) ? "#FFD700" : "#DDD"}
-                          style={{ marginHorizontal: 1 }}
-                        />
-                      ))}
-                    </View>
-                    <Text style={{ color: "#333", fontSize: 11, fontWeight: "700", marginTop: 2 }}>
-                      {job.rating?.stars}/5
-                    </Text>
+                  <View style={{ flexDirection: "row" }}>
+                    {[1, 2, 3, 4, 5].map((star) => (
+                      <MaterialIcons
+                        key={star}
+                        name="star"
+                        size={12}
+                        color={star <= (job.rating?.stars ?? 0) ? "#FFD700" : "#DDD"}
+                        style={{ marginHorizontal: 1 }}
+                      />
+                    ))}
                   </View>
                 ) : (
                   <Text style={{ color: "#999", fontSize: 10 }}>—</Text>
@@ -916,9 +925,6 @@ export default function Jobs(): React.ReactElement {
                           />
                         ))}
                       </View>
-                      <Text style={{ color: "#333", fontSize: 11, fontWeight: "700", marginTop: 2 }}>
-                        {job.contractorRating?.stars}/5
-                      </Text>
                     </View>
                   ) : (
                     <Text style={{ color: "#999", fontSize: 10 }}>—</Text>
@@ -1042,7 +1048,8 @@ export default function Jobs(): React.ReactElement {
         data={previewJobs}
         keyExtractor={(item) => item._id}
         style={styles.container}
-        contentContainerStyle={{ paddingVertical: 12 }}
+        contentContainerStyle={{ paddingVertical: 12, paddingBottom: insets.bottom + 90 }}
+        ListFooterComponent={<View style={{ height: insets.bottom + 24 }} />}
         refreshControl={
           <RefreshControl refreshing={refreshing} onRefresh={handleRefresh} tintColor="#667eea" />
         }

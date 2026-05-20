@@ -19,12 +19,14 @@ import { useRouter } from "expo-router";
 import WorkerMap from "../../../components/WorkerMap";
 import FullContainer from "../../../components/FullContainer";
 import * as Location from "expo-location";
+import { locationPermissionHandler } from "../../../services/locationPermissionHandler";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { getAuthAccessToken, getRefreshToken, setAuthAccessToken } from "../../../utils/secureStore";
 import { socket } from "../../../utils/socket"; // ✅ Use global socket instead
 import { API_BASE } from "../../../utils/config";
 import { availabilityCacheManager } from "../../../utils/availabilityCacheManager"; // ✅ BUG #4: Smart caching
 import { useLanguage } from "../../../context/LanguageContext";
+import { getWeekWindow } from "../../../utils/weeklyCycle";
 import { 
   triggerJobAlert,
   cleanupJobAlert,
@@ -387,9 +389,23 @@ function WorkerHome() {
     } else if (isOnline === true) {
       // Worker went online
       console.log('🟢 Worker online - ensuring authenticated socket connected');
-      ensureSocketConnectedWithToken(token);
+      if (ensureSocketConnectedWithToken(token)) {
+        const emitWorkerOnline = () => {
+          const locationPayload = currentLocation
+            ? { lat: currentLocation.lat, lon: currentLocation.lon }
+            : {};
+          console.log('📡 Worker online - emitting workerOnline event', locationPayload);
+          socket.emit('workerOnline', { isAvailable: true, ...locationPayload });
+        };
+
+        if (socket.connected) {
+          emitWorkerOnline();
+        } else {
+          socket.once('connect', emitWorkerOnline);
+        }
+      }
     }
-  }, [isOnline, token, currentUserPhone]);
+  }, [isOnline, token, currentUserPhone, currentLocation]);
 
   // ✅ Check for user changes when screen comes into focus (no dependency on currentUserPhone to avoid stale closures)
   useFocusEffect(
@@ -552,20 +568,13 @@ function WorkerHome() {
       setRequestingLocation(true);
       console.log('📍 Requesting location permission...');
 
-      const { status } = await Location.requestForegroundPermissionsAsync();
-      
-      if (status !== 'granted') {
-        console.warn('⚠️ Location permission denied');
+      const result = await locationPermissionHandler.getLocation();
+      if (!result.success || !result.location) {
+        console.warn('⚠️ Location permission or location retrieval failed:', result.error);
         return false;
       }
 
-      console.log('✅ Location permission granted, getting position...');
-      const location = await Location.getCurrentPositionAsync({
-        accuracy: Location.Accuracy.Balanced,
-      });
-
-      const latitude = location.coords.latitude;
-      const longitude = location.coords.longitude;
+      const { latitude, longitude } = result.location;
 
       console.log(`📍 Location obtained: lat=${latitude}, lon=${longitude}`);
 
@@ -702,11 +711,10 @@ function WorkerHome() {
           try {
             console.log("[WorkerHome] Checking location availability...");
             
-            // Just get the current location if permission is already granted
-            try {
-              const loc = await Location.getCurrentPositionAsync({});
-              const lat = loc.coords.latitude;
-              const lon = loc.coords.longitude;
+            const locationResult = await locationPermissionHandler.getLocation();
+            if (locationResult.success && locationResult.location) {
+              const lat = locationResult.location.latitude;
+              const lon = locationResult.location.longitude;
               console.log(`[WorkerHome] Got location: ${lat}, ${lon}`);
 
               // Register worker with backend
@@ -719,11 +727,12 @@ function WorkerHome() {
 
               console.log("✅ Worker auto-registered with location:", { lat, lon });
               setCurrentLocation({ lat, lon });
-            } catch (locationErr) {
-              console.warn("⚠️ Location not available (permission not granted or error):", locationErr);
-              // Location permission will be requested in the separate "REQUEST LOCATION" effect
+            } else {
+              throw new Error(locationResult.error || 'Unable to get location');
             }
           } catch (locationErr) {
+            console.warn("⚠️ Location not available (permission not granted or error):", locationErr);
+            // Location permission will be requested in the separate "REQUEST LOCATION" effect
             console.error("❌ Failed to auto-register worker:", locationErr);
             const errMsg = locationErr instanceof Error ? locationErr.message : String(locationErr);
             setError(`Location error: ${errMsg}`);
@@ -1537,13 +1546,8 @@ function WorkerHome() {
 
     const scheduleWeeklyRefresh = () => {
       const now = new Date();
-      const boundary = new Date(now);
-      boundary.setHours(0, 0, 0, 0);
-      const day = boundary.getDay(); // 0=Sun
-      const daysToNextMonday = day === 0 ? 1 : 8 - day;
-      boundary.setDate(boundary.getDate() + daysToNextMonday);
-
-      const msUntilBoundary = Math.max(1000, boundary.getTime() - now.getTime());
+      const { weekEnd } = getWeekWindow(now);
+      const msUntilBoundary = Math.max(1000, weekEnd.getTime() - now.getTime());
       weekTimeout = setTimeout(() => {
         runRefresh();
         weekInterval = setInterval(runRefresh, 7 * 24 * 60 * 60 * 1000);
@@ -1716,14 +1720,14 @@ function WorkerHome() {
       if (newStatus) {
         try {
           console.log('📍 Getting fresh location for online status...');
-          const loc = await Location.getCurrentPositionAsync({
-            accuracy: Location.Accuracy.Balanced,
-          });
-          locationForToggle = {
-            latitude: loc.coords.latitude,
-            longitude: loc.coords.longitude,
-          };
-          console.log(`✅ Got location for toggle: lat=${locationForToggle.latitude}, lon=${locationForToggle.longitude}`);
+          const result = await locationPermissionHandler.getLocation();
+          if (result.success && result.location) {
+            locationForToggle = {
+              latitude: result.location.latitude,
+              longitude: result.location.longitude,
+            };
+            console.log(`✅ Got location for toggle: lat=${locationForToggle.latitude}, lon=${locationForToggle.longitude}`);
+          }
         } catch (locErr) {
           console.warn('⚠️ Could not get location for toggle:', locErr);
         }
@@ -2081,15 +2085,14 @@ function WorkerHome() {
     let mounted = true;
 
     (async () => {
-      const { status } = await Location.requestForegroundPermissionsAsync();
-      if (status !== "granted") {
-        console.warn("⚠️ Location permission not granted");
+      const result = await locationPermissionHandler.getLocation();
+      if (!result.success || !result.location) {
+        console.warn('⚠️ Location permission not granted or location unavailable:', result.error);
         return; // ✅ Silently return - don't show repeated alerts
       }
-      const loc = await Location.getCurrentPositionAsync({});
       if (!mounted) return;
 
-      const coords = { lat: loc.coords.latitude, lon: loc.coords.longitude };
+      const coords = { lat: result.location.latitude, lon: result.location.longitude };
       setCurrentLocation(coords);
 
       // Keep backend worker map aligned with actual coordinates after permission grant.

@@ -244,6 +244,57 @@ export default function DashboardScreen() {
     })();
   }, [accessToken, authUser, isAdmin]);
 
+  // ✅ Listen for real-time job updates (attendance, payment status changes)
+  useEffect(() => {
+    if (isAdmin) return;
+
+    const handleJobUpdated = (updatedJob: any) => {
+      if (!updatedJob || !updatedJob._id) return;
+
+      console.log(`📢 Job updated received: ${updatedJob._id}, status: ${updatedJob.status}, attendanceStatus: ${updatedJob.attendanceStatus}, paymentStatus: ${updatedJob.paymentStatus}`);
+
+      // Update jobs list in real-time
+      setJobs((prevJobs) => {
+        const index = prevJobs.findIndex((j) => String(j._id) === String(updatedJob._id) || String(j.id) === String(updatedJob._id));
+        if (index !== -1) {
+          const updated = [...prevJobs];
+          updated[index] = {
+            ...updated[index],
+            attendanceStatus: updatedJob.attendanceStatus,
+            paymentStatus: updatedJob.paymentStatus,
+            status: updatedJob.status,
+            acceptedWorkers: updatedJob.acceptedWorkers,
+            updatedAt: updatedJob.updatedAt,
+          };
+          console.log(`✅ Job list updated with new status`);
+          return updated;
+        }
+        return prevJobs;
+      });
+
+      // If the selected job is updated, refresh its details
+      if (selectedJob && String(selectedJob._id) === String(updatedJob._id)) {
+        setSelectedJob((prev) => {
+          if (!prev) return prev;
+          return {
+            ...prev,
+            attendanceStatus: updatedJob.attendanceStatus,
+            paymentStatus: updatedJob.paymentStatus,
+            status: updatedJob.status,
+            acceptedWorkers: updatedJob.acceptedWorkers,
+            updatedAt: updatedJob.updatedAt,
+          };
+        });
+      }
+    };
+
+    socket.on("jobUpdated", handleJobUpdated);
+
+    return () => {
+      socket.off("jobUpdated", handleJobUpdated);
+    };
+  }, [selectedJob]);
+
   // Listen for real-time worker location updates
   useEffect(() => {
     if (isAdmin) return;

@@ -12,7 +12,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
-import * as Location from 'expo-location';
+import { locationPermissionHandler } from '../services/locationPermissionHandler';
 import { socket } from '../utils/socket';
 import { useAuth } from '../context/AuthContext';
 import { jobRequestCacheManager } from '../utils/jobRequestCacheManager';
@@ -58,6 +58,7 @@ export default function ViewWorkersModal({
   const [loadingMore, setLoadingMore] = useState(false);
   const [jobRequestPanelVisible, setJobRequestPanelVisible] = useState(false);
   const [selectedWorker, setSelectedWorker] = useState<Worker | null>(null);
+  const [showWorkerInfo, setShowWorkerInfo] = useState(false);
   const [pendingRequests, setPendingRequests] = useState<{ [phone: string]: { requestId: string; timestamp: Date } }>({});
 
   useEffect(() => {
@@ -71,15 +72,10 @@ export default function ViewWorkersModal({
       }
 
       try {
-        const { status } = await Location.requestForegroundPermissionsAsync();
-        if (status !== 'granted') {
-          console.warn('Location permission denied');
-          return;
+        const result = await locationPermissionHandler.getLocation();
+        if (result.success && result.location) {
+          setUserLocation({ lat: result.location.latitude, lon: result.location.longitude });
         }
-
-        const location = await Location.getCurrentPositionAsync({});
-        const { latitude: lat, longitude: lon } = location.coords;
-        setUserLocation({ lat, lon });
       } catch (err) {
         console.error('Error getting location:', err);
       }
@@ -232,6 +228,7 @@ export default function ViewWorkersModal({
 
   const handleRequestWorker = (worker: Worker) => {
     setSelectedWorker(worker);
+    setShowWorkerInfo(true);
     setJobRequestPanelVisible(true);
     if (onRequestWorker) onRequestWorker(worker);
   };
@@ -239,6 +236,7 @@ export default function ViewWorkersModal({
   const closeJobRequestPanel = () => {
     setJobRequestPanelVisible(false);
     setSelectedWorker(null);
+    setShowWorkerInfo(false);
   };
 
   const handleRequestSent = (workerPhone: string, requestId: string) => {
@@ -468,18 +466,16 @@ export default function ViewWorkersModal({
         )}
       </SafeAreaView>
 
-      {jobRequestPanelVisible && selectedWorker ? (
+      {jobRequestPanelVisible && selectedWorker && (
         <JobRequestModal
-          visible={true}
+          visible={jobRequestPanelVisible}
           renderAsPanel={true}
           onClose={closeJobRequestPanel}
           worker={selectedWorker}
-          onRequestSent={(workerPhone, requestId) => {
-            handleRequestSent(workerPhone, requestId);
-            closeJobRequestPanel();
-          }}
+          onRequestSent={handleRequestSent}
+          showWorkerInfo={showWorkerInfo}
         />
-      ) : null}
+      )}
     </Modal>
   );
 }
@@ -778,4 +774,11 @@ const styles = StyleSheet.create({
     fontSize: 11,
     color: '#6B7280',
   },
+  stickyAddIconContainer: {
+    position: 'absolute',
+    bottom: 20,
+    right: 20,
+    zIndex: 10,
+  },
+
 });

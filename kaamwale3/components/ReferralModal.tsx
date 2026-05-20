@@ -158,9 +158,6 @@ export default function ReferralModal({
           {/* Header */}
           <View style={styles.header}>
             <Text style={titleStyle}>🎁 Refer & Earn</Text>
-            <TouchableOpacity onPress={onClose}>
-              <MaterialIcons name="close" size={24} color="#666" />
-            </TouchableOpacity>
           </View>
           <Text style={[styles.subtitle, textStyle]}>
             Share your referral code with friends and both of you get ₹50 when they complete their first job.

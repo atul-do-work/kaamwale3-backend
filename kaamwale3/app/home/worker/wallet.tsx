@@ -20,7 +20,7 @@ import { socket } from '../../../utils/socket';
 import { useLanguage } from '../../../context/LanguageContext';
 // Define types for wallet and transactions
 type Transaction = {
-  type: 'deposit' | 'pocket_deposit' | 'withdraw' | 'payment' | 'incentive_reward';
+  type: 'deposit' | 'pocket_deposit' | 'withdraw' | 'payment' | 'incentive_reward' | 'cash_deposit' | 'referral' | 'referral_reward';
   amount: number;
   date: string;
 };
@@ -29,13 +29,33 @@ type WalletType = {
   balance: number;
   availableBalance: number;
   pocketBalance: number;
-  transactions: Transaction[];
 };
 
 type WeeklyType = {
   earnings: number;
   available: number;
   deducted: number;
+  grossEarnings?: number;
+  netEarnings?: number;
+  totalWithdrawn?: number;
+  availableChange?: number;
+  pocketChange?: number;
+  totalBalanceChange?: number;
+  startingAvailableBalance?: number;
+  startingPocketBalance?: number;
+  startingTotalBalance?: number;
+  currentAvailableBalance?: number;
+  currentPocketBalance?: number;
+  currentTotalBalance?: number;
+  categoryTotals?: {
+    jobPayments?: number;
+    incentiveRewards?: number;
+    referralRewards?: number;
+    cashDeposits?: number;
+    pocketDeposits?: number;
+    otherCredits?: number;
+  };
+  dailyBreakdown?: Array<{ key: string; amount: number }>;
   weekStart: string | Date;
   weekEnd: string | Date;
 };
@@ -54,6 +74,7 @@ type CashDepositType = {
 
 import { useAuth } from '../../../context/AuthContext';
 import api from '../../../utils/api';
+import { buildRazorpayCheckoutHtml, isAllowedRazorpayUrl } from '../../../utils/razorpayUtils';
 
 export default function Wallet(): React.ReactElement {
   const { t } = useLanguage();
@@ -63,16 +84,31 @@ export default function Wallet(): React.ReactElement {
     const translated = t(key);
     return translated && translated !== key ? translated : fallback;
   };
-  
-  const [wallet, setWallet] = useState<WalletType>({ balance: 0, availableBalance: 0, pocketBalance: 0, transactions: [] });
+  const currentUserPhone = authUser?.phone || null;
+
+  const [wallet, setWallet] = useState<WalletType>({ balance: 0, availableBalance: 0, pocketBalance: 0 });
+  const [transactions, setTransactions] = useState<Transaction[]>([]);
+  const [transactionPage, setTransactionPage] = useState(1);
+  const [transactionLoading, setTransactionLoading] = useState(false);
+  const [transactionError, setTransactionError] = useState<string | null>(null);
+  const [hasMoreTransactions, setHasMoreTransactions] = useState(false);
+  const [transactionTotal, setTransactionTotal] = useState(0);
   const [weekly, setWeekly] = useState<WeeklyType | null>(null);
   const [showDeposit, setShowDeposit] = useState(false);
   const [showWithdraw, setShowWithdraw] = useState(false);
   const [depositAmount, setDepositAmount] = useState('');
   const [withdrawAmount, setWithdrawAmount] = useState('');
-  const [currentUserPhone, setCurrentUserPhone] = useState<string | null>(null);
   const previousUserPhoneRef = useRef<string | null>(null);
-  
+
+  const getAvailableBalance = (wallet: WalletType) => Number(wallet.availableBalance ?? wallet.balance ?? 0);
+
+  const resetWalletState = () => {
+    setWallet({ balance: 0, availableBalance: 0, pocketBalance: 0 });
+    setDepositLoading(false);
+    setIsWithdrawProcessing(false);
+    setIsDepositVerifyProcessing(false);
+  };
+
   // ✅ Razorpay deposit states
   const [depositModalVisible, setDepositModalVisible] = useState(false);
   const [depositModalHtml, setDepositModalHtml] = useState('');
@@ -114,32 +150,6 @@ export default function Wallet(): React.ReactElement {
     return `${Date.now()}-${Math.random().toString(36).slice(2, 10)}-${Math.random().toString(36).slice(2, 10)}`;
   };
 
-  // ✅ Check for user changes when screen comes into focus
-  useFocusEffect(
-    React.useCallback(() => {
-      const userPhone = authUser?.phone;
-      // If user changed (compare with ref), reset wallet state immediately
-      if (userPhone && userPhone !== previousUserPhoneRef.current) {
-        console.log(`👤 Wallet: User changed from ${previousUserPhoneRef.current} to ${userPhone}, resetting wallet`);
-        previousUserPhoneRef.current = userPhone;
-        setCurrentUserPhone(userPhone);
-        setWallet({ balance: 0, availableBalance: 0, pocketBalance: 0, transactions: [] });
-        setDepositLoading(false); // Reset loading state on user change
-        setIsWithdrawProcessing(false); // 🔐 CRITICAL FIX #2: Reset lock on user change
-        setIsDepositVerifyProcessing(false); // 🔐 CRITICAL FIX #2: Reset lock on user change
-      } else if (!userPhone && previousUserPhoneRef.current !== null) {
-        // User logged out
-        console.log(`👤 Wallet: User logged out, resetting wallet`);
-        previousUserPhoneRef.current = null;
-        setCurrentUserPhone(null);
-        setWallet({ balance: 0, availableBalance: 0, pocketBalance: 0, transactions: [] });
-        setDepositLoading(false); // Reset loading state on logout
-        setIsWithdrawProcessing(false); // 🔐 CRITICAL FIX #2: Reset lock on logout
-        setIsDepositVerifyProcessing(false); // 🔐 CRITICAL FIX #2: Reset lock on logout
-      }
-    }, [authUser])
-  );
-
   // ✅ Close all modals when wallet tab loses focus
   useFocusEffect(
     React.useCallback(() => {
@@ -156,17 +166,13 @@ export default function Wallet(): React.ReactElement {
     }, [])
   );
 
-  // ✅ Initialize user phone from AuthProvider
   useEffect(() => {
-    const userPhone = authUser?.phone;
-    if (userPhone && userPhone !== currentUserPhone) {
-      console.log(`👤 User changed from ${currentUserPhone} to ${userPhone}, resetting wallet`);
-      setCurrentUserPhone(userPhone);
-      setWallet({ balance: 0, availableBalance: 0, pocketBalance: 0, transactions: [] });
-      setIsWithdrawProcessing(false); // 🔐 CRITICAL FIX #2: Reset lock on user change
-      setIsDepositVerifyProcessing(false); // 🔐 CRITICAL FIX #2: Reset lock on user change
+    if (currentUserPhone !== previousUserPhoneRef.current) {
+      console.log(`👤 Wallet: user changed from ${previousUserPhoneRef.current ?? 'none'} to ${currentUserPhone ?? 'none'}, resetting wallet state.`);
+      previousUserPhoneRef.current = currentUserPhone;
+      resetWalletState();
     }
-  }, [authUser?.phone]);
+  }, [currentUserPhone]);
 
   // Fetch wallet when user phone changes
   useEffect(() => {
@@ -195,35 +201,11 @@ export default function Wallet(): React.ReactElement {
           if (data && data.phone === currentUserPhone) {
             const nextAvailable = Number(data.availableBalance ?? data.balance ?? 0);
             const nextPocket = Number(data.pocketBalance ?? 0);
-            setWallet(prev => {
-              // ✅ FIX: Ensure prev and transactions are defined before spreading
-              if (!prev || !prev.transactions) {
-                return {
-                  balance: nextAvailable,
-                  availableBalance: nextAvailable,
-                  pocketBalance: nextPocket,
-                  transactions: [{
-                    type: data.type || 'deposit',
-                    amount: data.amount || 0,
-                    date: new Date().toISOString()
-                  }]
-                };
-              }
-              
-              return {
-                balance: nextAvailable,
-                availableBalance: nextAvailable,
-                pocketBalance: nextPocket,
-                transactions: [
-                  {
-                    type: data.type || 'deposit',
-                    amount: data.amount || 0,
-                    date: new Date().toISOString()
-                  },
-                  ...(Array.isArray(prev.transactions) ? prev.transactions : [])
-                ]
-              };
-            });
+            setWallet(prev => ({
+              balance: nextAvailable,
+              availableBalance: nextAvailable,
+              pocketBalance: nextPocket,
+            }));
             setWeekly(prev => {
               if (!prev) return prev;
               const now = new Date();
@@ -256,6 +238,7 @@ export default function Wallet(): React.ReactElement {
               return prev;
             });
             console.log(`✅ Wallet updated: available ₹${nextAvailable}, pocket ₹${nextPocket}`);
+            fetchWalletTransactions(1).catch((e) => console.warn('Failed to refresh wallet transactions from socket event', e));
             
             // ✅ Refresh cash deposits when a cash deposit is settled
             if (data.type === 'cash_deposit') {
@@ -298,6 +281,7 @@ export default function Wallet(): React.ReactElement {
     React.useCallback(() => {
       console.log("📱 Wallet screen focused - refreshing balance");
       fetchWallet();
+      fetchWalletTransactions(1);
       fetchBankAccount();
       fetchWithdrawStatus();
       fetchCashDeposits();
@@ -316,7 +300,6 @@ export default function Wallet(): React.ReactElement {
           balance: Number(res.data.wallet.availableBalance ?? res.data.wallet.balance ?? 0),
           availableBalance: Number(res.data.wallet.availableBalance ?? res.data.wallet.balance ?? 0),
           pocketBalance: Number(res.data.wallet.pocketBalance ?? 0),
-          transactions: res.data.wallet.transactions || []
         });
         setWeekly(res.data.wallet.weekly || null);
         return Promise.resolve();
@@ -325,6 +308,37 @@ export default function Wallet(): React.ReactElement {
     } catch (err) {
       console.error('Failed to fetch wallet', err);
       return Promise.reject(err);
+    }
+  };
+
+  const fetchWalletTransactions = async (page = 1, append = false) => {
+    if (!accessToken) return;
+    setTransactionLoading(true);
+    setTransactionError(null);
+
+    try {
+      const res = await api.get('/wallet/transactions', {
+        params: {
+          page,
+          limit: 20,
+        },
+      });
+
+      if (res.data?.success) {
+        const fetched = Array.isArray(res.data.transactions) ? res.data.transactions : [];
+        setTransactions((prev) => (append ? [...prev, ...fetched] : fetched));
+        setTransactionPage(page);
+        const total = Number(res.data.total ?? fetched.length);
+        setTransactionTotal(total);
+        setHasMoreTransactions(page < Number(res.data.totalPages ?? 1));
+      } else {
+        setTransactionError('Failed to fetch transaction history');
+      }
+    } catch (err: any) {
+      console.error('Failed to fetch wallet transactions', err);
+      setTransactionError(err?.response?.data?.message || 'Failed to fetch transaction history');
+    } finally {
+      setTransactionLoading(false);
     }
   };
 
@@ -401,62 +415,20 @@ export default function Wallet(): React.ReactElement {
 
       // ✅ SECURITY: Get amount from backend response, NOT frontend calculation
       const { orderId, key_id, amount } = orderRes.data;
-
-      // Step 2: Create Razorpay checkout HTML
-      const razorpayHtml = `
-        <!DOCTYPE html>
-        <html>
-        <head>
-          <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
-          <style>
-            body { margin: 0; padding: 0; background: #f5f5f5; }
-            #checkout-container { display: flex; justify-content: center; align-items: center; height: 100vh; }
-          </style>
-        </head>
-        <body>
-          <div id="checkout-container">
-            <p>Opening Razorpay Checkout...</p>
-          </div>
-          <script>
-            var options = {
-              "key": "${key_id}",
-              "amount": ${amount},
-              "currency": "INR",
-              "name": "Kaamwale Wallet",
-              "description": "Wallet Deposit",
-              "order_id": "${orderId}",
-              "handler": function (response){
-                window.ReactNativeWebView.postMessage(JSON.stringify({
-                  type: 'deposit_success',
-                  paymentId: response.razorpay_payment_id,
-                  orderId: response.razorpay_order_id,
-                  signature: response.razorpay_signature
-                }));
-              },
-              "prefill": {
-                "name": "${authUser?.name || ''}",
-                "email": "${authUser?.email || ''}",
-                "contact": "${authUser?.phone || ''}"
-              },
-              "theme": {
-                "color": "#1a2f4d"
-              }
-            };
-            var rzp1 = new Razorpay(options);
-            rzp1.open();
-            
-            rzp1.on('payment.failed', function (response){
-              window.ReactNativeWebView.postMessage(JSON.stringify({
-                type: 'deposit_failed',
-                error: response.error.description
-              }));
-            });
-          </script>
-        </body>
-        </html>
-      `;
-
-      setDepositModalHtml(razorpayHtml);
+      setDepositModalHtml(
+        buildRazorpayCheckoutHtml({
+          keyId: key_id,
+          orderId,
+          amount,
+          name: 'Kaamwale Wallet',
+          description: 'Wallet Deposit',
+          prefillName: authUser?.name || '',
+          prefillEmail: authUser?.email || '',
+          prefillContact: authUser?.phone || '',
+          successEvent: 'deposit_success',
+          failureEvent: 'deposit_failed',
+        })
+      );
       setDepositModalVisible(true);
       setCurrentDepositAmount(Number(depositAmount));
       setCurrentDepositOrderId(orderId);
@@ -486,59 +458,20 @@ export default function Wallet(): React.ReactElement {
       }
 
       const { orderId, key_id, amount: orderAmount } = orderRes.data;
-      const razorpayHtml = `
-        <!DOCTYPE html>
-        <html>
-        <head>
-          <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
-          <style>
-            body { margin: 0; padding: 0; background: #f5f5f5; }
-            #checkout-container { display: flex; justify-content: center; align-items: center; height: 100vh; }
-          </style>
-        </head>
-        <body>
-          <div id="checkout-container">
-            <p>Opening Razorpay Checkout...</p>
-          </div>
-          <script>
-            var options = {
-              "key": "${key_id}",
-              "amount": ${orderAmount},
-              "currency": "INR",
-              "name": "Kaamwale Wallet",
-              "description": "Pending cash deposit payment",
-              "order_id": "${orderId}",
-              "handler": function (response){
-                window.ReactNativeWebView.postMessage(JSON.stringify({
-                  type: 'deposit_success',
-                  paymentId: response.razorpay_payment_id,
-                  orderId: response.razorpay_order_id,
-                  signature: response.razorpay_signature
-                }));
-              },
-              "prefill": {
-                "name": "${authUser?.name || ''}",
-                "email": "${authUser?.email || ''}",
-                "contact": "${authUser?.phone || ''}"
-              },
-              "theme": {
-                "color": "#1a2f4d"
-              }
-            };
-            var rzp1 = new Razorpay(options);
-            rzp1.open();
-            rzp1.on('payment.failed', function (response){
-              window.ReactNativeWebView.postMessage(JSON.stringify({
-                type: 'deposit_failed',
-                error: response.error.description
-              }));
-            });
-          </script>
-        </body>
-        </html>
-      `;
-
-      setDepositModalHtml(razorpayHtml);
+      setDepositModalHtml(
+        buildRazorpayCheckoutHtml({
+          keyId: key_id,
+          orderId,
+          amount: orderAmount,
+          name: 'Kaamwale Wallet',
+          description: 'Pending cash deposit payment',
+          prefillName: authUser?.name || '',
+          prefillEmail: authUser?.email || '',
+          prefillContact: authUser?.phone || '',
+          successEvent: 'deposit_success',
+          failureEvent: 'deposit_failed',
+        })
+      );
       setDepositModalVisible(true);
       setCurrentDepositAmount(Number(amount));
       setCurrentDepositOrderId(orderId);
@@ -619,10 +552,7 @@ export default function Wallet(): React.ReactElement {
       );
 
       if (res.data.success) {
-        const message = res.data.isDuplicate
-          ? tx('depositAlreadyProcessed', 'Deposit already processed successfully.')
-          : `Cash deposit of ₹${currentDepositAmount} has been settled and your wallet is credited.`;
-
+        const message = tx('depositSuccessful', 'Deposited successfully');
         Alert.alert(t('success'), message);
         setPendingDepositId(null);
         await fetchCashDeposits();
@@ -684,9 +614,7 @@ export default function Wallet(): React.ReactElement {
       // setDepositModalVisible(false);
 
       if (res.data.success) {
-        const message = res.data.isDuplicate
-          ? tx('depositAlreadyProcessed', 'Deposit already processed successfully.')
-          : `${tx('depositLabel', 'Deposit')} ₹${currentDepositAmount} ${tx('depositSuccessSuffix', 'was successful')}`;
+        const message = tx('depositSuccessful', 'Deposited successfully');
         Alert.alert(t('success'), message);
         setDepositAmount('');
         setShowDeposit(false);
@@ -747,7 +675,7 @@ export default function Wallet(): React.ReactElement {
       return;
     }
 
-    const availableBalance = Number(wallet.availableBalance ?? wallet.balance ?? 0);
+    const availableBalance = getAvailableBalance(wallet);
     if (Number(withdrawAmount) > availableBalance) {
       Alert.alert(t('error'), t('insufficientBalance'));
       return;
@@ -900,6 +828,9 @@ export default function Wallet(): React.ReactElement {
   // Map transactions to cards
   const transactionTitleMap: Record<Transaction['type'], string> = {
     deposit: tx('depositLabel', 'Deposit'),
+    cash_deposit: 'Cash Deposit',
+    referral: 'Referral Credit',
+    referral_reward: 'Referral Reward',
     pocket_deposit: tx('pocketDeposit', 'Pocket Deposit'),
     withdraw: t('withdraw'),
     payment: tx('paymentLabel', 'Payment'),
@@ -920,7 +851,7 @@ export default function Wallet(): React.ReactElement {
   const pendingCashDepositCount = pendingCashDepositItems.length;
   const weekRangeText = formatWeekRange(weekly);
   const weeklyEarningsAmount = Number(weekly?.earnings ?? 0);
-  const currentAvailableAmount = Number(wallet.availableBalance ?? wallet.balance ?? 0);
+  const currentAvailableAmount = getAvailableBalance(wallet);
 
   return (
     <ScrollView
@@ -1112,40 +1043,57 @@ export default function Wallet(): React.ReactElement {
       <View style={styles.transactionSection}>
         <View style={styles.transactionHeaderRow}>
           <Text style={styles.transactionHeader}>{tx('transactions', 'Transactions')}</Text>
-          <Text style={styles.transactionCount}>{wallet.transactions.length} {tx('transactions', 'Transactions')}</Text>
+          <Text style={styles.transactionCount}>{transactionTotal} {tx('transactions', 'Transactions')}</Text>
         </View>
 
-        {wallet.transactions.length === 0 ? (
+        {transactions.length === 0 && !transactionLoading ? (
           <View style={styles.transactionEmpty}>
             <Text style={styles.transactionEmptyText}>{tx('noTransactions', 'No transactions yet')}</Text>
           </View>
         ) : (
-          wallet.transactions.map((transaction, index) => {
-            const title = transactionTitleMap[transaction.type] || transaction.type;
-            const icon =
-              transaction.type === 'deposit' || transaction.type === 'pocket_deposit'
-                ? 'arrow-downward'
-                : transaction.type === 'withdraw'
-                  ? 'arrow-upward'
-                  : 'paid';
-            const amountColor = transaction.type === 'withdraw' ? '#dc2626' : '#16a34a';
-            const prefix = transaction.type === 'withdraw' ? '-₹' : '+₹';
+          <>
+            {transactions.map((transaction, index) => {
+              const title = transactionTitleMap[transaction.type] || transaction.type;
+              const icon =
+                transaction.type === 'deposit' || transaction.type === 'pocket_deposit'
+                  ? 'arrow-downward'
+                  : transaction.type === 'withdraw'
+                    ? 'arrow-upward'
+                    : 'paid';
+              const amountColor = transaction.type === 'withdraw' ? '#dc2626' : '#16a34a';
+              const prefix = transaction.type === 'withdraw' ? '-₹' : '+₹';
 
-            return (
-              <View key={`${transaction.type}-${transaction.date}-${index}`} style={styles.transactionItem}>
-                <View style={styles.transactionLeft}>
-                  <View style={styles.transactionIconCircle}>
-                    <MaterialIcons name={icon as any} size={20} color={transaction.type === 'withdraw' ? '#dc2626' : '#1d4ed8'} />
+              return (
+                <View key={`${transaction.type}-${transaction.date}-${index}`} style={styles.transactionItem}>
+                  <View style={styles.transactionLeft}>
+                    <View style={styles.transactionIconCircle}>
+                      <MaterialIcons name={icon as any} size={20} color={transaction.type === 'withdraw' ? '#dc2626' : '#1d4ed8'} />
+                    </View>
+                    <View style={styles.transactionDetails}>
+                      <Text style={styles.transactionTitle}>{title}</Text>
+                      <Text style={styles.transactionDate}>{new Date(transaction.date).toLocaleDateString()}</Text>
+                    </View>
                   </View>
-                  <View style={styles.transactionDetails}>
-                    <Text style={styles.transactionTitle}>{title}</Text>
-                    <Text style={styles.transactionDate}>{new Date(transaction.date).toLocaleDateString()}</Text>
-                  </View>
+                  <Text style={[styles.transactionAmount, { color: amountColor }]}>{prefix}{transaction.amount}</Text>
                 </View>
-                <Text style={[styles.transactionAmount, { color: amountColor }]}>{prefix}{transaction.amount}</Text>
+              );
+            })}
+
+            {transactionLoading && (
+              <View style={{ padding: 16, alignItems: 'center' }}>
+                <ActivityIndicator size="small" color="#1d4ed8" />
               </View>
-            );
-          })
+            )}
+
+            {hasMoreTransactions && !transactionLoading && (
+              <TouchableOpacity
+                style={[styles.loadMoreButton, { marginTop: 8 }]}
+                onPress={() => fetchWalletTransactions(transactionPage + 1, true)}
+              >
+                <Text style={styles.loadMoreText}>{t('loadMore') || 'Load more'}</Text>
+              </TouchableOpacity>
+            )}
+          </>
         )}
       </View>
 
@@ -1185,9 +1133,7 @@ export default function Wallet(): React.ReactElement {
               originWhitelist={['*']}
               onShouldStartLoadWithRequest={(request) => {
                 // ✅ SECURITY: Only allow Razorpay checkout domain
-                const isRazorpayURL = request.url.startsWith('https://checkout.razorpay.com') ||
-                                      request.url.startsWith('https://api.razorpay.com') ||
-                                      request.url.startsWith('data:');
+                const isRazorpayURL = isAllowedRazorpayUrl(request.url);
                 if (!isRazorpayURL) {
                   console.warn(`⚠️ Blocked navigation to: ${request.url}`);
                 }

@@ -200,6 +200,18 @@ export default StyleSheet.create({
     color: '#6B7280',
     fontSize: 14,
   },
+  loadMoreButton: {
+    alignSelf: 'center',
+    backgroundColor: '#1d4ed8',
+    borderRadius: 999,
+    paddingVertical: 12,
+    paddingHorizontal: 24,
+  },
+  loadMoreText: {
+    color: '#ffffff',
+    fontSize: 14,
+    fontWeight: '700',
+  },
   cardsRow: {
     flexDirection: 'row',
     flexWrap: 'wrap',

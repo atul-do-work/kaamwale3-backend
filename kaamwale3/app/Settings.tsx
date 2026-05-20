@@ -549,11 +549,6 @@ export default function SettingsScreen(): React.ReactElement {
           )}
         </TouchableOpacity>
 
-        <TouchableOpacity style={[styles.actionButton, styles.verificationButton]} onPress={() => router.push("/Verification" as any)}>
-          <MaterialIcons name="verified-user" size={18} color="#111827" />
-          <Text style={styles.rowButtonText}>{t('verification')}</Text>
-        </TouchableOpacity>
-
         {isPayoutAllowed && (
           <TouchableOpacity
             style={[styles.actionButton, styles.paymentMethodButton, isSavingPayoutMethod && styles.buttonDisabled]}

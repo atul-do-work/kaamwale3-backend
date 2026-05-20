@@ -3,8 +3,8 @@ import { View, Text, TextInput, TouchableOpacity, Alert, StatusBar, ActivityIndi
 import { MaterialIcons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import * as Location from 'expo-location';
 import { API_BASE } from '../utils/config';
+import { locationPermissionHandler } from '../services/locationPermissionHandler';
 import styles from '../styles/RegisterScreenStyles';
 import { registerForPushNotificationsAsync } from '../services/notification';
 import { useLanguage } from '../context/LanguageContext';
@@ -82,63 +82,27 @@ async function getLocationWithRetries(maxRetries = 3) {
     console.warn('⚠️ Could not check cached location:', err);
   }
 
-  // ✅ No cached location or too old - request fresh GPS
-  let lastError = null;
-  
-  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+  // ✅ No recent cached location - request permission and current position through shared handler
+  const locationResult = await locationPermissionHandler.getLocation();
+  if (locationResult.success && locationResult.location) {
+    const latitude = locationResult.location.latitude;
+    const longitude = locationResult.location.longitude;
+
     try {
-      console.log(`📍 Location request attempt ${attempt}/${maxRetries}...`);
-      const { status } = await Location.requestForegroundPermissionsAsync();
-      
-      if (status !== 'granted') {
-        console.warn(`⚠️ Location permission denied on attempt ${attempt}`);
-        lastError = 'Permission denied';
-        // Don't retry if permission is explicitly denied
-        break;
-      }
-      
-      const location = await Location.getCurrentPositionAsync({
-        accuracy: Location.Accuracy.Balanced,
-      });
-      
-      const latitude = location.coords.latitude;
-      const longitude = location.coords.longitude;
-      
-      console.log(`✅ Location obtained on attempt ${attempt}:`, {
+      await AsyncStorage.setItem('lastKnownLocation', JSON.stringify({
         latitude,
         longitude,
-      });
-      
-      // ✅ CACHE: Save fresh location for future logins
-      try {
-        await AsyncStorage.setItem('lastKnownLocation', JSON.stringify({
-          latitude,
-          longitude,
-          timestamp: Date.now(),
-        }));
-        console.log('💾 Location cached for future logins (24h TTL)');
-      } catch (cacheErr) {
-        console.warn('⚠️ Could not cache location:', cacheErr);
-      }
-      
-      return {
-        latitude,
-        longitude,
-      };
-    } catch (err) {
-      lastError = (err as Error).message;
-      console.warn(`⚠️ Location error on attempt ${attempt}:`, lastError);
-      
-      if (attempt < maxRetries) {
-        // Wait before retrying (exponential backoff)
-        const delayMs = 1000 * attempt;
-        console.log(`⏳ Retrying in ${delayMs}ms...`);
-        await new Promise(res => setTimeout(res, delayMs));
-      }
+        timestamp: Date.now(),
+      }));
+      console.log('💾 Location cached for future logins (24h TTL)');
+    } catch (cacheErr) {
+      console.warn('⚠️ Could not cache location:', cacheErr);
     }
+
+    return { latitude, longitude };
   }
-  
-  console.warn(`❌ Location request failed after ${maxRetries} attempts:`, lastError);
+
+  console.warn('❌ Location request failed:', locationResult.error);
   return { latitude: null, longitude: null };
 }
 

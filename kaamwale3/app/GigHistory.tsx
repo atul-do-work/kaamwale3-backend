@@ -127,7 +127,7 @@ interface Milestone {
 export default function GigHistory() {
   const router = useRouter();
   const { t } = useLanguage();
-  const { accessToken } = useAuth();
+  const { accessToken, user } = useAuth();
 
   const tx = useCallback(
     (key: keyof typeof translations.en, fallback: string) => {
@@ -469,9 +469,18 @@ export default function GigHistory() {
     scheduleRef.current = scheduleRealtimeRefresh;
 
     // Stable handler that uses scheduleRef to call the latest scheduler without re-registering listeners
-    const stableHandler = () => {
+    // If the event payload appears to affect the current user (e.g. job completed for this worker),
+    // run an immediate refresh to reflect changes faster in the UI.
+    const stableHandler = (...args: any[]) => {
       if (!isMountedRef.current) return;
       try {
+        const payload = args && args[0] ? args[0] : null;
+        const affectsCurrentUser = payload && user && (payload.workerPhone === user.phone || payload.phone === user.phone || (payload.job && (payload.job.acceptedBy === user.phone || payload.job.workerPhone === user.phone)));
+        if (affectsCurrentUser) {
+          // Immediate refresh for user-relevant events
+          refreshAll({ showLiveRefresh: true }).catch((e) => console.warn('Immediate refresh failed', e));
+          return;
+        }
         scheduleRef.current();
       } catch (e) {
         console.warn('Live refresh handler error', e);

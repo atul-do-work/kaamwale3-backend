@@ -5,6 +5,7 @@ import { Ionicons } from '@expo/vector-icons';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import * as Location from 'expo-location';
 import * as ImagePicker from 'expo-image-picker';
+import { locationPermissionHandler } from '../../../services/locationPermissionHandler';
 import { MapView, Camera } from '@maplibre/maplibre-react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { getAuthAccessToken } from "../../../utils/secureStore";
@@ -166,7 +167,7 @@ export default function PostJobScreen() {
 
           if (storedToken) {
             try {
-              const premiumData = await premiumCacheManager.getStatus(storedToken);
+              const premiumData = await premiumCacheManager.getStatus();
               const fallbackPlan = premiumData?.premiumDetails || user?.premiumPlan || null;
               const isActive = premiumData?.success
                 ? Boolean(premiumData?.isActive)
@@ -272,13 +273,18 @@ export default function PostJobScreen() {
   const actuallyGetLocation = async () => {
     try {
       setGettingLocation(true);
-      const { status } = await Location.requestForegroundPermissionsAsync();
-      if (status !== 'granted') {
+      const result = await locationPermissionHandler.getLocation();
+      if (!result.success || !result.location) {
         Alert.alert(t('permissionDenied'), t('locationPermissionRequired'));
         setGettingLocation(false);
         return;
       }
-      const location = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
+      const location = {
+        coords: {
+          latitude: result.location.latitude,
+          longitude: result.location.longitude,
+        },
+      } as Location.LocationObject;
       // Try reverse geocode for human readable address; fallback to lat/lon string
       let placeName = `${location.coords.latitude.toFixed(4)}, ${location.coords.longitude.toFixed(4)}`;
       try {
@@ -314,10 +320,9 @@ export default function PostJobScreen() {
         return;
       }
 
-      const { status } = await Location.requestForegroundPermissionsAsync();
-      if (status === 'granted') {
-        const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
-        setMapCenter({ lat: loc.coords.latitude, lon: loc.coords.longitude });
+      const result = await locationPermissionHandler.getLocation();
+      if (result.success && result.location) {
+        setMapCenter({ lat: result.location.latitude, lon: result.location.longitude });
       }
       setShowMapPicker(true);
     } catch {
@@ -421,7 +426,7 @@ export default function PostJobScreen() {
         [
           {
             text: t('depositNow'),
-            onPress: () => router.push("/(tabs)/wallet")
+            onPress: () => router.push('/home/contractor/wallet')
           },
           { text: t('cancel'), style: "cancel" }
         ]
@@ -572,40 +577,50 @@ export default function PostJobScreen() {
           <Text style={styles.feeInfo}>{(hasPremium && bulkHiringEnabled) ? requiredWorkers : 1} {t('workersShort')}</Text>
         </View>
 
-        {/* Job Title Dropdown */}
-        <View style={styles.dropdownContainer}>
-          <Text style={styles.label}>{t('jobTitle')}</Text>
-          <TouchableOpacity style={styles.dropdown} onPress={() => setShowTitleDropdown(!showTitleDropdown)}>
-            <Text style={[styles.dropdownText, !title && styles.placeholderText]}>{title ? getJobTitleLabel(title) : t('selectJobTitle')}</Text>
-            <Ionicons name={showTitleDropdown ? 'chevron-up' : 'chevron-down'} size={20} color="#6B7280" />
-          </TouchableOpacity>
-          {showTitleDropdown && (
-            <View style={styles.dropdownMenu}>
-              {JOB_TITLES.map((item) => (
-                <TouchableOpacity key={item.value} style={styles.dropdownItem} onPress={() => { setTitle(item.value); setShowTitleDropdown(false); }}>
-                  <Text style={styles.dropdownItemText}>{t(item.labelKey)}</Text>
-                </TouchableOpacity>
-              ))}
+        <View style={styles.twoColRow}>
+          <View style={styles.twoColItem}>
+            {/* Job Title Dropdown */}
+            <View style={styles.dropdownContainer}>
+              <Text style={styles.label}>{t('jobTitle')}</Text>
+              <TouchableOpacity style={styles.dropdown} onPress={() => setShowTitleDropdown(!showTitleDropdown)}>
+                <Text style={[styles.dropdownText, !title && styles.placeholderText]} numberOfLines={1} ellipsizeMode="tail">
+                  {title ? getJobTitleLabel(title) : t('selectJobTitle')}
+                </Text>
+                <Ionicons name={showTitleDropdown ? 'chevron-up' : 'chevron-down'} size={20} color="#6B7280" />
+              </TouchableOpacity>
+              {showTitleDropdown && (
+                <View style={styles.dropdownMenu}>
+                  {JOB_TITLES.map((item) => (
+                    <TouchableOpacity key={item.value} style={styles.dropdownItem} onPress={() => { setTitle(item.value); setShowTitleDropdown(false); }}>
+                      <Text style={styles.dropdownItemText}>{t(item.labelKey)}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              )}
             </View>
-          )}
-        </View>
+          </View>
 
-        {/* Main Skill Dropdown */}
-        <View style={styles.dropdownContainer}>
-          <Text style={styles.label}>{t('mainSkill')}</Text>
-          <TouchableOpacity style={styles.dropdown} onPress={() => setShowSkillDropdown(!showSkillDropdown)}>
-            <Text style={[styles.dropdownText, !mainSkill && styles.placeholderText]}>{mainSkill ? getSkillLabel(mainSkill) : t('selectMainSkill')}</Text>
-            <Ionicons name={showSkillDropdown ? 'chevron-up' : 'chevron-down'} size={20} color="#6B7280" />
-          </TouchableOpacity>
-          {showSkillDropdown && (
-            <View style={styles.dropdownMenu}>
-              {MAIN_SKILLS.map((item) => (
-                <TouchableOpacity key={item.value} style={styles.dropdownItem} onPress={() => { setMainSkill(item.value); setWorkerType(''); setShowSkillDropdown(false); }}>
-                  <Text style={styles.dropdownItemText}>{t(item.labelKey)}</Text>
-                </TouchableOpacity>
-              ))}
+          <View style={styles.twoColItem}>
+            {/* Main Skill Dropdown */}
+            <View style={styles.dropdownContainer}>
+              <Text style={styles.label}>{t('mainSkill')}</Text>
+              <TouchableOpacity style={styles.dropdown} onPress={() => setShowSkillDropdown(!showSkillDropdown)}>
+                <Text style={[styles.dropdownText, !mainSkill && styles.placeholderText]} numberOfLines={1} ellipsizeMode="tail">
+                  {mainSkill ? getSkillLabel(mainSkill) : t('selectMainSkill')}
+                </Text>
+                <Ionicons name={showSkillDropdown ? 'chevron-up' : 'chevron-down'} size={20} color="#6B7280" />
+              </TouchableOpacity>
+              {showSkillDropdown && (
+                <View style={styles.dropdownMenu}>
+                  {MAIN_SKILLS.map((item) => (
+                    <TouchableOpacity key={item.value} style={styles.dropdownItem} onPress={() => { setMainSkill(item.value); setWorkerType(''); setShowSkillDropdown(false); }}>
+                      <Text style={styles.dropdownItemText}>{t(item.labelKey)}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              )}
             </View>
-          )}
+          </View>
         </View>
 
         {/* Worker Type Dropdown - Only visible if mainSkill is Mason */}
@@ -812,7 +827,7 @@ export default function PostJobScreen() {
             <Text style={styles.label}>{t('date')}</Text>
             <TouchableOpacity style={styles.inputCard} onPress={() => setShowDatePicker(true)}>
               <Ionicons name="calendar-outline" size={22} color="#9CA3AF" />
-              <Text style={styles.input}>{date.toDateString()}</Text>
+              <Text style={styles.input}>{date.toLocaleDateString('en-IN', { weekday: 'short', month: 'short', day: 'numeric' })}</Text>
             </TouchableOpacity>
           </View>
 

@@ -12,6 +12,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import * as Location from 'expo-location';
+import { locationPermissionHandler } from '../services/locationPermissionHandler';
 import { MaterialIcons, FontAwesome5 } from '@expo/vector-icons';
 import api from '../utils/api';
 import { useLanguage } from '../context/LanguageContext';
@@ -187,26 +188,27 @@ export default function BrowseJobs() {
       return coords;
     }
 
-    const { status } =
-      await Location.requestForegroundPermissionsAsync();
-
-    if (status !== 'granted') {
+    const result = await locationPermissionHandler.getLocation();
+    if (!result.success || !result.location) {
       Alert.alert(
         'Location Required',
         'Please enable location permissions to browse nearby jobs.'
       );
-
-      throw new Error(
-        'Location permission not granted'
-      );
+      throw new Error(result.error || 'Location permission not granted');
     }
 
-    const location =
-      await Location.getCurrentPositionAsync({});
+    const locationCoords: Location.LocationObjectCoords = {
+      latitude: result.location.latitude,
+      longitude: result.location.longitude,
+      accuracy: 0,
+      altitude: 0,
+      altitudeAccuracy: 0,
+      heading: 0,
+      speed: 0,
+    };
 
-    setCoords(location.coords);
-
-    return location.coords;
+    setCoords(locationCoords);
+    return locationCoords;
   }, [coords]);
 
   const fetchNearbyJobs = useCallback(async () => {
@@ -422,16 +424,25 @@ export default function BrowseJobs() {
             styles.requestCard,
           ]}
         >
-          {item.metadata.siteImageUri ? (
-            <View style={styles.cardImageWrapper}>
+          <View style={styles.cardImageWrapper}>
+            {item.metadata.siteImageUri ? (
               <Image
-                source={{
-                  uri: item.metadata.siteImageUri,
-                }}
+                source={{ uri: item.metadata.siteImageUri }}
                 style={styles.cardImage}
               />
-            </View>
-          ) : null}
+            ) : (
+              <View style={[styles.cardImage, styles.cardImagePlaceholder]}>
+                <MaterialIcons
+                  name="image-not-supported"
+                  size={32}
+                  color="#9ca3af"
+                />
+                <Text style={styles.cardImagePlaceholderText}>
+                  Image not available
+                </Text>
+              </View>
+            )}
+          </View>
 
           <View style={[styles.cardBody, styles.requestCardBody]}>
             <View style={styles.requestHeader}>
@@ -587,17 +598,24 @@ export default function BrowseJobs() {
 
       return (
         <View style={styles.card}>
-          <View
-            style={styles.cardImageWrapper}
-          >
-            <Image
-              source={{
-                uri:
-                  item.imageUrl ||
-                  'https://images.unsplash.com/photo-1556911220-e15b29be8c6b?w=800&q=80&auto=format&fit=crop',
-              }}
-              style={styles.cardImage}
-            />
+          <View style={styles.cardImageWrapper}>
+            {item.imageUrl ? (
+              <Image
+                source={{ uri: item.imageUrl }}
+                style={styles.cardImage}
+              />
+            ) : (
+              <View style={[styles.cardImage, styles.cardImagePlaceholder]}>
+                <MaterialIcons
+                  name="image-not-supported"
+                  size={36}
+                  color="#9ca3af"
+                />
+                <Text style={styles.cardImagePlaceholderText}>
+                  Image not available
+                </Text>
+              </View>
+            )}
 
             <View style={styles.requiredBadge}>
               <Text
@@ -645,23 +663,18 @@ export default function BrowseJobs() {
 
             {item.rating !== undefined ? (
               <View style={styles.ratingRow}>
-                <FontAwesome5
-                  name="star"
-                  size={12}
-                  color="#F59E0B"
-                />
-                <Text
-                  style={styles.ratingText}
-                >
-                  {item.rating.toFixed(1)}
-                </Text>
-                {item.reviewCount ? (
-                  <Text
-                    style={styles.reviewText}
-                  >
-                    {`(${item.reviewCount})`}
-                  </Text>
-                ) : null}
+                {(() => {
+                  const rating = item.rating ?? 0;
+                  return [1, 2, 3, 4, 5].map((star) => (
+                    <FontAwesome5
+                      key={star}
+                      name="star"
+                      size={12}
+                      color={star <= Math.round(rating) ? "#F59E0B" : "#D1D5DB"}
+                      style={{ marginRight: 2 }}
+                    />
+                  ));
+                })()}
               </View>
             ) : null}
 
@@ -866,6 +879,15 @@ export default function BrowseJobs() {
         ListHeaderComponent={
           ListHeaderComponent
         }
+        ListEmptyComponent={
+          !loading ? (
+            <View style={{ paddingVertical: 40, alignItems: 'center' }}>
+              <Text style={{ color: '#6b7280', fontSize: 14, textAlign: 'center' }}>
+                No jobs available
+              </Text>
+            </View>
+          ) : null
+        }
       />
     </SafeAreaView>
   );
@@ -919,6 +941,21 @@ const styles = StyleSheet.create({
   cardImage: {
     width: '100%',
     height: '100%',
+  },
+
+  cardImagePlaceholder: {
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#f3f4f6',
+    paddingHorizontal: 16,
+  },
+
+  cardImagePlaceholderText: {
+    marginTop: 8,
+    color: '#6b7280',
+    fontSize: 13,
+    fontWeight: '600',
+    textAlign: 'center',
   },
 
   badge: {

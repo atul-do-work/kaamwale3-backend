@@ -14,26 +14,50 @@ export default StyleSheet.create({
     width: '100%',
     height: '100%',
   },
-  centerMarkerWrapper: {
-    position: 'absolute',
-    top: '50%',
-    left: '60%',
-    transform: [{ translateX: -25 }, { translateY: -25 }],
+  markerWrapper: {
+    width: 60,
+    height: 60,
     justifyContent: 'center',
     alignItems: 'center',
-    zIndex: 10,
   },
   pulseRing: {
     position: 'absolute',
     width: 50,
     height: 50,
     borderRadius: 25,
-    backgroundColor: 'rgba(103, 58, 183, 0.3)', // soft purple
+    backgroundColor: 'rgba(103, 58, 183, 0.3)',
   },
-  centerDot: {
-    width: 10,
-    height: 10,
-    borderRadius: 5,
-    backgroundColor: '#610e9c', // deep purple
+  markerDot: {
+    width: 16,
+    height: 16,
+    borderRadius: 8,
+    backgroundColor: '#2196F3',
+    borderWidth: 3,
+    borderColor: '#fff',
+  },
+  mapPlaceholder: {
+    width: '100%',
+    height: '100%',
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    backgroundColor: '#f3f4f6',
+  },
+  placeholderText: {
+    color: '#4b5563',
+    textAlign: 'center',
+    marginBottom: 12,
+    fontSize: 15,
+  },
+  retryButton: {
+    paddingHorizontal: 18,
+    paddingVertical: 10,
+    backgroundColor: '#17263A',
+    borderRadius: 12,
+  },
+  retryButtonText: {
+    color: '#fff',
+    fontWeight: '700',
+    fontSize: 14,
   },
 });

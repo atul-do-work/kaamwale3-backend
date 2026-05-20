@@ -4,6 +4,7 @@ import {
   Text,
   ScrollView,
   TouchableOpacity,
+  TouchableWithoutFeedback,
   Alert,
   Image,
   Modal,
@@ -384,6 +385,8 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     overflow: "hidden",
     backgroundColor: "#FFFFFF",
+    zIndex: 1000,
+    elevation: 5,
   },
   pickerItem: {
     paddingHorizontal: 12,
@@ -527,8 +530,8 @@ export default function Profile(): React.ReactElement {
       if (response.ok) {
         const data = await response.json();
         const docs = data.documents || [];
-        const aadhar = docs.find((d: any) => d.documentType === 'aadhar')?.status || 'pending';
-        const policy = docs.find((d: any) => d.documentType === 'policy')?.status || 'pending';
+        const aadhar = docs.find((d: any) => d.type === 'aadhar')?.verificationStatus || 'pending';
+        const policy = docs.find((d: any) => d.type === 'policy')?.verificationStatus || 'pending';
         setVerificationStatus({ aadhar, policy });
       }
     } catch (err) {
@@ -684,10 +687,10 @@ export default function Profile(): React.ReactElement {
       ],
     },
     {
-      header: tx("documentsPolicies", "Documents & Policies"),
+      header: tx("verification", "Verification"),
       icon: "description",
       options: [
-        { name: tx("aadharAndPolicy", "Aadhar Card & 90-Day Policy"), screen: "/DocumentsAndPolicies" },
+        { name: tx("aadharAndPolicy", "Aadhar Card & 90-Day Policy"), screen: "/Verification" },
       ],
     },
     {
@@ -745,7 +748,9 @@ export default function Profile(): React.ReactElement {
             </View>
           )}
           <View style={styles.identityChip}>
-            <Text style={styles.identityChipText}>Worker Profile</Text>
+            <Text style={styles.identityChipText}>
+              {workerRating > 0 ? `${workerRating.toFixed(1)} ★ ` : 'Average Rating'}
+            </Text>
           </View>
 
           <View style={styles.headerMetaRow}>
@@ -829,54 +834,56 @@ export default function Profile(): React.ReactElement {
 
         <Modal visible={menuModalVisible} transparent animationType="fade" onRequestClose={() => setMenuModalVisible(false)}>
           <TouchableOpacity style={styles.modalBackdrop} activeOpacity={1} onPress={() => setMenuModalVisible(false)}>
-            <TouchableOpacity activeOpacity={1} onPress={(e) => e.stopPropagation()} style={styles.sheetCard}>
-              <View style={styles.sheetHeader}>
-                <Text style={styles.sheetTitle}>{tx("updateProfile", "Update Profile")}</Text>
-                <TouchableOpacity onPress={() => setMenuModalVisible(false)}>
-                  <Ionicons name="close" size={24} color="#111827" />
-                </TouchableOpacity>
+            <TouchableWithoutFeedback>
+              <View style={styles.sheetCard}>
+                <View style={styles.sheetHeader}>
+                  <Text style={styles.sheetTitle}>{tx("updateProfile", "Update Profile")}</Text>
+                  <TouchableOpacity onPress={() => setMenuModalVisible(false)}>
+                    <Ionicons name="close" size={24} color="#111827" />
+                  </TouchableOpacity>
+                </View>
+
+                <View style={styles.sheetBody}>
+                  <Text style={styles.fieldLabel}>{t("mainSkill")}</Text>
+                  <TouchableOpacity style={styles.pickerButton} onPress={() => setShowSkillMenu(!showSkillMenu)}>
+                    <Text style={styles.pickerButtonText}>
+                      {selectedSkill ? t(selectedSkill as keyof typeof import("../../../constants/translations").translations.en) : t("selectMainSkill")}
+                    </Text>
+                    <Ionicons name={showSkillMenu ? "chevron-up" : "chevron-down"} size={18} color="#4B5563" />
+                  </TouchableOpacity>
+                  {showSkillMenu && (
+                    <View style={styles.pickerMenu}>
+                      {MAIN_SKILLS.map((skill) => (
+                        <TouchableOpacity key={skill} style={styles.pickerItem} onPress={() => { setSelectedSkill(skill); setShowSkillMenu(false); }}>
+                          <Text style={styles.pickerButtonText}>{t(skill)}</Text>
+                        </TouchableOpacity>
+                      ))}
+                    </View>
+                  )}
+
+                  <Text style={[styles.fieldLabel, { marginTop: 18 }]}>{tx("expectedWages", "Expected Wages")}</Text>
+                  <TouchableOpacity style={styles.pickerButton} onPress={() => setShowWageMenu(!showWageMenu)}>
+                    <Text style={styles.pickerButtonText}>
+                      {selectedWage ? wageLabelMap[selectedWage] : tx("selectWageRange", "Select Wage Range")}
+                    </Text>
+                    <Ionicons name={showWageMenu ? "chevron-up" : "chevron-down"} size={18} color="#4B5563" />
+                  </TouchableOpacity>
+                  {showWageMenu && (
+                    <View style={styles.pickerMenu}>
+                      {WAGE_RANGES.map((range) => (
+                        <TouchableOpacity key={range.value} style={styles.pickerItem} onPress={() => { setSelectedWage(range.value); setShowWageMenu(false); }}>
+                          <Text style={styles.pickerButtonText}>{t(WAGE_RANGE_KEYS[range.value])}</Text>
+                        </TouchableOpacity>
+                      ))}
+                    </View>
+                  )}
+
+                  <TouchableOpacity style={styles.primaryButton} onPress={handleSaveProfile}>
+                    <Text style={styles.primaryButtonText}>{tx("saveChanges", "Save Changes")}</Text>
+                  </TouchableOpacity>
+                </View>
               </View>
-
-              <View style={styles.sheetBody}>
-                <Text style={styles.fieldLabel}>{t("mainSkill")}</Text>
-                <TouchableOpacity style={styles.pickerButton} onPress={() => setShowSkillMenu(!showSkillMenu)}>
-                  <Text style={styles.pickerButtonText}>
-                    {selectedSkill ? t(selectedSkill as keyof typeof import("../../../constants/translations").translations.en) : t("selectMainSkill")}
-                  </Text>
-                  <Ionicons name={showSkillMenu ? "chevron-up" : "chevron-down"} size={18} color="#4B5563" />
-                </TouchableOpacity>
-                {showSkillMenu && (
-                  <View style={styles.pickerMenu}>
-                    {MAIN_SKILLS.map((skill) => (
-                      <TouchableOpacity key={skill} style={styles.pickerItem} onPress={() => { setSelectedSkill(skill); setShowSkillMenu(false); }}>
-                        <Text style={styles.pickerButtonText}>{t(skill)}</Text>
-                      </TouchableOpacity>
-                    ))}
-                  </View>
-                )}
-
-                <Text style={[styles.fieldLabel, { marginTop: 18 }]}>{tx("expectedWages", "Expected Wages")}</Text>
-                <TouchableOpacity style={styles.pickerButton} onPress={() => setShowWageMenu(!showWageMenu)}>
-                  <Text style={styles.pickerButtonText}>
-                    {selectedWage ? wageLabelMap[selectedWage] : tx("selectWageRange", "Select Wage Range")}
-                  </Text>
-                  <Ionicons name={showWageMenu ? "chevron-up" : "chevron-down"} size={18} color="#4B5563" />
-                </TouchableOpacity>
-                {showWageMenu && (
-                  <View style={styles.pickerMenu}>
-                    {WAGE_RANGES.map((range) => (
-                      <TouchableOpacity key={range.value} style={styles.pickerItem} onPress={() => { setSelectedWage(range.value); setShowWageMenu(false); }}>
-                        <Text style={styles.pickerButtonText}>{t(WAGE_RANGE_KEYS[range.value])}</Text>
-                      </TouchableOpacity>
-                    ))}
-                  </View>
-                )}
-
-                <TouchableOpacity style={styles.primaryButton} onPress={handleSaveProfile}>
-                  <Text style={styles.primaryButtonText}>{tx("saveChanges", "Save Changes")}</Text>
-                </TouchableOpacity>
-              </View>
-            </TouchableOpacity>
+            </TouchableWithoutFeedback>
           </TouchableOpacity>
         </Modal>
       </ScrollView>
