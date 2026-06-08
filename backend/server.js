@@ -182,35 +182,46 @@ mountAppRoutes({
   port: PORT,
 });
 
-startDispatchStateProcessor({
-  Job,
-  io,
-  emitJobCancelledToUsers,
-  logJobEvent,
-  offerJobToNextWorker,
-  pendingJobTimeouts,
-  pendingJobExpirations,
-});
+// Defer starting processors, schedulers and server until DB connection completes
+(async function init() {
+  try {
+    await connectDatabase({ mongoose, jobModel: Job });
+    console.log('MongoDB connected, starting processors and schedulers');
 
+    // Start processors that require DB connectivity
+    startDispatchStateProcessor({
+      Job,
+      io,
+      emitJobCancelledToUsers,
+      logJobEvent,
+      offerJobToNextWorker,
+      pendingJobTimeouts,
+      pendingJobExpirations,
+    });
 
-startBackgroundSchedulers({
-  Job,
-  Wallet,
-  User,
-  WorkerModel,
-  io,
-  pendingJobTimeouts,
-  pendingJobExpirations,
-  startLeaderboardScheduler,
-  startWalletReconciliationScheduler,
-  startJobReconciliationScheduler,
-  startPremiumReconciliationScheduler,
-  startWeeklyWalletSettlementScheduler,
-  startCancellationReconciliationScheduler,
-});
+    startBackgroundSchedulers({
+      Job,
+      Wallet,
+      User,
+      WorkerModel,
+      io,
+      pendingJobTimeouts,
+      pendingJobExpirations,
+      startLeaderboardScheduler,
+      startWalletReconciliationScheduler,
+      startJobReconciliationScheduler,
+      startPremiumReconciliationScheduler,
+      startWeeklyWalletSettlementScheduler,
+      startCancellationReconciliationScheduler,
+    });
 
-// ---------------- START SERVER ----------------
-server.listen(PORT, "0.0.0.0", () => {
-  console.log(`Server running with Socket.io on port ${PORT}`);
-});
+    // Start HTTP / Socket server after DB & schedulers are ready
+    server.listen(PORT, "0.0.0.0", () => {
+      console.log(`Server running with Socket.io on port ${PORT}`);
+    });
+  } catch (err) {
+    console.error('Failed to connect to MongoDB, aborting startup:', err);
+    process.exit(1);
+  }
+})();
 

@@ -56,7 +56,13 @@ const payoutBatchSchema = new mongoose.Schema({
   completedAt: Date,
   notes: String,
   adminNotes: String,
-  processedBy: String // Admin who initiated the payout
+  source: {
+    type: String,
+    enum: ['admin', 'scheduler'],
+    default: 'admin',
+  },
+  createdBy: String,
+  processedBy: String, // Admin who initiated the payout
 }, { timestamps: true });
 
 payoutBatchSchema.index({ 'payoutWeek.year': 1, 'payoutWeek.week': 1 });

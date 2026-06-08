@@ -91,7 +91,8 @@ const userSchema = new mongoose.Schema({
 // create 2dsphere index for location queries
 // add 2dsphere index for geospatial queries
 userSchema.index({ location: '2dsphere' });
-userSchema.index({ role: 1 });
+// `role` already has `index: true` in the schema field definition above.
+// Avoid a duplicate index declaration here.
 userSchema.index({ 'refreshTokens.token': 1 });
 userSchema.index({ fcmToken: 1 });
 userSchema.index({ deviceTokens: 1 });

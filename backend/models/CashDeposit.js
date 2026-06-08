@@ -36,8 +36,7 @@ const cashDepositSchema = new mongoose.Schema({
   },
   depositDeadline: {
     type: Date,
-    required: true,
-    index: true
+    required: true
   },
   depositedAt: Date,
   idempotencyKey: {
@@ -67,14 +66,14 @@ const cashDepositSchema = new mongoose.Schema({
 // Compound indexes for efficient queries
 cashDepositSchema.index({ workerPhone: 1, status: 1, createdAt: -1 });
 cashDepositSchema.index({ jobId: 1, workerPhone: 1 }, { unique: true });
-cashDepositSchema.index({ depositDeadline: 1, status: 1 });
-
 // Auto-update updatedAt
 cashDepositSchema.pre('save', function() {
   this.updatedAt = new Date();
 });
 
+// Compound index including depositDeadline already created above.
 // TTL index for automatic expiration (24 hours after deadline)
+// Keep TTL index but avoid duplicating the simple depositDeadline index.
 cashDepositSchema.index({ depositDeadline: 1 }, {
   expireAfterSeconds: 24 * 60 * 60, // 24 hours
   partialFilterExpression: { status: 'pending' }

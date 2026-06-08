@@ -27,6 +27,7 @@ const WorkerEarnings = require('../models/WorkerEarnings');
 const JobEventLog = require('../models/JobEventLog');
 const OpsAlert = require('../models/OpsAlert');
 const { runWeeklyWalletSettlement } = require('../services/weeklyWalletSettlement');
+const { getPayoutWeekInfo } = require('../utils/weekBounds');
 
 // Middleware to check admin role
 const checkAdmin = (req, res, next) => {
@@ -1845,6 +1846,7 @@ router.get('/finance/disputes', authenticateToken, checkAdmin, async (_req, res)
 // ============================
 router.get('/payouts/queue', authenticateToken, checkAdmin, async (req, res) => {
     try {
+        res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
         const status = safeText(req.query.status || '', 40);
         const query = status ? { status } : {};
         const batches = await PayoutBatch.find(query).sort({ createdAt: -1 }).limit(200).lean();
@@ -1861,6 +1863,20 @@ router.post('/payouts/batches', authenticateToken, checkAdmin, async (req, res) 
         const week = getWeekRange();
         const startDate = start ? new Date(start) : week.start;
         const endDate = end ? new Date(end) : week.end;
+
+        if (Number.isNaN(startDate.getTime()) || Number.isNaN(endDate.getTime())) {
+            return res.status(400).json({ success: false, message: 'Invalid payout window dates' });
+        }
+        if (endDate <= startDate) {
+            return res.status(400).json({ success: false, message: 'End date must be after start date' });
+        }
+
+        const payoutWeek = getPayoutWeekInfo(startDate);
+        const batchId = `PAYOUT_${payoutWeek.year}_W${String(payoutWeek.week).padStart(2, '0')}`;
+        const existingBatch = await PayoutBatch.findOne({ 'payoutWeek.year': payoutWeek.year, 'payoutWeek.week': payoutWeek.week });
+        if (existingBatch) {
+            return res.status(409).json({ success: false, message: 'Payout batch for this week already exists', batchId: existingBatch.batchId });
+        }
 
         // Single payout pipeline source: WorkerEarnings ledger.
         const weekEarnings = await WorkerEarnings.find({
@@ -1888,23 +1904,98 @@ router.post('/payouts/batches', authenticateToken, checkAdmin, async (req, res) 
             return res.status(400).json({ success: false, message: 'No valid worker earnings found for payout batch' });
         }
 
-        const now = new Date();
-        const year = now.getUTCFullYear();
-        const wk = Math.ceil((((now - new Date(Date.UTC(year, 0, 1))) / 86400000) + new Date(Date.UTC(year, 0, 1)).getUTCDay() + 1) / 7);
-        const batchId = generateRef(`PAYOUT_${year}_W${wk}`);
+        const phones = Array.from(byWorker.keys());
+        const [workerUsers, wallets, bankAccounts] = await Promise.all([
+            User.find({ phone: { $in: phones } }).select('phone name').lean(),
+            Wallet.find({ phone: { $in: phones } }).select('phone bankAccountId upiId upiMasked upiIsVerified preferredPayoutMethod').lean(),
+            BankAccount.find({ phone: { $in: phones } }).select('phone accountHolderName maskedAccount ifscCode bankName').lean(),
+        ]);
+
+        const userMap = new Map(workerUsers.map((u) => [String(u.phone), u]));
+        const walletMap = new Map(wallets.map((w) => [String(w.phone), w]));
+        const bankAccountMap = new Map(bankAccounts.map((b) => [String(b.phone), b]));
+
+        const workerRows = Array.from(byWorker.values()).map((row) => {
+            const workerPhone = safeText(row.workerPhone, 20);
+            const user = userMap.get(workerPhone);
+            const wallet = walletMap.get(workerPhone);
+            const bankAccount = bankAccountMap.get(workerPhone);
+            const bankDetails = bankAccount
+                ? {
+                      accountName: bankAccount.accountHolderName || '',
+                      accountNumber: bankAccount.maskedAccount || '',
+                      ifscCode: bankAccount.ifscCode || '',
+                      bankName: bankAccount.bankName || '',
+                  }
+                : wallet?.upiId
+                ? {
+                      accountName: wallet.upiMasked || wallet.upiId,
+                      accountNumber: wallet.upiId,
+                      ifscCode: '',
+                      bankName: 'UPI',
+                  }
+                : {};
+            const paymentMethod = bankAccount ? 'bank' : wallet?.upiId ? 'upi' : null;
+            return {
+                workerPhone,
+                workerName: String(user?.name || ''),
+                earningsAmount: Number(row.earningsAmount || 0),
+                deductions: Number(row.deductions || 0),
+                netAmount: Number(row.netAmount || 0),
+                status: 'pending',
+                transactionId: `batch:${batchId}:${workerPhone}`,
+                bankAccountId: bankAccount?._id || null,
+                paymentMethod,
+                bankDetails,
+                transactions: [],
+            };
+        });
 
         const batch = await PayoutBatch.create({
             batchId,
-            payoutWeek: { year, week: wk, startDate, endDate },
+            payoutWeek: { year: payoutWeek.year, week: payoutWeek.week, startDate, endDate },
             status: 'pending',
-            totalAmount: Array.from(byWorker.values()).reduce((s, r) => s + Number(r.netAmount || 0), 0),
-            totalEarnings: Array.from(byWorker.values()).reduce((s, r) => s + Number(r.earningsAmount || 0), 0),
-            totalDeductions: Array.from(byWorker.values()).reduce((s, r) => s + Number(r.deductions || 0), 0),
-            totalWorkers: byWorker.size,
-            workers: Array.from(byWorker.values()),
+            totalAmount: workerRows.reduce((s, r) => s + Number(r.netAmount || 0), 0),
+            totalEarnings: workerRows.reduce((s, r) => s + Number(r.earningsAmount || 0), 0),
+            totalDeductions: workerRows.reduce((s, r) => s + Number(r.deductions || 0), 0),
+            totalWorkers: workerRows.length,
+            workers: workerRows,
             notes: safeText(req.body?.notes || '', 500),
+            source: 'admin',
+            createdBy: req.user.phone || 'admin',
             processedBy: req.user.phone || 'admin',
         });
+
+        const now = new Date();
+        for (const workerRow of workerRows) {
+            const payoutDetails = {
+                batchId,
+                transactionId: workerRow.transactionId,
+                bankAccountId: workerRow.bankAccountId,
+                bankSnapshot: {
+                    accountName: workerRow.bankDetails.accountName || '',
+                    maskedAccountNumber: workerRow.bankDetails.accountNumber || '',
+                    ifscCode: workerRow.bankDetails.ifscCode || '',
+                    bankName: workerRow.bankDetails.bankName || '',
+                },
+            };
+
+            await WorkerEarnings.updateMany(
+                {
+                    workerPhone: workerRow.workerPhone,
+                    earnedAt: { $gte: startDate, $lt: endDate },
+                    status: { $in: ['earned', 'payout_requested'] },
+                },
+                {
+                    $set: {
+                        status: 'payout_requested',
+                        payoutRequestedAt: now,
+                        payoutWeek,
+                        payoutDetails,
+                    },
+                }
+            );
+        }
 
         await logAdminAudit({ req, action: 'payout_batch_created', phone: req.user.phone || 'admin', description: `Payout batch created ${batchId}`, before: null, after: { batchId, totalAmount: batch.totalAmount, totalWorkers: batch.totalWorkers }, metadata: { batchId } });
         return res.json({ success: true, batch });
@@ -1945,37 +2036,53 @@ router.patch('/payouts/:batchId/state', authenticateToken, checkAdmin, async (re
         if (!batch) return res.status(404).json({ success: false, message: 'Batch not found' });
         const before = { status: batch.status };
 
+        const now = new Date();
         if (next === 'retry') {
             batch.status = 'processing';
             for (const w of batch.workers || []) {
                 if (w.status === 'failed') w.status = 'pending';
             }
-        } else if (next === 'success') {
+        } else if (next === 'success' || next === 'completed') {
             batch.status = 'completed';
-            batch.completedAt = new Date();
+            batch.completedAt = now;
+            const successfulPhones = new Set();
             for (const w of batch.workers || []) {
-                if (w.status !== 'success') w.status = 'success';
-            }
-            // Source-of-truth sync: mark underlying earnings as paid out for this batch window.
-            await WorkerEarnings.updateMany(
-                {
-                    workerPhone: { $in: (batch.workers || []).map((w) => w.workerPhone).filter(Boolean) },
-                    earnedAt: { $gte: batch.payoutWeek.startDate, $lt: batch.payoutWeek.endDate },
-                    status: { $in: ['earned', 'payout_requested'] },
-                },
-                {
-                    $set: {
-                        status: 'payout_completed',
-                        payoutCompletedAt: new Date(),
-                        source: 'admin',
-                        provider: 'internal',
-                        providerEventId: `batch:${batch.batchId}`,
-                    },
+                if (w.status !== 'success' && w.status !== 'failed') {
+                    w.status = 'success';
                 }
-            );
+                if (w.status === 'success') {
+                    successfulPhones.add(w.workerPhone);
+                }
+            }
+
+            for (const workerPhone of Array.from(successfulPhones).filter(Boolean)) {
+                await WorkerEarnings.updateMany(
+                    {
+                        workerPhone,
+                        earnedAt: { $gte: batch.payoutWeek.startDate, $lt: batch.payoutWeek.endDate },
+                        status: { $in: ['earned', 'payout_requested'] },
+                    },
+                    {
+                        $set: {
+                            status: 'payout_completed',
+                            payoutCompletedAt: now,
+                            source: 'admin',
+                            provider: 'internal',
+                            providerEventId: `batch:${batch.batchId}`,
+                        },
+                    }
+                );
+            }
+        } else if (next === 'failed') {
+            batch.status = 'failed';
+            for (const w of batch.workers || []) {
+                if (['pending', 'processing', 'manual_review'].includes(w.status)) {
+                    w.status = 'failed';
+                }
+            }
         } else {
             batch.status = next === 'queued' ? 'pending' : next;
-            if (next === 'processing') batch.processedAt = new Date();
+            if (next === 'processing') batch.processedAt = now;
         }
         await batch.save();
 
@@ -1983,6 +2090,60 @@ router.patch('/payouts/:batchId/state', authenticateToken, checkAdmin, async (re
         return res.json({ success: true, batch });
     } catch (error) {
         console.error('Payout state transition error:', error);
+        return res.status(500).json({ success: false, message: error.message });
+    }
+});
+
+router.patch('/payouts/:batchId/workers/:workerPhone/status', authenticateToken, checkAdmin, async (req, res) => {
+    try {
+        const batchId = safeText(req.params.batchId || '', 200);
+        const workerPhone = safeText(req.params.workerPhone || '', 20);
+        const next = safeText(req.body?.status || '', 40);
+        const failureReason = safeText(req.body?.failureReason || '', 500);
+        const allowed = ['pending', 'processing', 'success', 'failed', 'manual_review'];
+        if (!allowed.includes(next)) return res.status(400).json({ success: false, message: 'Invalid worker status' });
+
+        const batch = await PayoutBatch.findOne({ batchId });
+        if (!batch) return res.status(404).json({ success: false, message: 'Batch not found' });
+
+        const worker = (batch.workers || []).find((w) => String(w.workerPhone) === workerPhone);
+        if (!worker) return res.status(404).json({ success: false, message: 'Worker row not found in batch' });
+
+        const before = { workerStatus: worker.status, failureReason: worker.failureReason };
+
+        worker.status = next;
+        if (next === 'failed') {
+            worker.failureReason = failureReason || worker.failureReason;
+        } else if (next === 'success') {
+            worker.failureReason = '';
+        }
+
+        await batch.save();
+
+        if (next === 'success') {
+            const now = new Date();
+            await WorkerEarnings.updateMany(
+                {
+                    workerPhone,
+                    earnedAt: { $gte: batch.payoutWeek.startDate, $lt: batch.payoutWeek.endDate },
+                    status: { $in: ['earned', 'payout_requested'] },
+                },
+                {
+                    $set: {
+                        status: 'payout_completed',
+                        payoutCompletedAt: now,
+                        source: 'admin',
+                        provider: 'internal',
+                        providerEventId: `batch:${batch.batchId}`,
+                    },
+                }
+            );
+        }
+
+        await logAdminAudit({ req, action: 'payout_batch_worker_status_changed', phone: req.user.phone || 'admin', description: `Batch ${batchId} worker ${workerPhone} -> ${next}`, before, after: { workerStatus: next, failureReason: worker.failureReason }, metadata: { batchId, workerPhone } });
+        return res.json({ success: true, batch, worker: { workerPhone, status: worker.status, failureReason: worker.failureReason } });
+    } catch (error) {
+        console.error('Payout worker status update error:', error);
         return res.status(500).json({ success: false, message: error.message });
     }
 });

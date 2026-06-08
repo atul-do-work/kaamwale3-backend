@@ -1,8 +1,9 @@
 const Wallet = require("../models/Wallet");
 const User = require("../models/User");
+const BankAccount = require("../models/BankAccount");
 const PayoutBatch = require("../models/PayoutBatch");
 const WorkerEarnings = require("../models/WorkerEarnings");
-const { getWeekBounds, getPayoutWeekInfo } = require("../utils/weekBounds");
+const { getWeekBounds, getPayoutWeekInfo, PAYOUT_CYCLE_MS } = require("../utils/weekBounds");
 
 function computeClosedWeekSummary(walletDoc, closedStart, closedEndExclusive) {
   const txs = Array.isArray(walletDoc?.transactions) ? walletDoc.transactions : [];
@@ -97,7 +98,7 @@ async function runWeeklyWalletSettlement(now = new Date(), options = {}) {
   // Process all active worker wallets with a positive balance.
   const candidateWallets = await Wallet.find({
     $or: [{ availableBalance: { $gt: 0 } }, { pocketBalance: { $gt: 0 } }],
-  }).select("phone availableBalance pocketBalance balance transactions");
+  }).select("phone availableBalance pocketBalance balance bankAccountId upiId upiMasked transactions");
 
   if (!candidateWallets.length) {
     return { settledWorkers: 0, settledAmount: 0, cycleStart: closedStart, cycleEnd: new Date(closedEndExclusive.getTime() - 1) };
@@ -110,6 +111,12 @@ async function runWeeklyWalletSettlement(now = new Date(), options = {}) {
   }).select("phone name");
   const workerMap = new Map(workerUsers.map((u) => [u.phone, u]));
   const workerPhones = new Set(workerUsers.map((u) => u.phone));
+  const payoutWeek = getPayoutWeekInfo(closedStart);
+  const batchId = `PAYOUT_${payoutWeek.year}_W${String(payoutWeek.week).padStart(2, '0')}`;
+  const bankAccounts = await BankAccount.find({ phone: { $in: phones } })
+    .select("phone accountHolderName maskedAccount ifscCode bankName")
+    .lean();
+  const bankAccountMap = new Map(bankAccounts.map((account) => [String(account.phone), account]));
 
   let settledWorkers = 0;
   let settledAmount = 0;
@@ -149,11 +156,10 @@ async function runWeeklyWalletSettlement(now = new Date(), options = {}) {
       },
     };
 
-    const update = { $inc: {}, $push: { transactions: settlementTransaction } };
+    const update = { $inc: {}, $push: { transactions: settlementTransaction }, $set: { balance: 0 } };
 
     if (availableSettle > 0) {
       update.$inc.availableBalance = -availableSettle;
-      update.$inc.balance = -availableSettle;
     }
     if (pocketSettle > 0) {
       update.$inc.pocketBalance = -pocketSettle;
@@ -173,6 +179,23 @@ async function runWeeklyWalletSettlement(now = new Date(), options = {}) {
     settledAmount += settleAmount;
 
     const workerName = String(workerMap.get(wallet.phone)?.name || '');
+    const bankAccount = bankAccountMap.get(String(wallet.phone));
+    const bankDetails = bankAccount
+      ? {
+          accountName: bankAccount.accountHolderName || '',
+          accountNumber: bankAccount.maskedAccount || '',
+          ifscCode: bankAccount.ifscCode || '',
+          bankName: bankAccount.bankName || '',
+        }
+      : wallet.upiId
+      ? {
+          accountName: wallet.upiMasked || wallet.upiId,
+          accountNumber: wallet.upiId,
+          ifscCode: '',
+          bankName: 'UPI',
+        }
+      : {};
+
     batchWorkers.push({
       workerPhone: wallet.phone,
       workerName,
@@ -181,7 +204,7 @@ async function runWeeklyWalletSettlement(now = new Date(), options = {}) {
       netAmount: settleAmount,
       status: 'pending',
       transactionId: idempotencyKey,
-      bankDetails: {},
+      bankDetails,
       transactions: [settlementTransaction],
     });
 
@@ -221,13 +244,19 @@ async function runWeeklyWalletSettlement(now = new Date(), options = {}) {
     );
   }
 
-  const payoutWeek = getPayoutWeekInfo(closedStart);
-  const batchId = `PAYOUT_${payoutWeek.year}_W${String(payoutWeek.week).padStart(2, '0')}`;
   let batchCreated = false;
 
   if (batchWorkers.length > 0) {
     const existingBatch = await PayoutBatch.findOne({ batchId });
     if (!existingBatch) {
+      // debug: inspect batchWorkers shape to avoid schema casting issues
+      try {
+        if (batchWorkers.length > 0) {
+          console.debug('[weekly-settlement] creating batch sample worker:', JSON.stringify(batchWorkers[0], null, 2));
+        }
+      } catch (err) {
+        console.debug('[weekly-settlement] failed to stringify batch worker sample', err && err.message);
+      }
       await PayoutBatch.create({
         batchId,
         payoutWeek,
@@ -237,6 +266,8 @@ async function runWeeklyWalletSettlement(now = new Date(), options = {}) {
         totalDeductions: batchWorkers.reduce((sum, item) => sum + Number(item.deductions || 0), 0),
         totalWorkers: batchWorkers.length,
         workers: batchWorkers,
+        source: 'scheduler',
+        createdBy: 'scheduler',
         processedBy: 'scheduler',
       });
       batchCreated = true;

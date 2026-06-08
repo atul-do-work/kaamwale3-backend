@@ -288,7 +288,7 @@ async function markAttendance({ jobId, status, workerPhone, userPhone, deps }) {
 
   // 🔐 CRITICAL: Validate that user marking attendance is actually the contractor
   // and that a valid worker has accepted this job
-  if (userPhone !== job.contractorPhone) {
+  if (!areSamePhone(userPhone, job.contractorPhone)) {
     return { code: 403, body: { success: false, message: "Only the contractor can mark attendance" } };
   }
 

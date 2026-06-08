@@ -1436,6 +1436,27 @@
                     </div>
                 </div>
 
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:16px;">
+                    <div style="grid-column: span 2; background:#f9fafb;padding:14px;border-radius:10px;border:1px solid #e5e7eb;">
+                        <h4>Payout Batch + Worker Status</h4>
+                        <input id="opsPayoutStart" class="search-box" placeholder="Batch start (optional ISO date)" style="width:100%;margin-bottom:8px;">
+                        <input id="opsPayoutEnd" class="search-box" placeholder="Batch end (optional ISO date)" style="width:100%;margin-bottom:8px;">
+                        <input id="opsPayoutNotes" class="search-box" placeholder="Notes (optional)" style="width:100%;margin-bottom:8px;">
+                        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+                            <button class="btn-small btn-view" onclick="opsCreatePayoutBatch()">Create Batch</button>
+                            <button class="btn-small btn-approve" onclick="opsRunWeeklySettlement()">Run Weekly Settlement</button>
+                        </div>
+                        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px; margin-top:12px;">
+                            <input id="opsPayoutBatchId" class="search-box" placeholder="Batch ID" style="width:100%;">
+                            <input id="opsPayoutWorkerPhone" class="search-box" placeholder="Worker phone" style="width:100%;">
+                        </div>
+                        <input id="opsPayoutWorkerStatus" class="search-box" placeholder="Worker status (pending/processing/success/failed/manual_review)" style="width:100%;margin-top:8px;">
+                        <input id="opsPayoutWorkerFailureReason" class="search-box" placeholder="Failure reason (if failed)" style="width:100%;margin-top:8px;">
+                        <button class="btn-small btn-view" style="margin-top:8px;" onclick="opsUpdateWorkerPayoutStatus()">Update Worker Payout Status</button>
+                        <div id="opsPayoutWorkerOut" style="margin-top:10px;max-height:180px;overflow:auto;background:#fff;padding:10px;border-radius:8px;font-size:12px;border:1px solid #e5e7eb;"></div>
+                    </div>
+                </div>
+
                 <div style="background:#f9fafb;padding:14px;border-radius:10px;border:1px solid #e5e7eb;margin-top:16px;">
                     <h4>Analytics + Export</h4>
                     <input id="opsFunnelCity" class="search-box" placeholder="City filter (optional)" style="width:100%;margin-bottom:8px;">
@@ -3209,7 +3230,7 @@
                 ...(options.headers || {}),
             };
             if (options.body && !headers['Content-Type']) headers['Content-Type'] = 'application/json';
-            const res = await fetch(`${API_BASE}${path}`, { ...options, headers });
+            const res = await fetch(`${API_BASE}${path}`, { ...options, headers, cache: 'no-store' });
             const data = await res.json().catch(() => ({}));
             if (res.status === 401 || res.status === 403) {
                 handleAuthFailure(data.message || 'Token invalid');
@@ -3226,6 +3247,7 @@
         function loadOpsConsole() {
             const searchOut = document.getElementById('opsSearchOut');
             if (searchOut && !searchOut.textContent) searchOut.textContent = 'Ready';
+            opsLoadPayoutQueue().catch(() => {});
         }
 
         async function runOpsSearch() {
@@ -3632,7 +3654,49 @@
             } catch (err) { alert(err.message); }
         }
 
-        async function opsCreatePayoutBatch() { try { await adminApi('/admin/payouts/batches', { method: 'POST', body: JSON.stringify({}) }); await opsLoadPayoutQueue(); } catch (err) { alert(err.message); } }
+        async function opsCreatePayoutBatch() {
+            try {
+                const start = (document.getElementById('opsPayoutStart').value || '').trim();
+                const end = (document.getElementById('opsPayoutEnd').value || '').trim();
+                const notes = (document.getElementById('opsPayoutNotes').value || '').trim();
+                const payload = {};
+                if (start) payload.start = start;
+                if (end) payload.end = end;
+                if (notes) payload.notes = notes;
+                const data = await adminApi('/admin/payouts/batches', { method: 'POST', body: JSON.stringify(payload) });
+                renderTable('opsPayoutOut', [{ key: 'batchId', label: 'Batch ID' }, { key: 'status', label: 'Status' }, { key: 'totalWorkers', label: 'Workers' }, { key: 'totalAmount', label: 'Amount' }, { key: 'createdAt', label: 'Created At' }], [data.batch || {}]);
+                await opsLoadPayoutQueue();
+            } catch (err) { alert(err.message); }
+        }
+        async function opsUpdateWorkerPayoutStatus() {
+            try {
+                const batchId = (document.getElementById('opsPayoutBatchId').value || '').trim();
+                const workerPhone = (document.getElementById('opsPayoutWorkerPhone').value || '').trim();
+                const status = (document.getElementById('opsPayoutWorkerStatus').value || '').trim();
+                const failureReason = (document.getElementById('opsPayoutWorkerFailureReason').value || '').trim();
+
+                if (!batchId || !workerPhone || !status) {
+                    return alert('Batch ID, worker phone, and status are required');
+                }
+
+                const allowed = ['pending', 'processing', 'success', 'failed', 'manual_review'];
+                if (!allowed.includes(status)) {
+                    return alert('Invalid status. Use pending, processing, success, failed, or manual_review');
+                }
+
+                const data = await adminApi(`/admin/payouts/${encodeURIComponent(batchId)}/workers/${encodeURIComponent(workerPhone)}/status`, {
+                    method: 'PATCH',
+                    body: JSON.stringify({ status, failureReason }),
+                });
+
+                renderTable('opsPayoutWorkerOut', [
+                    { key: 'workerPhone', label: 'Worker' },
+                    { key: 'status', label: 'Status' },
+                    { key: 'failureReason', label: 'Failure Reason' },
+                ], [data.worker || {}]);
+                await opsLoadPayoutQueue();
+            } catch (err) { alert(err.message); }
+        }
         async function opsRunWeeklySettlement() {
             try {
                 const data = await adminApi('/admin/payouts/weekly-settlement/run', { method: 'POST', body: JSON.stringify({}) });
