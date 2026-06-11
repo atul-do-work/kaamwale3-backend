@@ -413,6 +413,74 @@ function createAuthSupportRouter({ JWT_SECRET, sendNotificationToUserPhone, sess
     }
   });
 
+  // ✅ FIX: Clear FCM token on logout to prevent stale push notifications
+  router.post("/auth/logout-device", authenticateToken, async (req, res) => {
+    try {
+      const { fcmToken } = req.body;
+      if (!fcmToken) {
+        return res.status(400).json({ success: false, message: "FCM token required" });
+      }
+
+      const user = await User.findOne({ phone: req.user.phone });
+      if (!user) {
+        return res.status(404).json({ success: false, message: "User not found" });
+      }
+
+      // Clear FCM token to unregister from push notifications
+      if (user.fcmToken === fcmToken) {
+        user.fcmToken = null;
+        await user.save();
+      }
+
+      return res.json({ success: true, message: "Device logged out successfully" });
+    } catch (err) {
+      console.error("Error logging out device:", err);
+      return res.status(500).json({ success: false, message: "Internal server error" });
+    }
+  });
+
+  // ✅ FIX: Logout from ALL devices - clear all refresh tokens and FCM
+  router.post("/auth/logout-all-devices", authenticateToken, async (req, res) => {
+    try {
+      const user = await User.findOne({ phone: req.user.phone });
+      if (!user) {
+        return res.status(404).json({ success: false, message: "User not found" });
+      }
+
+      // Clear all refresh tokens (logout all devices)
+      user.refreshTokens = [];
+      // Clear FCM token to stop push notifications
+      user.fcmToken = null;
+      await user.save();
+
+      return res.json({ success: true, message: "Logged out from all devices" });
+    } catch (err) {
+      console.error("Error logging out from all devices:", err);
+      return res.status(500).json({ success: false, message: "Internal server error" });
+    }
+  });
+
+  // ✅ NEW: Get active sessions for multi-device management
+  router.get("/auth/active-sessions", authenticateToken, async (req, res) => {
+    try {
+      const user = await User.findOne({ phone: req.user.phone });
+      if (!user) {
+        return res.status(404).json({ success: false, message: "User not found" });
+      }
+
+      const sessions = user.refreshTokens.map((rt) => ({
+        createdAt: rt.createdAt || "Unknown",
+        expiresAt: rt.expiresAt || "Unknown",
+        isActive: new Date(rt.expiresAt) > new Date(),
+      }));
+
+      return res.json({ success: true, sessions: sessions.filter((s) => s.isActive) });
+    } catch (err) {
+      console.error("Error fetching active sessions:", err);
+      return res.status(500).json({ success: false, message: "Internal server error" });
+    }
+  });
+
   router.post("/auth/refresh-fcm-token", authenticateToken, async (req, res) => {
     try {
       const { fcmToken } = req.body;

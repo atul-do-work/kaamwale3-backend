@@ -269,6 +269,8 @@ io.on("connection", (socket) => {
           locationLastUpdated: new Date(), // ✅ Track when location was last updated
         });
 
+        console.log(`✅ registerWorker: socket=${socket.id} phone=${phone} lat=${lat} lon=${lon} isAvailable=${isAvailable} mainSkill=${inferredMainSkill} expectedWage=${expectedWage} connectedWorkers=${connectedWorkers.size}`);
+
         // ✅ Store connection timestamp for TTL cleanup
         workerConnectionTimes.set(socket.id, Date.now());
 
@@ -376,6 +378,8 @@ io.on("connection", (socket) => {
         }
         connectedWorkers.set(socket.id, worker);
       }
+
+      console.log(`🟢 workerOnline: socket=${socket.id} phone=${phone} lat=${lat} lon=${lon} connectedWorkers=${connectedWorkers.size}`);
 
       io.to(phone).emit("workerStatusUpdate", {
         isAvailable: true,

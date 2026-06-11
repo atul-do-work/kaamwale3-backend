@@ -36,6 +36,7 @@ const notificationHistorySchema = new mongoose.Schema(
         "job_completed",
         "review_reminder",
         "ops_alert",
+        "cash_deposit_required",
       ],
       required: true,
       index: true,

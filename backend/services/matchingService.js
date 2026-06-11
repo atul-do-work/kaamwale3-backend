@@ -41,6 +41,7 @@ const isWageInRange = (jobAmount, workerWageRange) => {
  * @returns {Array} Array of nearby workers sorted by distance to contractor
  */
 exports.findNearbyWorkers = (jobLocation, connectedWorkers, radiusKm = 10, maxLocationAgeMinutes = 30) => {
+  console.log(`🔍 findNearbyWorkers: jobLat=${jobLocation.lat} jobLon=${jobLocation.lon} requiredSkill=${jobLocation.mainSkill || jobLocation.workerType || 'any'} amount=${jobLocation.amount} radiusKm=${radiusKm} maxLocationAgeMinutes=${maxLocationAgeMinutes} connectedWorkers=${connectedWorkers.size}`);
   const nearbyWorkers = [];
   const skippedWorkers = [];
 

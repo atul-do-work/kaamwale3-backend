@@ -253,6 +253,17 @@ function createJobsLifecycleCoreRouter({
         const requiredCount = bulkJob.requiredWorkers || 1;
         const jobFinalized = acceptedCount >= requiredCount && bulkJob.status !== "accepted";
 
+        // ✅ IMPROVEMENT: Emit real-time progress update to contractor
+        const progressPayload = {
+          jobId: bulkJob._id.toString(),
+          acceptedCount,
+          requiredCount,
+          workerName: workerName || req.user.phone,
+          workerPhone: workerPhone,
+          acceptedAt: new Date(),
+        };
+        io.to(bulkJob.contractorPhone).emit("bulkJobProgress", progressPayload);
+
         if (jobFinalized) {
           const finalized = await Job.findOneAndUpdate(
             { _id: jobId, status: { $ne: "accepted" } },
@@ -267,6 +278,26 @@ function createJobsLifecycleCoreRouter({
             { new: true }
           );
           if (finalized) {
+            // ✅ IMPROVEMENT: Emit bulkJobFilled event when all slots are accepted
+            io.to(bulkJob.contractorPhone).emit("bulkJobFilled", {
+              jobId: finalized._id.toString(),
+              title: finalized.title,
+              acceptedCount,
+              requiredCount,
+              acceptedWorkers: finalized.acceptedWorkers,
+            });
+
+            // ✅ IMPROVEMENT: Notify all accepted workers that job is full and can start
+            if (Array.isArray(finalized.acceptedWorkers)) {
+              for (const worker of finalized.acceptedWorkers) {
+                io.to(worker.phone).emit("bulkJobStarting", {
+                  jobId: finalized._id.toString(),
+                  title: finalized.title,
+                  allWorkersAccepted: true,
+                });
+              }
+            }
+
             await logJobEvent({
               jobId: finalized._id,
               eventType: "job_accepted",

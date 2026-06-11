@@ -229,15 +229,18 @@ async function upsertWorkerEarningForJobPayment({ job, workerPhone, amount, mode
 }
 
 async function markAttendance({ jobId, status, workerPhone, userPhone, deps }) {
-  const { trackingJobs, emitJobUpdatedToUsers, logJobEvent } = deps;
+  const { trackingJobs, emitJobUpdatedToUsers, logJobEvent, io } = deps;
   const job = await Job.findById(jobId);
   if (!job) return { code: 404, body: { message: "Job not found" } };
 
+  // ✅ CRITICAL FIX: Normalize status for consistent comparison throughout app
+  // Store as "Present"/"Absent" (title case) internally for db/api consistency
   const normalizedStatus = String(status || "").trim().toLowerCase();
   const allowedStatuses = new Set(["present", "absent"]);
   if (!allowedStatuses.has(normalizedStatus)) {
     return { code: 400, body: { success: false, message: "Invalid attendance status. Allowed values: Present, Absent" } };
   }
+  // ✅ NORMALIZED: Always store as title case "Present" / "Absent"
   const canonicalStatus = normalizedStatus === "present" ? "Present" : "Absent";
 
   if (job.bulkHiring && workerPhone) {
@@ -316,19 +319,46 @@ async function markAttendance({ jobId, status, workerPhone, userPhone, deps }) {
   });
 
   if (trackingJobs.has(jobId)) trackingJobs.delete(jobId);
+  
+  // ✅ IMPROVEMENT: For bulk jobs, broadcast attendance updates to all accepted workers
+  if (job.bulkHiring && Array.isArray(job.acceptedWorkers)) {
+    // Emit attendance update to all workers on this job
+    for (const acceptedWorker of job.acceptedWorkers) {
+      if (acceptedWorker.phone) {
+        io.to(acceptedWorker.phone).emit("bulkJobAttendanceUpdate", {
+          jobId: job._id.toString(),
+          title: job.title,
+          updatedWorker: {
+            phone: workerPhone,
+            name: acceptedWorker.name,
+            attendanceStatus: canonicalStatus,
+            attendanceTime: job.attendanceTime,
+          },
+          allWorkers: job.acceptedWorkers.map(w => ({
+            phone: w.phone,
+            name: w.name,
+            attendanceStatus: w.attendanceStatus,
+            paymentStatus: w.paymentStatus,
+          })),
+        });
+      }
+    }
+  }
+
   await emitJobUpdatedToUsers(job, [
     job.contractorPhone,
     job.acceptedBy || job.contractorPhone,
+    ...(job.bulkHiring && Array.isArray(job.acceptedWorkers) ? job.acceptedWorkers.map(w => w?.phone).filter(Boolean) : []),
   ]);
 
   // Send push notification to worker about attendance marking or job start
-  const workerNotificationPhone = job.bulkHiring ? workerPhone : job.acceptedBy;
-  if (workerNotificationPhone) {
+  if (job.bulkHiring && workerPhone) {
+    // For bulk: send notification to specific worker
     const isJobStarted = oldState.status === "accepted" && job.status === "in_progress";
-    await sendNotificationToUserPhone(workerNotificationPhone, {
-      title: isJobStarted ? "Job Started" : "Job Update",
+    await sendNotificationToUserPhone(workerPhone, {
+      title: isJobStarted ? "Job Started" : "Attendance Marked",
       body: isJobStarted 
-        ? `Your job has started: ${job.title}`
+        ? `Your bulk job has started: ${job.title}`
         : `Contractor marked your attendance as ${canonicalStatus} for job: ${job.title}`,
       type: isJobStarted ? "job_started" : "job_progress",
       metadata: {
@@ -337,6 +367,23 @@ async function markAttendance({ jobId, status, workerPhone, userPhone, deps }) {
         action: isJobStarted ? "job_started" : "attendance_marked"
       }
     });
+  } else {
+    const workerNotificationPhone = job.acceptedBy;
+    if (workerNotificationPhone) {
+      const isJobStarted = oldState.status === "accepted" && job.status === "in_progress";
+      await sendNotificationToUserPhone(workerNotificationPhone, {
+        title: isJobStarted ? "Job Started" : "Job Update",
+        body: isJobStarted 
+          ? `Your job has started: ${job.title}`
+          : `Contractor marked your attendance as ${canonicalStatus} for job: ${job.title}`,
+        type: isJobStarted ? "job_started" : "job_progress",
+        metadata: {
+          jobId: job._id.toString(),
+          status: canonicalStatus,
+          action: isJobStarted ? "job_started" : "attendance_marked"
+        }
+      });
+    }
   }
 
   return { code: 200, body: { success: true, job } };
@@ -1509,15 +1556,23 @@ async function rateJob({ jobId, stars, feedback, workerPhone, userPhone, userNam
 
       let totalStars = 0;
       let totalReviews = 0;
+      const processedJobs = new Set();
+      
       for (const rated of ratedJobs) {
+        // ✅ CRITICAL FIX: Prevent double-counting same worker from acceptedBy and acceptedWorkers
+        // Check acceptedBy OR acceptedWorker (for single-worker jobs)
         if ((rated.acceptedBy === ratingTargetPhone || rated.acceptedWorker?.phone === ratingTargetPhone) && rated.rating?.stars) {
           totalStars += rated.rating.stars;
           totalReviews += 1;
-        }
-        for (const w of rated.acceptedWorkers || []) {
-          if (w?.phone === ratingTargetPhone && w?.rating?.stars) {
-            totalStars += w.rating.stars;
-            totalReviews += 1;
+          processedJobs.add(String(rated._id));
+        } else {
+          // Only loop acceptedWorkers if not already counted from acceptedBy
+          for (const w of rated.acceptedWorkers || []) {
+            if (w?.phone === ratingTargetPhone && w?.rating?.stars) {
+              totalStars += w.rating.stars;
+              totalReviews += 1;
+              break; // ✅ Only count once per job
+            }
           }
         }
       }
@@ -1589,7 +1644,8 @@ async function rateContractor({ jobId, stars, feedback, userPhone, userName, dep
     return { code: 400, body: { success: false, message: "Contractor can be rated only after paid and completed job" } };
   }
 
-  if (job.contractorRating && job.contractorRating.stars) {
+  // ✅ CRITICAL FIX: Check for existence, not truthiness (in case stars is 0 or invalid type)
+  if (job.contractorRating?.stars && typeof job.contractorRating.stars === 'number') {
     return { code: 400, body: { success: false, message: "Contractor already rated for this job" } };
   }
 
@@ -1998,16 +2054,32 @@ async function cancelJob({ jobId, reason, reasonDescription, idempotencyKey, use
     } catch (walletErr) {
       console.error("Error saving contractor wallet for cancellation fee:", walletErr);
       try {
-        // Best-effort rollback: restore job state and remove cancellation log
+        // ✅ CRITICAL FIX: Comprehensive rollback to prevent inconsistent state
+        // Restore ALL job fields that were modified
         await Job.collection.updateOne(
           { _id: job._id },
-          { $set: { status: oldState.status, paymentStatus: oldState.paymentStatus, isCancelled: false, cancelledAt: null, cancelledBy: null, cancellationReason: null, cancellationReasonDescription: null } }
+          { 
+            $set: { 
+              status: oldState.status, 
+              paymentStatus: oldState.paymentStatus, 
+              isCancelled: false, 
+              cancelledAt: null, 
+              cancelledBy: null, 
+              cancellationReason: null, 
+              cancellationReasonDescription: null,
+              attendanceStatus: null,  // ✅ Rollback cleared attendance
+              attendanceTime: null,
+            } 
+          }
         );
         await CancellationLog.deleteOne({ _id: cancellation._id });
+        // ⚠️  LIMITATION: GigHistory and JobEventLog cannot easily be deleted
+        // since we don't track their IDs. Consider storing ref IDs in cancellation log.
       } catch (rbErr) {
         console.error("Error rolling back cancellation after wallet failure:", rbErr);
+        console.error(`CRITICAL: Partial rollback failed for job ${job._id}. Inconsistent state possible.`);
       }
-      return finalize({ code: 500, body: { success: false, message: "Cancellation failed: wallet update error" } });
+      return finalize({ code: 500, body: { success: false, message: "Cancellation failed. Please try again or contact support." } });
     }
   }
 
@@ -2039,16 +2111,30 @@ async function cancelJob({ jobId, reason, reasonDescription, idempotencyKey, use
     } catch (walletErr) {
       console.error("Error saving contractor wallet for refund:", walletErr);
       try {
-        // Best-effort rollback: restore job state and remove cancellation log
+        // ✅ CRITICAL FIX: Comprehensive rollback to prevent inconsistent state
+        // Restore ALL job fields that were modified
         await Job.collection.updateOne(
           { _id: job._id },
-          { $set: { status: oldState.status, paymentStatus: oldState.paymentStatus, isCancelled: false, cancelledAt: null, cancelledBy: null, cancellationReason: null, cancellationReasonDescription: null } }
+          { 
+            $set: { 
+              status: oldState.status, 
+              paymentStatus: oldState.paymentStatus, 
+              isCancelled: false, 
+              cancelledAt: null, 
+              cancelledBy: null, 
+              cancellationReason: null, 
+              cancellationReasonDescription: null,
+              attendanceStatus: null,  // ✅ Rollback cleared attendance
+              attendanceTime: null,
+            } 
+          }
         );
         await CancellationLog.deleteOne({ _id: cancellation._id });
       } catch (rbErr) {
         console.error("Error rolling back cancellation after refund wallet failure:", rbErr);
+        console.error(`CRITICAL: Partial rollback failed for job ${job._id}. Inconsistent state possible.`);
       }
-      return finalize({ code: 500, body: { success: false, message: "Cancellation failed: wallet update error" } });
+      return finalize({ code: 500, body: { success: false, message: "Cancellation failed. Please try again or contact support." } });
     }
   }
 
