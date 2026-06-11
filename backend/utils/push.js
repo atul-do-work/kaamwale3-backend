@@ -53,34 +53,47 @@ async function sendPushToToken(token, title, body, data = {}) {
 
 async function sendNotificationToUserPhone(phone, payload) {
   try {
+    console.log(`📧 Creating notification history for ${phone}, type: ${payload?.type || 'unknown'}`);
+    
     // create notification history entry
     const record = await NotificationHistory.create(Object.assign({ recipientPhone: phone, pushNotificationSent: false }, payload));
+    console.log(`✅ NotificationHistory record created: ${record._id}`);
 
     // try to find user and send push
     const user = await User.findOne({ phone });
-    if (user && user.preferences?.notifications === false) {
-      console.log(`Notifications disabled for ${phone}, skipping push delivery`);
+    if (!user) {
+      console.warn(`⚠️ User not found for phone ${phone}`);
+      return { success: false, record, message: 'User not found' };
+    }
+    
+    console.log(`👤 User found: ${user.name || user.phone}, fcmToken exists: ${!!user.fcmToken}`);
+    
+    if (user.preferences?.notifications === false) {
+      console.log(`🔕 Notifications disabled for ${phone}, skipping push delivery`);
       record.pushNotificationSent = false;
       record.pushNotificationSentAt = new Date();
       await record.save();
       return { success: true, skipped: true, record, message: 'Notifications disabled' };
     }
+    
     if (user && user.fcmToken) {
+      console.log(`🔔 Sending push to token: ${user.fcmToken.substring(0, 20)}...`);
       const r = await sendPushToToken(user.fcmToken, payload.title, payload.body, payload.metadata || {});
       if (r.success) {
         record.pushNotificationSent = true;
         record.pushNotificationSentAt = new Date();
         await record.save();
+        console.log(`✅ Push sent successfully to ${phone}`);
         return { success: true, record };
       } else {
         const errInfo = r.error || r.message || '';
-        console.warn('Push send failed for', phone, errInfo);
+        console.warn(`❌ Push send failed for ${phone}:`, errInfo);
         // If token is invalid or not registered, clear it to avoid repeated failures
         const msg = (errInfo && (errInfo.code || errInfo.message || String(errInfo))) || '';
         if (typeof msg === 'string' && (msg.includes('registration-token-not-registered') || msg.includes('invalid-registration-token') || msg.includes('not-registered'))) {
           try {
             await User.findOneAndUpdate({ phone }, { $unset: { fcmToken: "" } });
-            console.log('Cleared invalid fcmToken for', phone);
+            console.log(`🗑️ Cleared invalid fcmToken for ${phone}`);
           } catch (e) {
             console.error('Failed clearing fcmToken for', phone, e && e.message);
           }
@@ -90,6 +103,7 @@ async function sendNotificationToUserPhone(phone, payload) {
     }
 
     // No token - leave record for retries
+    console.warn(`⚠️ No fcmToken for ${phone} - notification saved to history but push not sent`);
     return { success: false, record, message: 'No fcmToken' };
   } catch (err) {
     console.error('Error in sendNotificationToUserPhone:', err && err.message);

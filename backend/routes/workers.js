@@ -258,14 +258,23 @@ function createWorkersRouter({
             siteImageUri: siteImageUri || undefined,
             timestamp: new Date().toISOString(),
           });
+          console.log(`✅ Emitted jobRequest via socket to worker ${workerPhone}`);
         } catch (e) {
           console.warn("Could not emit jobRequest to socket:", e.message);
         }
+      } else {
+        console.warn(`⚠️ Worker ${workerPhone} not connected via socket (socketId not found)`);
       }
 
       // Send push notification
       try {
-        await sendNotificationToUserPhone(workerPhone, payload);
+        console.log(`📲 Sending push notification for job request to ${workerPhone}...`);
+        const pushResult = await sendNotificationToUserPhone(workerPhone, payload);
+        if (pushResult.success) {
+          console.log(`✅ Push notification sent successfully to ${workerPhone}`);
+        } else {
+          console.warn(`⚠️ Push notification failed for ${workerPhone}:`, pushResult.message || pushResult.error);
+        }
       } catch (e) {
         console.error("Error sending push notification for job request:", e && e.message);
       }

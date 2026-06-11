@@ -782,8 +782,24 @@ router.post("/deposit/verify", authenticateToken, depositVerifyLimiter, async (r
       if (cashDepositRecord.workerPhone !== req.user.phone) {
         return res.status(403).json({ success: false, message: 'Not authorized to settle this pending cash deposit' });
       }
-      if (String(cashDepositRecord.status).toLowerCase() !== 'pending') {
-        return res.status(400).json({ success: false, message: 'This cash deposit is no longer pending' });
+      
+      const cashDepositStatus = String(cashDepositRecord.status).toLowerCase();
+      // ✅ IDEMPOTENT: If already completed by webhook, return success (payment was already verified)
+      if (cashDepositStatus === 'completed') {
+        const existingWallet = await Wallet.findOne({ phone: req.user.phone });
+        return res.json({
+          success: true,
+          message: 'Deposit already processed',
+          walletBalance: Number(existingWallet?.balance || 0),
+          availableBalance: Number(existingWallet?.availableBalance ?? existingWallet?.balance ?? 0),
+          pocketBalance: Number(existingWallet?.pocketBalance || 0),
+          alreadyCompleted: true,
+          transactionId: paymentId
+        });
+      }
+      
+      if (cashDepositStatus !== 'pending') {
+        return res.status(400).json({ success: false, message: `This cash deposit is no longer available (status: ${cashDepositStatus})` });
       }
       if (Math.abs(Number(cashDepositRecord.amount || 0) - depositAmount) > 0.01) {
         return res.status(400).json({ success: false, message: 'Payment amount must match the pending cash deposit amount' });
@@ -907,7 +923,7 @@ router.post("/deposit/verify", authenticateToken, depositVerifyLimiter, async (r
     // ✅ EMIT WALLET UPDATE to specific user only (via Socket.IO room)
     const io = req.app.get('io');
     if (io) {
-      io.to(req.user.phone).emit('walletUpdated', {
+      const socketData = {
         phone: req.user.phone,
         balance: wallet.balance,
         availableBalance: Number(wallet.availableBalance || wallet.balance || 0),
@@ -915,8 +931,28 @@ router.post("/deposit/verify", authenticateToken, depositVerifyLimiter, async (r
         type: isPendingCashDeposit ? 'cash_deposit' : 'deposit',
         amount: depositAmount,
         message: isPendingCashDeposit ? `Pending cash deposit settled: ₹${depositAmount}` : `Deposit successful: ₹${depositAmount}`
-      });
+      };
+      
+      // ✅ Include depositId for cash deposits so frontend can update that specific card
+      if (isPendingCashDeposit && depositId) {
+        socketData.depositId = depositId;
+        socketData.depositCompleted = true;
+      }
+      
+      io.to(req.user.phone).emit('walletUpdated', socketData);
       console.log(`📤 Emitted walletUpdated for deposit to ${req.user.phone}`);
+      
+      // ✅ Also emit a specific event for cash deposit completion
+      if (isPendingCashDeposit && depositId) {
+        io.to(req.user.phone).emit('cashDepositCompleted', {
+          depositId: depositId,
+          status: 'completed',
+          amount: depositAmount,
+          depositedAt: new Date(),
+          message: `Cash deposit of ₹${depositAmount} completed successfully`
+        });
+        console.log(`📤 Emitted cashDepositCompleted for deposit ${depositId} to ${req.user.phone}`);
+      }
     }
 
     res.json({
@@ -1798,15 +1834,35 @@ router.post("/deposit/webhook", async (req, res) => {
 
     const io = req.app?.get('io');
     if (io) {
-      io.to(phone).emit('walletUpdated', {
+      const socketData = {
         phone,
         balance: updatedWallet.balance,
         availableBalance: Number(updatedWallet.availableBalance || updatedWallet.balance || 0),
         pocketBalance: Number(updatedWallet.pocketBalance || 0),
-        type: 'deposit',
+        type: isCashDeposit ? 'cash_deposit' : 'deposit',
         amount,
-        message: `Wallet deposit successful: ₹${amount}`
-      });
+        message: isCashDeposit ? `Pending cash deposit settled: ₹${amount}` : `Wallet deposit successful: ₹${amount}`
+      };
+      
+      // ✅ Include depositId for cash deposits so frontend can update that specific card
+      if (isCashDeposit && depositId) {
+        socketData.depositId = depositId;
+        socketData.depositCompleted = true;
+      }
+      
+      io.to(phone).emit('walletUpdated', socketData);
+      
+      // ✅ Also emit a specific event for cash deposit completion
+      if (isCashDeposit && depositId) {
+        io.to(phone).emit('cashDepositCompleted', {
+          depositId: depositId,
+          status: 'completed',
+          amount,
+          depositedAt: new Date(),
+          message: `Cash deposit of ₹${amount} completed successfully`
+        });
+        console.log(`📤 Emitted cashDepositCompleted for deposit ${depositId} to ${phone} (from webhook)`);
+      }
     }
 
     return res.status(200).json({

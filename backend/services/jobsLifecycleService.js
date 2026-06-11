@@ -268,6 +268,21 @@ async function markAttendance({ jobId, status, workerPhone, userPhone, deps }) {
 
     if (trackingJobs.has(jobId)) trackingJobs.delete(jobId);
     await emitJobUpdatedToUsers(job, [job.contractorPhone, workerPhone, job.acceptedBy || job.contractorPhone]);
+    
+    // ✅ Emit attendance updated event for real-time contractor updates
+    if (global?.io && job.contractorPhone) {
+      try {
+        global.io.to(job.contractorPhone).emit('attendanceUpdated', {
+          jobId: job._id,
+          workerPhone: workerPhone,
+          attendanceStatus: canonicalStatus,
+          timestamp: new Date(),
+        });
+        console.log(`📢 Emitted attendanceUpdated for job ${job._id} to contractor`);
+      } catch (emitErr) {
+        console.error('Error emitting attendance update:', emitErr);
+      }
+    }
 
     // Send push notification to the specific worker
     if (workerPhone) {
