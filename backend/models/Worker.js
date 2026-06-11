@@ -192,9 +192,8 @@ const fixMilestoneStructure = (doc) => {
 };
 
 // ✅ PRE-SAVE HOOK: Ensure milestone structure is correct (fix for old documents)
-workerSchema.pre('save', function(next) {
+workerSchema.pre('save', async function() {
   fixMilestoneStructure(this);
-  next();
 });
 
 // ✅ POST-FIND HOOKS: Fix documents loaded from database
