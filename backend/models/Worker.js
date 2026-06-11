@@ -145,4 +145,71 @@ const workerSchema = new mongoose.Schema({
 
 workerSchema.index({ location: "2dsphere" });
 
+// ✅ Helper function to fix milestone structure
+const fixMilestoneStructure = (doc) => {
+  if (!doc) return;
+  
+  try {
+    // Ensure gigsData exists
+    if (!doc.gigsData) {
+      doc.gigsData = {};
+    }
+
+    // Ensure milestonesUnlocked exists
+    if (!doc.gigsData.milestonesUnlocked) {
+      doc.gigsData.milestonesUnlocked = {};
+    }
+
+    // Fix fiveDaysMilestone if it's not an object
+    if (typeof doc.gigsData.milestonesUnlocked.fiveDaysMilestone !== 'object' || 
+        doc.gigsData.milestonesUnlocked.fiveDaysMilestone === null) {
+      doc.gigsData.milestonesUnlocked.fiveDaysMilestone = {
+        unlocked: false,
+        unlockedDate: null,
+      };
+    }
+
+    // Fix tenDaysMilestone if it's not an object
+    if (typeof doc.gigsData.milestonesUnlocked.tenDaysMilestone !== 'object' || 
+        doc.gigsData.milestonesUnlocked.tenDaysMilestone === null) {
+      doc.gigsData.milestonesUnlocked.tenDaysMilestone = {
+        unlocked: false,
+        unlockedDate: null,
+      };
+    }
+
+    // Fix twentyDaysMilestone if it's not an object
+    if (typeof doc.gigsData.milestonesUnlocked.twentyDaysMilestone !== 'object' || 
+        doc.gigsData.milestonesUnlocked.twentyDaysMilestone === null) {
+      doc.gigsData.milestonesUnlocked.twentyDaysMilestone = {
+        unlocked: false,
+        unlockedDate: null,
+      };
+    }
+  } catch (err) {
+    console.error('Error fixing milestone structure:', err);
+  }
+};
+
+// ✅ PRE-SAVE HOOK: Ensure milestone structure is correct (fix for old documents)
+workerSchema.pre('save', function(next) {
+  fixMilestoneStructure(this);
+  next();
+});
+
+// ✅ POST-FIND HOOKS: Fix documents loaded from database
+workerSchema.post('find', function(docs) {
+  if (Array.isArray(docs)) {
+    docs.forEach(doc => fixMilestoneStructure(doc));
+  }
+});
+
+workerSchema.post('findOne', function(doc) {
+  fixMilestoneStructure(doc);
+});
+
+workerSchema.post('findOneAndUpdate', function(doc) {
+  fixMilestoneStructure(doc);
+});
+
 module.exports = mongoose.model("Worker", workerSchema);
